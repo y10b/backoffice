@@ -47,6 +47,10 @@ type ArchiveFile = {
 };
 
 type Comment = { id: string; author: string; text: string; likes: number };
+type SourceFile = {
+  name: string; originalName: string; origin: string; license: string;
+  sizeBytes: number; path: string;
+};
 type Source = { id: string; label: string; ok: boolean; message: string };
 type Job = {
   id: number;
@@ -129,6 +133,42 @@ export default function ShortsPage() {
   const [error, setError] = useState("");
   const [jobs, setJobs] = useState<Job[]>([]);
 
+  // 직접 받아온 소재 (국내 공공 아카이브는 API 가 없어 수동으로 받아 넣는다)
+  const [myFiles, setMyFiles] = useState<SourceFile[]>([]);
+  const [upOrigin, setUpOrigin] = useState("");
+  const [upLicense, setUpLicense] = useState("공공누리 제1유형");
+  const [uploading, setUploading] = useState(false);
+
+  const loadMyFiles = useCallback(() => {
+    fetch("/api/shorts/sources")
+      .then((r) => r.json())
+      .then((d) => setMyFiles(d.sources ?? []))
+      .catch(() => {});
+  }, []);
+
+  async function uploadSource(file: File | undefined) {
+    if (!file) return;
+    if (!upOrigin.trim()) {
+      setError("출처를 적어주세요. 공공누리는 출처 표시가 이용 조건입니다.");
+      return;
+    }
+    setUploading(true);
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("origin", upOrigin);
+      form.append("license", upLicense);
+      const d = await (await fetch("/api/shorts/sources", { method: "POST", body: form })).json();
+      if (!d.ok) setError(d.error ?? "업로드에 실패했습니다.");
+      else loadMyFiles();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
   const loadJobs = useCallback(() => {
     fetch("/api/shorts/jobs")
       .then((r) => r.json())
@@ -138,6 +178,7 @@ export default function ShortsPage() {
 
   useEffect(() => {
     loadJobs();
+    loadMyFiles();
     loadTrending();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -506,6 +547,96 @@ export default function ShortsPage() {
               </div>
             )}
           </>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>내 소재 {myFiles.length > 0 && <span className="badge on">{myFiles.length}</span>}</h2>
+        <p className="hint" style={{ marginTop: 0 }}>
+          국내 공공 아카이브는 API 가 없어 직접 받아 넣습니다. <strong>e영상역사관</strong>
+          (대한뉴스)은 <strong>공공누리 제1유형</strong>이라 상업적 편집이 허용되지만,
+          다운로드가 KTV 나누리 회원가입 + 영상 요청이라 자동화가 안 됩니다. 한 번 받아두면
+          계속 씁니다.
+        </p>
+
+        <div className="row">
+          <div className="field" style={{ flex: 1, minWidth: 240 }}>
+            <label>출처 (발행 설명란에 그대로 쓸 문구)</label>
+            <input
+              placeholder="e영상역사관 대한뉴스 제1234호 (국가기록원)"
+              value={upOrigin}
+              onChange={(e) => setUpOrigin(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>라이선스</label>
+            <select value={upLicense} onChange={(e) => setUpLicense(e.target.value)}>
+              <option>공공누리 제1유형</option>
+              <option>공개 도메인 (CC0)</option>
+              <option>CC BY</option>
+              <option>직접 촬영</option>
+            </select>
+          </div>
+          <label
+            className="small ghost"
+            style={{ cursor: "pointer", padding: "8px 14px", border: "1px solid var(--border)", borderRadius: 8, alignSelf: "flex-end" }}
+          >
+            {uploading && <span className="spinner" />}
+            {uploading ? "올리는 중" : "영상 올리기"}
+            <input
+              type="file"
+              accept="video/mp4,video/quicktime,video/webm,video/x-matroska"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                uploadSource(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+
+        {myFiles.length > 0 && (
+          <div className="table-wrap" style={{ marginTop: 10 }}>
+            <table>
+              <tbody>
+                {myFiles.map((f) => (
+                  <tr key={f.name}>
+                    <td>
+                      {f.originalName}
+                      <div className="dim" style={{ fontSize: 12 }}>
+                        {f.origin || "출처 미기재"}
+                      </div>
+                    </td>
+                    <td style={{ width: 150 }}>
+                      <span className={`badge ${f.license ? "on" : "off"}`}>
+                        {f.license || "미기재"}
+                      </span>
+                    </td>
+                    <td style={{ width: 80 }} className="num dim">
+                      {Math.round(f.sizeBytes / 1024 / 1024)}MB
+                    </td>
+                    <td style={{ width: 130 }}>
+                      <button className="small primary" onClick={() => setInput(f.path)}>
+                        쓰기
+                      </button>{" "}
+                      <button
+                        className="small ghost"
+                        onClick={async () => {
+                          if (!confirm(`${f.originalName} 을 삭제할까요?`)) return;
+                          await fetch(`/api/shorts/sources?name=${encodeURIComponent(f.name)}`, {
+                            method: "DELETE",
+                          });
+                          loadMyFiles();
+                        }}
+                      >
+                        삭제
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
