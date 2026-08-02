@@ -201,3 +201,78 @@ export async function latestSnapshot() {
   if (error) throw new Error(`최근 스냅샷 조회 실패: ${error.message}`);
   return data;
 }
+
+/* ------------------------------------------------------------------ *
+ * render_jobs — 쇼츠 렌더 작업 큐
+ *
+ * 웹(배포본)에서 등록하고 로컬 워커가 가져가 처리한다. ffmpeg 가 서버리스에서 못 도는
+ * 문제를, 로컬이 밖으로 나가 폴링하는 방향으로 뒤집어 푼다.
+ * ------------------------------------------------------------------ */
+
+export type RenderJob = {
+  id: number;
+  status: "queued" | "running" | "done" | "failed";
+  options: Record<string, unknown>;
+  result_url: string;
+  result_name: string;
+  size_bytes: number | null;
+  error: string;
+  attempts: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function enqueueRenderJob(options: Record<string, unknown>): Promise<number> {
+  const { data, error } = await supabase()
+    .from("render_jobs")
+    .insert({ options })
+    .select("id")
+    .single();
+  if (error) throw new Error(`렌더 작업 등록 실패: ${error.message}`);
+  return Number(data.id);
+}
+
+export async function listRenderJobs(limit = 30): Promise<RenderJob[]> {
+  const { data, error } = await supabase()
+    .from("render_jobs")
+    .select("*")
+    .order("id", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`렌더 작업 조회 실패: ${error.message}`);
+  return (data ?? []) as RenderJob[];
+}
+
+/**
+ * 대기 중인 작업 하나를 원자적으로 가져온다.
+ * 여러 워커가 떠 있어도 같은 작업을 두 번 처리하지 않도록 DB 함수에 맡긴다.
+ */
+export async function claimRenderJob(worker: string): Promise<RenderJob | null> {
+  const { data, error } = await supabase().rpc("claim_render_job", { worker });
+  if (error) throw new Error(`작업 가져오기 실패: ${error.message}`);
+  const rows = (data ?? []) as RenderJob[];
+  return rows[0] ?? null;
+}
+
+export async function finishRenderJob(
+  id: number,
+  patch: {
+    status: "done" | "failed";
+    resultUrl?: string;
+    resultName?: string;
+    sizeBytes?: number;
+    error?: string;
+  },
+): Promise<void> {
+  const { error } = await supabase()
+    .from("render_jobs")
+    .update({
+      status: patch.status,
+      result_url: patch.resultUrl ?? "",
+      result_name: patch.resultName ?? "",
+      size_bytes: patch.sizeBytes ?? null,
+      error: patch.error ?? "",
+      updated_at: nowIso(),
+    })
+    .eq("id", id);
+  if (error) throw new Error(`작업 상태 갱신 실패: ${error.message}`);
+}

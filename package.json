@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev -p 3939",
     "build": "next build",
-    "start": "next start -p 3939"
+    "start": "next start -p 3939",
+    "worker": "node scripts/worker.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.111.0",
