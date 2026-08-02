@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSettings, setSetting } from "@/lib/db";
+import { splitKeys } from "@/lib/gemini";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,7 +82,9 @@ export async function GET() {
     gemini: {
       configured: Boolean(gemini.value),
       fromEnv: gemini.fromEnv,
-      apiKeyPreview: mask(gemini.value),
+      // 키가 여러 개면 첫 개만 미리보기로 쓰고 개수를 따로 알린다
+      apiKeyPreview: mask(splitKeys(gemini.value)[0] ?? ""),
+      keyCount: splitKeys(`${gemini.value}\n${process.env.GEMINI_API_KEY ?? ""}`).length,
       model: s.gemini_model || process.env.GEMINI_MODEL || "gemini-2.5-flash",
     },
   });

@@ -20,6 +20,8 @@ type SettingsState = {
     configured: boolean;
     fromEnv: boolean;
     apiKeyPreview: string;
+    /** 설정값과 환경변수를 합쳐 실제로 쓸 수 있는 키 개수 */
+    keyCount: number;
     model: string;
   };
   ga4: {
@@ -462,14 +464,24 @@ export default function SettingsPage() {
         </h2>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
-            <label>API 키 (aistudio.google.com/apikey)</label>
-            <input
-              type="password"
+            <label>
+              API 키 (aistudio.google.com/apikey)
+              {state && state.gemini.keyCount > 1 && (
+                <> — 현재 {state.gemini.keyCount}개 등록됨</>
+              )}
+            </label>
+            <textarea
               className="mono"
-              placeholder="AIza..."
+              rows={3}
+              placeholder={"AIza...\nAIza...  ← 한 줄에 하나씩, 여러 개 넣을 수 있습니다"}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />
+            <p className="hint" style={{ marginTop: 6 }}>
+              무료 티어는 프로젝트당 요청 수가 정해져 있어 글 몇 개만 써도 429 가 납니다.
+              키를 여러 개 넣으면 쿼터에 걸린 키를 건너뛰고 다음 키로 넘어갑니다.
+              저장하면 기존 목록을 덮어쓰므로 쓰던 키도 함께 넣으세요.
+            </p>
           </div>
           <div className="field">
             <label>모델</label>

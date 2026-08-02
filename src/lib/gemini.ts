@@ -1,13 +1,106 @@
 import { getSettings } from "./db";
-import { appendFaqHtml, buildJsonLd, markdownToHtml, normalizeFaq } from "./markdown";
+import {
+  appendFaqHtml,
+  buildJsonLd,
+  markdownToHtml,
+  normalizeFaq,
+} from "./markdown";
 import { applyVisuals, parseVisuals } from "./visuals";
 import type { GeneratedDraft } from "./types";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
-export async function geminiKey(): Promise<string | null> {
+/**
+ * 키를 여러 개 둔다.
+ *
+ * 무료 티어는 프로젝트당 분당·일당 요청 수가 정해져 있어, 글 하나에 2패스씩
+ * 도는 이 파이프라인은 금방 429 를 받는다. 한 키가 마르면 다음 키로 넘어가면
+ * 되므로 설정값과 환경변수 모두 여러 개를 받는다.
+ *
+ * 구분자는 쉼표·줄바꿈·공백 아무거나. 붙여넣다 보면 형식이 제각각이라
+ * 무엇을 넣어도 되게 한다.
+ */
+export async function geminiKeys(): Promise<string[]> {
   const s = await getSettings(["gemini_api_key"]);
-  return s.gemini_api_key || process.env.GEMINI_API_KEY || null;
+  return splitKeys(
+    `${s.gemini_api_key ?? ""}\n${process.env.GEMINI_API_KEY ?? ""}`,
+  );
+}
+
+export function splitKeys(raw: string): string[] {
+  const seen = new Set<string>();
+  return raw
+    .split(/[\s,]+/)
+    .map((k) => k.trim())
+    .filter((k) => k && !seen.has(k) && (seen.add(k), true));
+}
+
+/** 첫 키. 키 개수를 신경 쓸 필요 없는 곳(설정 화면의 등록 여부 표시 등)에서 쓴다 */
+export async function geminiKey(): Promise<string | null> {
+  return (await geminiKeys())[0] ?? null;
+}
+
+/**
+ * 다음 요청을 어느 키에서 시작할지.
+ *
+ * 늘 0 번부터 시작하면 첫 키만 계속 쓰다 먼저 마르고, 그때부터는 매 요청이
+ * 429 를 한 번 받고 나서야 두 번째 키로 넘어간다. 성공할 때마다 한 칸 밀어
+ * 호출을 고르게 편다.
+ *
+ * 서버리스에서는 인스턴스가 새로 뜨면 0 으로 돌아간다. 그래도 한 인스턴스가
+ * 연속 호출하는 동안에는 유효하고, 어차피 429 폴백이 있어 정확할 필요는 없다.
+ */
+let keyCursor = 0;
+
+/** 키를 바꾸면 풀릴 만한 오류인가. 잘못된 키나 프롬프트 문제라면 바꿔도 소용없다 */
+function isQuotaError(status: number, body: string): boolean {
+  if (status === 429) return true;
+  // 키가 정지되거나 프로젝트 한도에 걸리면 403 에 quota/exhausted 가 실려 온다
+  return status === 403 && /quota|exhaust|rate.?limit/i.test(body);
+}
+
+/**
+ * Gemini 호출. 쿼터에 걸리면 다음 키로 넘어간다.
+ *
+ * 키를 다 써도 안 되면 마지막 오류를 그대로 올린다. 몇 개를 시도했는지 문구에
+ * 넣어야 "키를 더 넣어야 하는 상황"인지 "키가 다 틀린 상황"인지 구분된다.
+ */
+export async function geminiCall(model: string, body: unknown): Promise<any> {
+  const keys = await geminiKeys();
+  if (!keys.length) {
+    throw new Error("Gemini API 키가 없습니다. 설정 화면에서 등록하세요.");
+  }
+
+  const url = `${API_BASE}/models/${encodeURIComponent(model)}:generateContent`;
+  let last: { status: number; body: string } | null = null;
+
+  for (let i = 0; i < keys.length; i++) {
+    const idx = (keyCursor + i) % keys.length;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": keys[idx],
+      },
+      body: JSON.stringify(body),
+    });
+
+    const text = await res.text();
+    if (res.ok) {
+      keyCursor = (idx + 1) % keys.length;
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error("Gemini 응답을 JSON 으로 해석하지 못했습니다.");
+      }
+    }
+
+    last = { status: res.status, body: text.slice(0, 500) };
+    // 쿼터 문제가 아니면 다른 키로 바꿔도 같은 답이 온다. 남은 키를 낭비하지 않는다
+    if (!isQuotaError(res.status, text)) break;
+  }
+
+  throw geminiError(last!.status, last!.body, keys.length);
 }
 
 /**
@@ -56,16 +149,20 @@ export type ResearchResult = {
  * 무료 티어 쿼터에 자주 걸리는데 HTTP 429 만 보면 원인을 알기 어렵다.
  * 사용자가 바로 알아보게 429 는 별도 문구로 감싼다.
  */
-function geminiError(status: number, body: string): Error {
+function geminiError(status: number, body: string, triedKeys = 1): Error {
   let detail = body;
   try {
     detail = JSON.parse(body)?.error?.message ?? body;
   } catch {
     /* 원문 유지 */
   }
-  if (status === 429) {
+  if (status === 429 || status === 403) {
+    const tried =
+      triedKeys > 1
+        ? `등록된 키 ${triedKeys}개가 모두 쿼터에 걸렸습니다`
+        : "Gemini 무료 티어 쿼터 초과입니다";
     return new Error(
-      `Gemini 무료 티어 쿼터 초과입니다 (HTTP 429). 잠시 뒤 다시 시도하거나 결제 등급을 올리세요. 원문: ${detail}`,
+      `${tried} (HTTP ${status}). 키를 더 등록하거나 잠시 뒤 다시 시도하세요. 원문: ${detail}`,
     );
   }
   return new Error(`Gemini 오류 (HTTP ${status}): ${detail}`);
@@ -104,7 +201,14 @@ const RESPONSE_SCHEMA = {
       },
     },
   },
-  required: ["title", "metaDescription", "tags", "bodyMarkdown", "faq", "visuals"],
+  required: [
+    "title",
+    "metaDescription",
+    "tags",
+    "bodyMarkdown",
+    "faq",
+    "visuals",
+  ],
 } as const;
 
 /**
@@ -149,7 +253,9 @@ export function parseGrounding(payload: unknown): ResearchResult {
     : "";
 
   const meta = candidate?.groundingMetadata;
-  const chunks = Array.isArray(meta?.groundingChunks) ? meta.groundingChunks : [];
+  const chunks = Array.isArray(meta?.groundingChunks)
+    ? meta.groundingChunks
+    : [];
   // 같은 문서가 여러 청크로 쪼개져 오므로 URI 기준으로 중복을 접는다.
   const seen = new Set<string>();
   const sources: { title: string; uri: string }[] = [];
@@ -158,11 +264,16 @@ export function parseGrounding(payload: unknown): ResearchResult {
     if (!uri || seen.has(uri)) continue;
     seen.add(uri);
     // title 이 비면 프록시 host 라도 보여준다. 최소한 링크가 살아 있다는 건 알 수 있다.
-    sources.push({ title: String(chunk?.web?.title ?? "").trim() || hostOf(uri), uri });
+    sources.push({
+      title: String(chunk?.web?.title ?? "").trim() || hostOf(uri),
+      uri,
+    });
   }
 
   const searchQueries = Array.isArray(meta?.webSearchQueries)
-    ? meta.webSearchQueries.map((q: unknown) => String(q).trim()).filter(Boolean)
+    ? meta.webSearchQueries
+        .map((q: unknown) => String(q).trim())
+        .filter(Boolean)
     : [];
 
   return { text: text.trim(), sources, searchQueries };
@@ -176,24 +287,15 @@ export function parseGrounding(payload: unknown): ResearchResult {
  */
 async function researchLatest(
   o: GenerateOptions,
-  key: string,
 ): Promise<ResearchResult | null> {
   try {
-    const res = await fetch(
-      `${API_BASE}/models/${encodeURIComponent(RESEARCH_MODEL)}:generateContent`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: buildResearchPrompt(o) }] }],
-          tools: [{ google_search: {} }],
-          generationConfig: { temperature: 0.2 },
-        }),
-      },
+    const research = parseGrounding(
+      await geminiCall(RESEARCH_MODEL, {
+        contents: [{ role: "user", parts: [{ text: buildResearchPrompt(o) }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { temperature: 0.2 },
+      }),
     );
-    if (!res.ok) return null;
-
-    const research = parseGrounding(JSON.parse(await res.text()));
     // 텍스트가 비면 주입할 게 없으니 조사 자체를 없던 일로 취급한다.
     return research.text ? research : null;
   } catch {
@@ -202,8 +304,12 @@ async function researchLatest(
 }
 
 /** 2패스 프롬프트. 1패스 결과가 있으면 학습 지식보다 우선하도록 주입한다 */
-export function buildPrompt(o: GenerateOptions, research?: ResearchResult | null): string {
-  const tone = o.tone?.trim() || "친근하지만 정보 밀도가 높은 정보성 블로그 문체";
+export function buildPrompt(
+  o: GenerateOptions,
+  research?: ResearchResult | null,
+): string {
+  const tone =
+    o.tone?.trim() || "친근하지만 정보 밀도가 높은 정보성 블로그 문체";
   const target = o.targetChars ?? 2000;
   const outline = o.outline?.trim();
 
@@ -281,47 +387,25 @@ export function buildPrompt(o: GenerateOptions, research?: ResearchResult | null
     .join("\n");
 }
 
-export async function generateDraft(o: GenerateOptions): Promise<GeneratedDraft> {
-  const key = await geminiKey();
-  if (!key) {
-    throw new Error("Gemini API 키가 없습니다. 설정 화면에서 등록하세요.");
-  }
+export async function generateDraft(
+  o: GenerateOptions,
+): Promise<GeneratedDraft> {
   if (!o.mainKeyword.trim()) throw new Error("메인 키워드가 비어 있습니다.");
 
   const model = await geminiModel();
 
   // 1패스: 검색 그라운딩으로 최신 사실 수집. 실패하면 null 이 와서 조용히 2패스만 돈다.
-  const research = o.grounded === false ? null : await researchLatest(o, key);
+  const research = o.grounded === false ? null : await researchLatest(o);
 
   // 2패스: 구조화 출력으로 본문 생성. 그라운딩과 responseSchema 는 같이 못 쓰므로 호출을 나눈다.
-  const res = await fetch(
-    `${API_BASE}/models/${encodeURIComponent(model)}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": key,
-      },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: buildPrompt(o, research) }] }],
-        generationConfig: {
-          temperature: 0.8,
-          responseMimeType: "application/json",
-          responseSchema: RESPONSE_SCHEMA,
-        },
-      }),
+  const payload = await geminiCall(model, {
+    contents: [{ role: "user", parts: [{ text: buildPrompt(o, research) }] }],
+    generationConfig: {
+      temperature: 0.8,
+      responseMimeType: "application/json",
+      responseSchema: RESPONSE_SCHEMA,
     },
-  );
-
-  const text = await res.text();
-  if (!res.ok) throw geminiError(res.status, text);
-
-  let payload: any;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    throw new Error("Gemini 응답을 JSON 으로 해석하지 못했습니다.");
-  }
+  });
 
   const parts = payload?.candidates?.[0]?.content?.parts;
   const jsonText = Array.isArray(parts)
@@ -329,7 +413,9 @@ export async function generateDraft(o: GenerateOptions): Promise<GeneratedDraft>
     : "";
   if (!jsonText.trim()) {
     const reason = payload?.candidates?.[0]?.finishReason ?? "알 수 없음";
-    throw new Error(`Gemini 가 본문을 반환하지 않았습니다 (finishReason: ${reason}).`);
+    throw new Error(
+      `Gemini 가 본문을 반환하지 않았습니다 (finishReason: ${reason}).`,
+    );
   }
 
   let draft: any;
@@ -343,7 +429,9 @@ export async function generateDraft(o: GenerateOptions): Promise<GeneratedDraft>
   const title = String(draft.title ?? "").trim();
   const metaDescription = String(draft.metaDescription ?? "").trim();
   const tags = Array.isArray(draft.tags)
-    ? draft.tags.map((t: unknown) => String(t).replace(/^#/, "").trim()).filter(Boolean)
+    ? draft.tags
+        .map((t: unknown) => String(t).replace(/^#/, "").trim())
+        .filter(Boolean)
     : [];
   // 스키마로 강제해도 모델이 faq 를 빼거나 빈 객체를 넣는 경우가 있어 정규화로 흡수한다.
   const faq = normalizeFaq(draft.faq);
@@ -357,7 +445,10 @@ export async function generateDraft(o: GenerateOptions): Promise<GeneratedDraft>
     bodyMarkdown,
     // 모델이 본문에 FAQ 를 이미 넣었으면 그대로 두고, 빠졌을 때만 faq 배열로 채워 넣는다.
     // 시각 자료는 {{visual:N}} 자리에 끼워 넣는다. 자리 표시가 없으면 본문 끝에 붙는다.
-    bodyHtml: applyVisuals(appendFaqHtml(markdownToHtml(bodyMarkdown), faq), visuals),
+    bodyHtml: applyVisuals(
+      appendFaqHtml(markdownToHtml(bodyMarkdown), faq),
+      visuals,
+    ),
     faq,
     visuals,
     jsonLd: buildJsonLd({ title, metaDescription, faq, tags }),
@@ -372,9 +463,6 @@ export async function suggestSubKeywords(
   mainKeyword: string,
   context: string[],
 ): Promise<{ subKeyword: string; title: string; reason: string }[]> {
-  const key = await geminiKey();
-  if (!key) throw new Error("Gemini API 키가 없습니다. 설정 화면에서 등록하세요.");
-
   const prompt = [
     "당신은 네이버 블로그 키워드 전략가입니다.",
     `메인 키워드: ${mainKeyword}`,
@@ -390,46 +478,36 @@ export async function suggestSubKeywords(
     .filter(Boolean)
     .join("\n");
 
-  const res = await fetch(
-    `${API_BASE}/models/${encodeURIComponent(await geminiModel())}:generateContent`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.9,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "object",
-            properties: {
-              suggestions: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    subKeyword: { type: "string" },
-                    title: { type: "string" },
-                    reason: { type: "string" },
-                  },
-                  required: ["subKeyword", "title", "reason"],
-                },
+  const payload = await geminiCall(await geminiModel(), {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.9,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: {
+          suggestions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                subKeyword: { type: "string" },
+                title: { type: "string" },
+                reason: { type: "string" },
               },
+              required: ["subKeyword", "title", "reason"],
             },
-            required: ["suggestions"],
           },
         },
-      }),
+        required: ["suggestions"],
+      },
     },
-  );
+  });
 
-  const text = await res.text();
-  if (!res.ok) throw geminiError(res.status, text.slice(0, 500));
-
-  const payload = JSON.parse(text);
   const parts = payload?.candidates?.[0]?.content?.parts ?? [];
   const jsonText = parts.map((p: any) => p?.text ?? "").join("");
-  if (!jsonText.trim()) throw new Error("Gemini 가 제안을 반환하지 않았습니다.");
+  if (!jsonText.trim())
+    throw new Error("Gemini 가 제안을 반환하지 않았습니다.");
 
   const parsed = JSON.parse(jsonText);
   return Array.isArray(parsed?.suggestions) ? parsed.suggestions : [];
