@@ -2,22 +2,36 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { copyText } from "@/lib/clipboard";
 
 type PostRow = {
   id: number;
   main_keyword: string;
   sub_keyword: string;
   title: string;
-  tags: string;
+  /** jsonb 컬럼이라 배열로 온다. SQLite 시절의 JSON 문자열이 아니다 */
+  tags: string[] | string;
   status: string;
-  posted_naver: number;
-  posted_tistory: number;
+  posted_naver: boolean | number;
+  posted_tistory: boolean | number;
   updated_at: string;
 };
+
+/** 저장 시점에 따라 배열이거나 JSON 문자열이라 양쪽을 받아준다 */
+function tagList(tags: PostRow["tags"]): string[] {
+  if (Array.isArray(tags)) return tags.map(String).filter(Boolean);
+  try {
+    const parsed = JSON.parse(tags || "[]");
+    return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
 
 export default function PostsPage() {
   const [posts, setPosts] = useState<PostRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState<number | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -30,7 +44,7 @@ export default function PostsPage() {
   useEffect(load, [load]);
 
   async function toggle(post: PostRow, field: "posted_naver" | "posted_tistory") {
-    const next = post[field] ? 0 : 1;
+    const next = !post[field];
     setPosts((prev) =>
       prev.map((p) => (p.id === post.id ? { ...p, [field]: next } : p)),
     );
@@ -75,6 +89,7 @@ export default function PostsPage() {
                 <th style={{ width: 170 }}>키워드</th>
                 <th style={{ width: 60 }}>네이버</th>
                 <th style={{ width: 70 }}>티스토리</th>
+                <th style={{ width: 96 }}>태그</th>
                 <th style={{ width: 100 }}>수정일</th>
                 <th style={{ width: 110 }} />
               </tr>
@@ -105,6 +120,27 @@ export default function PostsPage() {
                     >
                       {p.posted_tistory ? "완료" : "대기"}
                     </button>
+                  </td>
+                  <td>
+                    {(() => {
+                      const tags = tagList(p.tags);
+                      if (!tags.length) return <span className="dim">—</span>;
+                      return (
+                        <button
+                          className="small ghost"
+                          title={tags.map((t) => `#${t}`).join(" ")}
+                          onClick={() =>
+                            copyText(tags.map((t) => `#${t}`).join(" ")).then(() => {
+                              // 복사는 눈에 보이는 변화가 없어서, 눌린 행만 잠깐 표시한다
+                              setCopied(p.id);
+                              setTimeout(() => setCopied((c) => (c === p.id ? null : c)), 1600);
+                            })
+                          }
+                        >
+                          {copied === p.id ? "복사됨" : `태그 ${tags.length}`}
+                        </button>
+                      );
+                    })()}
                   </td>
                   <td style={{ color: "var(--text-dim)", fontSize: 12 }}>
                     {p.updated_at.slice(0, 10)}

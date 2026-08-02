@@ -1,9 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { markdownToHtml, countChars } from "@/lib/markdown";
 import { copyRichHtml, copyText } from "@/lib/clipboard";
+import type { StoredImage } from "@/lib/images";
 
 type Suggestion = { subKeyword: string; title: string; reason: string };
 
@@ -52,6 +53,73 @@ function WritePageInner() {
   const [markdown, setMarkdown] = useState("");
   const [jsonLd, setJsonLd] = useState("");
   const [sources, setSources] = useState<{ title: string; uri: string }[]>([]);
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const [images, setImages] = useState<StoredImage[]>([]);
+  const [showImages, setShowImages] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [imageError, setImageError] = useState("");
+
+  /** 커서 자리에 끼워 넣는다. 맨 뒤에 붙이면 원하는 위치가 아니라 매번 옮겨야 한다 */
+  function insertAtCursor(text: string) {
+    const el = bodyRef.current;
+    if (!el) {
+      setMarkdown((m) => m + text);
+      return;
+    }
+    const start = el.selectionStart ?? markdown.length;
+    const end = el.selectionEnd ?? start;
+    const next = markdown.slice(0, start) + text + markdown.slice(end);
+    setMarkdown(next);
+    // setState 반영 뒤에 커서를 삽입한 텍스트 끝으로 돌려놓는다
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + text.length;
+      el.setSelectionRange(pos, pos);
+    });
+  }
+
+  const loadImages = useCallback(() => {
+    fetch("/api/images")
+      .then((r) => r.json())
+      .then((d) => setImages(d.images ?? []))
+      .catch(() => setImages([]));
+  }, []);
+
+  async function uploadImages(files: FileList | File[] | null) {
+    const list = files ? Array.from(files) : [];
+    if (!list.length) return;
+    setUploading(true);
+    setImageError("");
+    try {
+      const form = new FormData();
+      for (const f of list) form.append("file", f);
+      const res = await fetch("/api/images", { method: "POST", body: form });
+      const d = await res.json();
+      if (d.error) setImageError(d.error);
+      for (const s of d.saved ?? []) insertAtCursor(`\n![](${s.url})\n`);
+      if ((d.saved ?? []).length) loadImages();
+    } catch (e) {
+      setImageError((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  /** 스크린샷을 그대로 붙여넣는 경로. 파일 고르기보다 이쪽을 훨씬 자주 쓴다 */
+  function onPasteImage(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData.files).filter((f) =>
+      f.type.startsWith("image/"),
+    );
+    if (!files.length) return;
+    e.preventDefault();
+    uploadImages(files);
+  }
+
+  async function removeImage(name: string) {
+    if (!confirm(`${name} 을 삭제할까요?`)) return;
+    await fetch(`/api/images/${encodeURIComponent(name)}`, { method: "DELETE" });
+    loadImages();
+  }
 
   useEffect(() => {
     const main = params.get("main");
@@ -80,11 +148,19 @@ function WritePageInner() {
           setTitle(p.title);
           setMetaDesc(p.meta_desc);
           setMarkdown(p.body_markdown);
-          try {
-            setTags(JSON.parse(p.tags));
-          } catch {
-            setTags([]);
-          }
+          // jsonb 라 배열로 온다. 예전 저장분이 문자열일 수 있어 양쪽을 받는다
+          setTags(
+            Array.isArray(p.tags)
+              ? p.tags
+              : (() => {
+                  try {
+                    const parsed = JSON.parse(p.tags || "[]");
+                    return Array.isArray(parsed) ? parsed : [];
+                  } catch {
+                    return [];
+                  }
+                })(),
+          );
         });
     }
   }, [params]);
@@ -583,12 +659,78 @@ function WritePageInner() {
                 </span>
               </h2>
               <textarea
+                ref={bodyRef}
                 className="mono"
                 rows={26}
                 style={{ width: "100%" }}
                 value={markdown}
                 onChange={(e) => setMarkdown(e.target.value)}
+                onPaste={onPasteImage}
               />
+
+              <div className="row" style={{ marginTop: 10 }}>
+                <label className="small ghost" style={{ cursor: "pointer", padding: "4px 9px", border: "1px solid var(--border)", borderRadius: 8 }}>
+                  {uploading ? <span className="spinner" /> : null}
+                  {uploading ? "올리는 중" : "이미지 올리기"}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp,image/avif"
+                    multiple
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      uploadImages(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                <button
+                  className="small ghost"
+                  onClick={() => {
+                    setShowImages((v) => !v);
+                    if (!showImages) loadImages();
+                  }}
+                >
+                  보관함 {showImages ? "닫기" : "열기"}
+                </button>
+              </div>
+              <p className="hint">
+                파일을 고르거나 본문에 <strong>붙여넣기(⌘V)</strong> 하면 커서 위치에
+                이미지가 들어갑니다. 로컬 <span className="mono">data/images/</span> 에만
+                저장되며, 실제 발행 때는 티스토리 에디터가 자기 서버로 다시 올립니다.
+              </p>
+              {imageError && <div className="alert warn">{imageError}</div>}
+
+              {showImages && (
+                <div style={{ marginTop: 10 }}>
+                  {images.length === 0 ? (
+                    <div className="empty">보관된 이미지가 없습니다.</div>
+                  ) : (
+                    <div className="img-grid">
+                      {images.map((img) => (
+                        <div key={img.name} className="img-item">
+                          {/* 로컬 보관소 파일이라 next/image 최적화 대상이 아니다 */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={img.url} alt={img.name} />
+                          <div className="row" style={{ gap: 4, marginTop: 4 }}>
+                            <button
+                              className="small"
+                              onClick={() => insertAtCursor(`\n![](${img.url})\n`)}
+                            >
+                              넣기
+                            </button>
+                            <button
+                              className="small ghost"
+                              onClick={() => removeImage(img.name)}
+                            >
+                              삭제
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="card">

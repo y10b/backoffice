@@ -706,3 +706,71 @@ button.icon {
   vertical-align: 4px;
   margin-right: 6px;
 }
+
+/* 이미지 보관함 — 썸네일을 고정 높이로 맞춰 줄이 들쭉날쭉하지 않게 한다 */
+.img-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.img-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  background: var(--surface-2);
+}
+
+.img-item img {
+  width: 100%;
+  height: 76px;
+  object-fit: cover;
+  border-radius: 5px;
+  display: block;
+  background: #0b0d11;
+}
+
+/* 쇼츠 — 댓글 고르기 */
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.comment-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 13px;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.comment-item .dim {
+  font-size: 11px;
+}
+
+.comment-item.picked {
+  border-color: var(--accent);
+  background: rgba(61, 220, 132, 0.08);
+}
+
+/* 결과 미리보기. 9:16 이라 좁고 길어서 폭을 묶어 둔다 */
+.short-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.short-item video {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  border-radius: 8px;
+  background: #000;
+  display: block;
+}

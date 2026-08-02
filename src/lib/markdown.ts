@@ -18,6 +18,17 @@ function inline(text: string): string {
   out = out.replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>");
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  /*
+   * 이미지가 링크보다 먼저다. `![alt](url)` 은 `[alt](url)` 을 품고 있어서,
+   * 링크를 먼저 바꾸면 앞의 `!` 만 남고 `<a>` 가 되어 버린다.
+   *
+   * 보관소 주소(`/api/images/...`)와 외부 http(s) 를 모두 받는다. 그 외 스킴은
+   * `javascript:` 같은 것이 섞일 수 있어 통과시키지 않는다.
+   */
+  out = out.replace(
+    /!\[([^\]]*)\]\(((?:https?:\/\/|\/api\/images\/)[^\s)]+)\)/g,
+    '<img src="$2" alt="$1" style="max-width:100%;height:auto" />',
+  );
   out = out.replace(
     /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
     '<a href="$2" target="_blank" rel="noopener">$1</a>',

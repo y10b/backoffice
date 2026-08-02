@@ -1,0 +1,74 @@
+name: 매일 블로그 초안 생성
+
+# 왜 러너에서 직접 돌리지 않는가:
+# 소스를 체크아웃해 빌드하면 모든 API 키를 시크릿으로 옮겨야 하고 매번 몇 분이 걸린다.
+# 이미 배포본이 같은 코드를 돌리고 있으니 그쪽 API 를 부르면 시크릿 하나로 끝난다.
+on:
+  schedule:
+    # UTC 21:00 = KST 06:00. 아침에 확인하고 발행하는 흐름에 맞춘다.
+    # (GitHub 크론은 부하에 따라 수십 분 늦게 도는 일이 흔하다. 정시를 보장하지 않는다)
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "시드 키워드 (비우면 날짜 기준으로 자동 선택)"
+        required: false
+        type: string
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    # 그라운딩 + 본문 생성이 이어 돌아 오래 걸린다. 기본 6시간은 과하다
+    timeout-minutes: 15
+
+    steps:
+      - name: 초안 생성 요청
+        env:
+          APP_ORIGIN: ${{ secrets.APP_ORIGIN }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SEED: ${{ inputs.seed }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APP_ORIGIN:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::APP_ORIGIN 과 CRON_SECRET 시크릿을 등록하세요."
+            exit 1
+          fi
+
+          # 시드를 비워 보내면 서버가 날짜 기준으로 고른다
+          payload=$(printf '{"seed":"%s"}' "${SEED:-}")
+
+          # 서버가 실패해도 200 에 ok:false 로 답하므로 http_code 만 봐서는 부족하다.
+          # 본문을 받아 ok 필드로 판단한다.
+          http=$(curl -sS -o response.json -w '%{http_code}' \
+            --max-time 600 \
+            -X POST "${APP_ORIGIN%/}/api/cron/daily-post" \
+            -H "authorization: Bearer ${CRON_SECRET}" \
+            -H "content-type: application/json" \
+            -d "$payload")
+
+          echo "HTTP $http"
+          cat response.json
+
+          ok=$(node -e "try{process.stdout.write(String(JSON.parse(require('fs').readFileSync('response.json','utf8')).ok))}catch{process.stdout.write('false')}")
+          if [ "$ok" != "true" ]; then
+            echo "::error::초안 생성 실패 (HTTP $http)"
+            exit 1
+          fi
+
+      - name: 결과 요약
+        if: success()
+        run: |
+          node -e "
+            const d = JSON.parse(require('fs').readFileSync('response.json','utf8'));
+            const line = (k,v) => console.log('- **'+k+'**: '+v);
+            console.log('## 오늘의 초안');
+            line('제목', d.title);
+            line('키워드', d.mainKeyword + (d.subKeyword ? ' + ' + d.subKeyword : ''));
+            line('월간 검색수', (d.searches ?? 0).toLocaleString());
+            line('광고 단가', (d.bid ?? 0).toLocaleString() + '원');
+            line('그라운딩 출처', d.grounded ? d.sources + '건' : '없음 (최신 정보 미반영)');
+            line('글 번호', d.postId);
+            console.log('');
+            console.log('백오피스 **글 목록**에서 확인하고 네이버·티스토리에 발행하세요.');
+          " >> "$GITHUB_STEP_SUMMARY"

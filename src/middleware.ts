@@ -17,6 +17,15 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  /*
+   * 자동화(GitHub Actions)는 브라우저가 아니라 세션 쿠키를 만들 수 없다.
+   * 그래서 크론 경로만 통과시키고, 대신 라우트 안에서 CRON_SECRET 으로 따로 확인한다.
+   * 여기서 막으면 자동 생성이 아예 못 들어온다.
+   */
+  if (pathname.startsWith("/api/cron/")) {
+    return NextResponse.next();
+  }
+
   if (await verifySession(req.cookies.get(SESSION_COOKIE)?.value)) {
     return NextResponse.next();
   }
