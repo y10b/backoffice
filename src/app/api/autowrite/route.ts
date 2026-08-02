@@ -6,9 +6,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 /**
  * 제안(/api/suggest 기준 120초)과 본문(/api/generate 기준 300초)을 한 요청 안에서
- * 연달아 돌리므로 둘 중 큰 값으로는 모자란다. 합보다 조금 여유를 둔다.
+ * 연달아 돌리므로 원래는 합보다 여유를 두고 싶지만, Vercel Hobby 플랜의 상한이 300초다.
+ *
+ * 실측은 그라운딩 포함 약 100초라 보통은 넉넉하다. 다만 모델이 느리거나 조사 결과가
+ * 길어지면 300초에 걸릴 수 있고, 그때는 화면의 수동 경로(제안 → 초안 생성)로 나눠
+ * 돌리면 각각 별도 요청이라 상한에 걸리지 않는다.
  */
-export const maxDuration = 600;
+export const maxDuration = 300;
 
 type Suggestion = { subKeyword: string; title: string; reason: string };
 

@@ -11,3 +11,6 @@ next-env.d.ts
 supabase/.temp/
 # Vercel 프로젝트 링크
 .vercel/
+
+.vercel
+.env*
