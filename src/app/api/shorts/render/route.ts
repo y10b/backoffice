@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { checkFfmpeg, listShorts, renderShort } from "@/lib/shorts";
+import { checkFfmpeg, listShorts, parseRenderOptions, renderShort } from "@/lib/shorts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,27 +35,8 @@ export async function POST(req: Request) {
     );
   }
 
-  const num = (v: unknown, fallback: number) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : fallback;
-  };
-
   try {
-    const result = await renderShort({
-      input,
-      startSec: Math.max(0, num(body.startSec, 0)),
-      durationSec: Math.min(Math.max(num(body.durationSec, 30), 1), 180),
-      title: typeof body.title === "string" ? body.title : undefined,
-      caption: typeof body.caption === "string" ? body.caption : undefined,
-      comment:
-        body.comment && typeof body.comment.text === "string"
-          ? {
-              author: String(body.comment.author ?? ""),
-              text: String(body.comment.text ?? ""),
-            }
-          : undefined,
-      videoRatio: body.videoRatio ? num(body.videoRatio, 0.62) : undefined,
-    });
+    const result = await renderShort({ ...parseRenderOptions(body), input });
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message });

@@ -22,7 +22,7 @@ import { createClient } from "@supabase/supabase-js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { OUT_DIR, checkFfmpeg, renderShort } from "../src/lib/shorts.ts";
+import { OUT_DIR, checkFfmpeg, parseRenderOptions, renderShort } from "../src/lib/shorts.ts";
 
 const POLL_MS = 5000;
 const BUCKET = "shorts";
@@ -91,15 +91,8 @@ async function main() {
     console.log(`#${job.id} 렌더 시작 · ${String(job.options.input).slice(0, 60)}`);
     const started = Date.now();
     try {
-      const r = await renderShort({
-        input: job.options.input,
-        startSec: job.options.startSec ?? 0,
-        durationSec: job.options.durationSec ?? 30,
-        title: job.options.title || undefined,
-        caption: job.options.caption || undefined,
-        comment: job.options.comment || undefined,
-        videoRatio: job.options.videoRatio || undefined,
-      });
+      // 큐에 담긴 options 를 웹과 같은 파서로 읽는다. 필드를 여기서 다시 세면 어긋난다
+      const r = await renderShort(parseRenderOptions(job.options));
 
       // Storage 에 올려야 배포본에서도 볼 수 있다. 로컬 파일 경로는 웹에서 못 연다
       const bytes = await fs.readFile(path.join(OUT_DIR, r.name));

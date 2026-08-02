@@ -72,11 +72,26 @@ type Job = {
  * 좁은 검색어는 금방 마른다(`seoul 1950` 은 88건뿐이었다). 넓게 훑고 그 안에서 고른다.
  */
 const SEED_PRESETS = [
-  { label: "한국전쟁", q: '"korean war"' },
-  { label: "미군 한국 기록", q: "korea AND (army OR marines OR navy)" },
-  { label: "조선·대한제국", q: "joseon OR corea OR \"korean empire\"" },
-  { label: "옛 서울", q: "seoul OR korea city" },
-  { label: "한국 일반", q: "korea OR korean" },
+  // 컬렉션으로 좁히지 않으면 무단 업로드가 섞인다. `seoul korea` 만 넣었을 때는
+  // SBS 뉴스 클립이 여럿 나왔다. 미국 정부 제작물은 저작권 자체가 없어 가장 안전하다.
+  {
+    label: "한국전쟁 (미 정부)",
+    q: 'korea AND collection:(FedFlix OR usgovfilms OR nationalarchives)',
+  },
+  {
+    label: "미군 촬영 기록",
+    q: 'korea AND (creator:"U.S. Army" OR creator:"United States. Department of Defense")',
+  },
+  {
+    label: "전투 기록영상",
+    q: '"combat bulletin" OR "big picture" AND korea',
+  },
+  {
+    label: "1950년대 한국",
+    q: 'korea AND date:[1950-01-01 TO 1959-12-31] AND collection:(FedFlix OR usgovfilms)',
+  },
+  // 아래는 범위가 넓어 무단 업로드가 섞일 수 있다. 라이선스 배지를 꼭 확인할 것
+  { label: "한국 일반 (확인 필요)", q: "korea OR korean" },
 ];
 
 function num(n: number | null | undefined): string {
@@ -127,6 +142,10 @@ export default function ShortsPage() {
   const [durationSec, setDurationSec] = useState(30);
   const [title, setTitle] = useState("");
   const [caption, setCaption] = useState("");
+  /* 컷 길이. 0 이면 한 구간을 통째로 쓴다 */
+  const [cutSec, setCutSec] = useState(4);
+  /* 줄바꿈으로 나눈 자막 대본. 전체 길이에 고르게 배분된다 */
+  const [script, setScript] = useState("");
   const [picked, setPicked] = useState<Comment | null>(null);
 
   const [rendering, setRendering] = useState(false);
@@ -284,6 +303,8 @@ export default function ShortsPage() {
           input: input.trim(),
           startSec,
           durationSec,
+          cutSec: cutSec > 0 ? cutSec : undefined,
+          script,
           title,
           caption,
           comment: picked ? { author: picked.author, text: picked.text } : undefined,
@@ -692,16 +713,50 @@ export default function ShortsPage() {
               onChange={(e) => setDurationSec(Number(e.target.value))}
             />
           </div>
+          <div className="field">
+            <label>컷 길이(초)</label>
+            <input
+              type="number" min={0} max={30} style={{ width: 90 }}
+              value={cutSec}
+              onChange={(e) => setCutSec(Number(e.target.value))}
+            />
+          </div>
         </div>
+        <p className="hint" style={{ marginTop: 6 }}>
+          컷 길이만큼씩 원본 여러 지점에서 떠서 이어 붙입니다
+          {cutSec > 0 && durationSec > 0 && (
+            <> — {Math.max(1, Math.round(durationSec / cutSec))}컷</>
+          )}
+          . 0 으로 두면 시작 지점부터 한 번에 자릅니다.
+        </p>
         <div className="row" style={{ marginTop: 10 }}>
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
             <label>제목 (위 여백)</label>
             <input value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
-            <label>자막 (영상 안쪽 하단)</label>
+            <label>자막 — 한 줄 고정 (대본이 있으면 무시)</label>
             <input value={caption} onChange={(e) => setCaption(e.target.value)} />
           </div>
+        </div>
+        <div className="field" style={{ marginTop: 10 }}>
+          <label>자막 대본 (한 줄이 자막 하나)</label>
+          <textarea
+            rows={5}
+            value={script}
+            placeholder={"1951년 겨울, 전선은 멈춰 있었다\n미군 촬영반이 남긴 기록\n이 땅에서 실제로 있었던 일"}
+            onChange={(e) => setScript(e.target.value)}
+          />
+          <p className="hint" style={{ marginTop: 6 }}>
+            {script.split("\n").filter((l) => l.trim()).length > 0 ? (
+              <>
+                {script.split("\n").filter((l) => l.trim()).length}줄 · 줄당 약{" "}
+                {(durationSec / Math.max(1, script.split("\n").filter((l) => l.trim()).length)).toFixed(1)}초
+              </>
+            ) : (
+              <>비워두면 위의 고정 자막이 처음부터 끝까지 그대로 남습니다.</>
+            )}
+          </p>
         </div>
         {picked && (
           <p className="hint">

@@ -96,6 +96,12 @@ export function escapeFontPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/:/g, "\\:");
 }
 
+/** 시간축이 붙은 자막 한 줄. 출력 영상 기준 초 */
+export type Caption = { start: number; end: number; text: string };
+
+/** 원본에서 잘라낼 구간 하나 */
+export type Segment = { start: number; duration: number };
+
 export type RenderOptions = {
   /** 원본 파일 경로 또는 http(s) 주소. archive.org 직링크를 그대로 넣을 수 있다 */
   input: string;
@@ -103,6 +109,26 @@ export type RenderOptions = {
   startSec: number;
   /** 길이(초). 쇼츠는 60초를 넘기지 않는 편이 낫다 */
   durationSec: number;
+  /**
+   * 여러 구간을 이어 붙인다.
+   *
+   * 한 구간을 통째로 자르면 25초 내내 같은 장면이라 쇼츠에서 끝까지 안 본다.
+   * 원본의 다른 지점들을 골라 이으면 컷이 바뀌어 시선을 붙든다.
+   * 비어 있으면 startSec/durationSec 한 구간만 쓴다.
+   */
+  segments?: Segment[];
+  /**
+   * 컷 하나의 길이(초). 주면 원본 전체에 이 길이의 컷을 고르게 흩어 segments 를 자동 생성한다.
+   * segments 를 직접 준 경우에는 무시된다.
+   */
+  cutSec?: number;
+  /**
+   * 시간별 자막. 있으면 caption 대신 이걸 쓴다.
+   * 하나짜리 caption 은 처음부터 끝까지 같은 문구라 읽고 나면 볼 게 없다.
+   */
+  captions?: Caption[];
+  /** 줄바꿈으로 나눈 자막 대본. 주면 전체 길이에 고르게 나눠 captions 를 자동 생성한다 */
+  script?: string;
   /** 위 여백에 얹을 문구 */
   title?: string;
   /** 아래 여백에 얹을 댓글 (작성자 포함) */
@@ -125,22 +151,50 @@ export type RenderResult = {
  * 레이아웃을 정확히 잡으려면 스케일 후 높이를 알아야 하는데, 그건 원본 비율이 정한다.
  * 실패해도 렌더는 진행한다 — 배치가 조금 어긋날 뿐 결과물은 나온다.
  */
-export async function probeSize(
-  input: string,
-): Promise<{ width: number; height: number } | null> {
+export type MediaInfo = {
+  width: number;
+  height: number;
+  /** 원본 전체 길이(초). 컷을 어디서 뜰지 정하는 데 쓴다 */
+  durationSec: number | null;
+  /**
+   * 오디오 트랙이 있는가.
+   *
+   * 컷을 이어 붙일 때 concat 필터는 모든 입력의 스트림 구성이 같아야 한다.
+   * 무성 영상에 오디오를 요구하면 통째로 실패하므로 미리 확인한다.
+   */
+  hasAudio: boolean;
+};
+
+export async function probeMedia(input: string): Promise<MediaInfo | null> {
   try {
     const out = await run(
       "ffprobe",
-      ["-v", "error", "-select_streams", "v:0", "-show_entries",
-       "stream=width,height", "-of", "csv=p=0:s=x", input],
+      ["-v", "error", "-show_entries",
+       "stream=width,height,codec_type:format=duration",
+       "-of", "json", input],
       60000,
     );
-    const m = /(\d+)x(\d+)/.exec(out.trim());
-    if (!m) return null;
-    return { width: Number(m[1]), height: Number(m[2]) };
+    const data = JSON.parse(out);
+    const streams: any[] = Array.isArray(data?.streams) ? data.streams : [];
+    const video = streams.find((s) => s?.codec_type === "video" && s?.width);
+    if (!video) return null;
+    const dur = Number(data?.format?.duration);
+    return {
+      width: Number(video.width),
+      height: Number(video.height),
+      durationSec: Number.isFinite(dur) && dur > 0 ? dur : null,
+      hasAudio: streams.some((s) => s?.codec_type === "audio"),
+    };
   } catch {
     return null;
   }
+}
+
+export async function probeSize(
+  input: string,
+): Promise<{ width: number; height: number } | null> {
+  const info = await probeMedia(input);
+  return info ? { width: info.width, height: info.height } : null;
 }
 
 /** ffmpeg 가 설치돼 있는지. 없으면 무엇을 해야 하는지까지 알려준다 */
@@ -263,10 +317,21 @@ export function buildFilter(
 
   // 폰트를 못 찾으면 fontfile 을 빼고 시도한다. 리눅스에는 fontconfig 가 있어 그대로 동작한다
   const fontOpt = font ? `:fontfile='${escapeFontPath(font)}'` : "";
-  const draw = (text: string, y: number, size: number, color: string) =>
+  /**
+   * span 을 주면 그 구간에만 글자가 뜬다. 시간별 자막이 이걸로 갈린다.
+   * enable 값 안의 콤마는 필터 구분자와 충돌하므로 이스케이프해야 한다.
+   */
+  const draw = (
+    text: string,
+    y: number,
+    size: number,
+    color: string,
+    span?: { start: number; end: number },
+  ) =>
     `drawtext=text='${escapeDrawText(text)}'${fontOpt}:fontcolor=${color}:fontsize=${size}` +
     // 글자가 영상 위에 얹혀도 읽히도록 검은 테두리를 두른다. 자막의 기본기다
-    `:borderw=6:bordercolor=black@0.85:x=(w-text_w)/2:y=${y}`;
+    `:borderw=6:bordercolor=black@0.85:x=(w-text_w)/2:y=${y}` +
+    (span ? `:enable='between(t\,${span.start}\,${span.end})'` : "");
 
   if (o.title?.trim()) {
     // 제목 블록을 위 여백 안에서 세로 가운데로. 줄 수가 달라도 균형이 유지된다
@@ -276,16 +341,27 @@ export function buildFilter(
     lines.forEach((line, i) => parts.push(draw(line, startY + i * lineH, 62, "white")));
   }
 
-  if (o.caption?.trim()) {
-    /*
-     * 자막은 영상 영역 '안쪽' 하단에 둔다. 영상 밖 검은 자리에 놓으면 자막이 아니라
-     * 그냥 설명글로 보인다. 두 줄까지 감안해 아래에서부터 거꾸로 자리를 잡는다.
-     */
-    const lines = wrapText(o.caption.trim(), 24).slice(0, 2);
-    const lineH = 58;
-    const bottom = topH + videoH - 40;
-    const startY = bottom - lines.length * lineH;
-    lines.forEach((line, i) => parts.push(draw(line, startY + i * lineH, 50, "0xFFF07A")));
+  /*
+   * 자막. 시간별(captions)이 있으면 그걸 쓰고, 없으면 통짜 caption 을 전체 구간에 얹는다.
+   * 영상 영역 '안쪽' 하단에 둔다 — 밖의 검은 자리에 놓으면 자막이 아니라 설명글로 보인다.
+   */
+  const captionLineH = 58;
+  const captionBottom = topH + videoH - 40;
+  const drawCaption = (text: string, span?: { start: number; end: number }) => {
+    const lines = wrapText(text.trim(), 24).slice(0, 2);
+    const startY = captionBottom - lines.length * captionLineH;
+    lines.forEach((line, i) =>
+      parts.push(draw(line, startY + i * captionLineH, 50, "0xFFF07A", span)),
+    );
+  };
+
+  const captions = effectiveCaptions(o);
+  if (captions.length) {
+    for (const c of captions) {
+      drawCaption(c.text, { start: c.start, end: c.end });
+    }
+  } else if (o.caption?.trim()) {
+    drawCaption(o.caption);
   }
 
   if (o.comment?.text?.trim()) {
@@ -300,36 +376,219 @@ export function buildFilter(
   return parts.join(",");
 }
 
-export async function renderShort(o: RenderOptions): Promise<RenderResult> {
-  const check = await checkFfmpeg();
-  if (!check.ok) throw new Error(check.error!);
+/**
+ * 원본 전체에 컷을 고르게 흩어 놓는다.
+ *
+ * 한 지점에서 30초를 통째로 뜨면 같은 장면이 계속 나온다. 기록영상은 특히
+ * 카메라가 오래 고정돼 있어 더 심하다. 원본의 여러 지점에서 조금씩 떠서 이으면
+ * 같은 소재로도 장면이 계속 바뀐다.
+ *
+ * 맨 앞과 맨 끝은 피한다. 기록영상의 시작은 대개 타이틀 카드나 검은 화면이고,
+ * 끝은 엔딩 슬레이트라 화면으로 쓸 게 없다.
+ */
+export function autoSegments(
+  totalSec: number,
+  cutSec: number,
+  sourceDuration: number | null,
+  startSec = 0,
+): Segment[] {
+  const cut = Math.min(Math.max(cutSec, 1), totalSec);
+  const count = Math.max(1, Math.round(totalSec / cut));
+  const each = totalSec / count;
 
-  // 폰트와 원본 크기를 미리 확보한다. 둘 다 실패해도 렌더는 진행된다
-  const [font, source] = await Promise.all([fontPath(), probeSize(o.input)]);
+  // 원본 길이를 모르면 컷을 흩을 범위를 알 수 없다. 요청받은 지점에서 이어서 뜬다
+  if (!sourceDuration || sourceDuration < startSec + totalSec) {
+    return Array.from({ length: count }, (_, i) => ({
+      start: startSec + i * each,
+      duration: each,
+    }));
+  }
 
-  await fs.mkdir(OUT_DIR, { recursive: true });
-  const name = `${Date.now()}-${crypto.randomBytes(3).toString("hex")}.mp4`;
-  const out = path.join(OUT_DIR, name);
+  const from = Math.max(startSec, sourceDuration * 0.05);
+  const to = Math.max(from + each, sourceDuration * 0.95 - each);
+  const step = count > 1 ? (to - from) / (count - 1) : 0;
+  return Array.from({ length: count }, (_, i) => ({
+    start: Math.round((from + i * step) * 100) / 100,
+    duration: Math.round(each * 100) / 100,
+  }));
+}
 
-  const args = [
-    "-y",
-    // -ss 를 -i 앞에 두면 빠르게 탐색한다. 원격 URL 에서 특히 차이가 크다
-    "-ss", String(Math.max(0, o.startSec)),
-    "-i", o.input,
-    "-t", String(Math.min(Math.max(o.durationSec, 1), 180)),
-    "-vf", buildFilter(o, font, source),
+/** 대본을 줄 단위로 나눠 전체 길이에 고르게 배분한다 */
+export function autoCaptions(script: string, totalSec: number): Caption[] {
+  const lines = script
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return [];
+  const each = totalSec / lines.length;
+  return lines.map((text, i) => ({
+    start: Math.round(i * each * 100) / 100,
+    // 끝을 다음 줄 시작에 딱 맞추면 전환 순간에 한 프레임씩 자막이 사라진다
+    end: Math.round((i + 1) * each * 100) / 100 + 0.05,
+    text,
+  }));
+}
+
+/** 실제로 쓸 구간 목록. segments 도 cutSec 도 없으면 단일 구간으로 되돌린다 */
+export function effectiveSegments(o: RenderOptions, source?: MediaInfo | null): Segment[] {
+  const list = (o.segments ?? [])
+    .map((s) => ({ start: Math.max(0, s.start), duration: s.duration }))
+    // 1초 미만 컷은 화면이 스치기만 하고 프레임 하나 못 보여준다
+    .filter((s) => Number.isFinite(s.start) && s.duration >= 1);
+  if (list.length) return list;
+
+  const total = clampDuration(o.durationSec);
+  if (o.cutSec && o.cutSec >= 1) {
+    return autoSegments(total, o.cutSec, source?.durationSec ?? null, Math.max(0, o.startSec));
+  }
+  return [{ start: Math.max(0, o.startSec), duration: total }];
+}
+
+/** 실제로 얹을 자막. captions 가 없으면 script 를 시간에 나눠 쓴다 */
+export function effectiveCaptions(o: RenderOptions): Caption[] {
+  if (o.captions?.length) return o.captions.filter((c) => c.text?.trim());
+  if (o.script?.trim()) return autoCaptions(o.script, clampDuration(o.durationSec));
+  return [];
+}
+
+function clampDuration(sec: number): number {
+  return Math.min(Math.max(sec, 1), 180);
+}
+
+/**
+ * ffmpeg 인자 전체를 만든다. 순수 함수라 실행 없이 검증할 수 있다.
+ *
+ * 컷이 하나면 `-vf` 한 줄로 끝난다. 여러 개면 같은 입력을 구간 수만큼 열고
+ * concat 으로 이어 붙인 뒤 그 결과에 레이아웃·자막 체인을 건다.
+ *
+ * 입력을 하나만 열고 trim 으로 자르는 방법도 있지만, 그러면 마지막 구간까지
+ * 처음부터 디코딩해야 한다. 원본이 20분짜리면 그 값이 크다. 입력마다 `-ss` 를
+ * 앞에 두면 구간마다 바로 그 지점으로 탐색한다.
+ */
+export function buildArgs(
+  o: RenderOptions,
+  out: string,
+  font: string | null,
+  source: MediaInfo | null,
+): string[] {
+  const segments = effectiveSegments(o, source);
+  const chain = buildFilter(o, font, source);
+  const withAudio = source?.hasAudio !== false;
+
+  const common = [
     "-c:v", "libx264",
     "-preset", "veryfast",
     "-crf", "23",
     "-pix_fmt", "yuv420p",
-    "-c:a", "aac",
-    "-b:a", "128k",
+    ...(withAudio ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
     // 쇼츠 업로드에서 문제를 덜 일으키는 조합
     "-movflags", "+faststart",
     "-r", "30",
     out,
   ];
 
+  if (segments.length === 1) {
+    return [
+      "-y",
+      // -ss 를 -i 앞에 두면 빠르게 탐색한다. 원격 URL 에서 특히 차이가 크다
+      "-ss", String(segments[0].start),
+      "-i", o.input,
+      "-t", String(clampDuration(segments[0].duration)),
+      "-vf", chain,
+      ...common,
+    ];
+  }
+
+  const inputs: string[] = [];
+  for (const seg of segments) {
+    inputs.push("-ss", String(seg.start), "-t", String(clampDuration(seg.duration)), "-i", o.input);
+  }
+
+  /*
+   * concat 은 입력들의 해상도·픽셀형식이 같아야 붙는다. 같은 파일에서 잘랐으니
+   * 보통 맞지만, setpts 로 타임스탬프를 0 부터 다시 세지 않으면 이어 붙인 뒤
+   * 재생 시간이 원본 위치를 그대로 물고 와 앞부분이 비어 보인다.
+   */
+  const steps: string[] = [];
+  const labels: string[] = [];
+  segments.forEach((_, i) => {
+    steps.push(`[${i}:v]setpts=PTS-STARTPTS[v${i}]`);
+    labels.push(`[v${i}]`);
+    if (withAudio) {
+      steps.push(`[${i}:a]asetpts=PTS-STARTPTS[a${i}]`);
+      labels.push(`[a${i}]`);
+    }
+  });
+  const n = segments.length;
+  steps.push(
+    withAudio
+      ? `${labels.join("")}concat=n=${n}:v=1:a=1[cv][ca]`
+      : `${labels.join("")}concat=n=${n}:v=1:a=0[cv]`,
+  );
+  // 자막의 enable=between(t,..) 은 concat 뒤 타임라인 기준이라 이어 붙인 다음에 건다
+  steps.push(`[cv]${chain}[vout]`);
+
+  return [
+    "-y",
+    ...inputs,
+    "-filter_complex", steps.join(";"),
+    "-map", "[vout]",
+    ...(withAudio ? ["-map", "[ca]"] : []),
+    ...common,
+  ];
+}
+
+/**
+ * 요청 본문(또는 큐에 저장된 options)을 렌더 옵션으로 정리한다.
+ *
+ * 라우트 두 곳과 워커가 각자 파싱하면 한쪽에만 필드를 더했을 때 조용히 어긋난다.
+ * 실제로 컷·자막을 넣고도 워커가 안 넘겨서 그대로 렌더될 뻔했다.
+ */
+export function parseRenderOptions(body: any): RenderOptions {
+  const num = (v: unknown, fallback: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+  return {
+    input: String(body?.input ?? "").trim(),
+    startSec: Math.max(0, num(body?.startSec, 0)),
+    durationSec: Math.min(Math.max(num(body?.durationSec, 30), 1), 180),
+    cutSec: body?.cutSec ? Math.min(Math.max(num(body.cutSec, 4), 1), 60) : undefined,
+    segments: Array.isArray(body?.segments)
+      ? body.segments
+          .map((s: any) => ({ start: num(s?.start, 0), duration: num(s?.duration, 0) }))
+          .filter((s: Segment) => s.duration >= 1)
+      : undefined,
+    script: str(body?.script) || undefined,
+    captions: Array.isArray(body?.captions)
+      ? body.captions
+          .map((c: any) => ({ start: num(c?.start, 0), end: num(c?.end, 0), text: str(c?.text) }))
+          .filter((c: Caption) => c.text.trim() && c.end > c.start)
+      : undefined,
+    title: str(body?.title) || undefined,
+    caption: str(body?.caption) || undefined,
+    comment:
+      body?.comment && typeof body.comment.text === "string"
+        ? { author: String(body.comment.author ?? ""), text: body.comment.text }
+        : undefined,
+    videoRatio: body?.videoRatio ? num(body.videoRatio, 0.72) : undefined,
+  };
+}
+
+export async function renderShort(o: RenderOptions): Promise<RenderResult> {
+  const check = await checkFfmpeg();
+  if (!check.ok) throw new Error(check.error!);
+
+  // 폰트와 원본 정보를 미리 확보한다. 둘 다 실패해도 렌더는 진행된다
+  const [font, source] = await Promise.all([fontPath(), probeMedia(o.input)]);
+
+  await fs.mkdir(OUT_DIR, { recursive: true });
+  const name = `${Date.now()}-${crypto.randomBytes(3).toString("hex")}.mp4`;
+  const out = path.join(OUT_DIR, name);
+
+  const args = buildArgs(o, out, font, source);
   await run("ffmpeg", args);
 
   const stat = await fs.stat(out);
