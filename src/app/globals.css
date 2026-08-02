@@ -12,6 +12,12 @@
   --danger: #ff6b6b;
   --warn: #ffb454;
   --radius: 10px;
+  /*
+   * 성과 그래프 두 계열. 색맹 시뮬레이션에서 서로 충분히 벌어지는 조합으로 골랐다
+   * (deutan ΔE 16.8). 수익은 돈이니 accent 와 같은 초록을 쓴다.
+   */
+  --chart-views: #7cc4fa;
+  --chart-earnings: #3ddc84;
 }
 
 * {
@@ -422,4 +428,281 @@ pre {
 
 .delta-down {
   color: var(--danger);
+}
+
+.dim {
+  color: var(--text-dim);
+}
+
+td.strong {
+  font-weight: 600;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+/* 지표 컬럼이 많아 좁은 화면에서는 표만 가로 스크롤시킨다 */
+.table-wrap {
+  overflow-x: auto;
+}
+
+.table-wrap table {
+  min-width: 900px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.check input {
+  accent-color: var(--accent);
+}
+
+.badge.off {
+  border-color: rgba(255, 107, 107, 0.4);
+  color: #ffb3b3;
+}
+
+.tag.seed {
+  margin-left: 6px;
+  padding: 0 7px;
+  font-size: 11px;
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.grade {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid;
+}
+
+.grade.good {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.grade.ok {
+  color: #a9d8f0;
+  border-color: rgba(169, 216, 240, 0.35);
+}
+
+.grade.warn {
+  color: var(--warn);
+  border-color: rgba(255, 180, 84, 0.35);
+}
+
+.grade.bad {
+  color: var(--danger);
+  border-color: rgba(255, 107, 107, 0.35);
+}
+
+.trending {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trend-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+}
+
+.trend-chip .tk {
+  font-weight: 500;
+}
+
+.trend-chip .tb {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 단가가 붙는 급상승어는 드물어서, 있으면 눈에 띄게 한다 */
+.trend-chip .tb.hi {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ad-depth {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 5px;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.spark {
+  color: var(--accent);
+  vertical-align: middle;
+}
+
+/* 표 마지막 열처럼 좁은 칸에 버튼을 여러 개 넣을 때 */
+.cell-actions {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+/* 라벨 없이 기호만 넣는 버튼. 좌우 여백을 줄여 열 폭을 아낀다 */
+button.icon {
+  padding: 4px 7px;
+  line-height: 1;
+}
+
+/* 자동 작성 진행 단계 */
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 12px;
+}
+
+.step {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.step.now {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.step.done {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  opacity: 0.6;
+}
+
+.test-result {
+  font-size: 12px;
+  align-self: center;
+}
+
+.test-result.ok {
+  color: var(--accent);
+}
+
+.test-result.fail {
+  color: var(--danger);
+}
+
+/* ── 성과 대시보드 ────────────────────────────────────────────── */
+
+/* 요약 지표가 5개라 폭에 맞춰 알아서 접히게 둔다 */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 10px;
+}
+
+.stat {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.stat .k {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.stat .v {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat .s {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* 미연결 카드는 숫자가 아니라 안내라서 크기를 줄이고 경고색으로 구분한다 */
+.stat.off .v {
+  font-size: 15px;
+  color: var(--warn);
+}
+
+.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.chart .axis {
+  fill: var(--text-dim);
+  font-size: 10px;
+}
+
+/* 툴팁을 그래프 좌표에 맞춰 띄우려면 기준 상자가 필요하다 */
+.chart-wrap {
+  position: relative;
+}
+
+.chart-tip {
+  position: absolute;
+  top: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.chart-tip b {
+  font-variant-numeric: tabular-nums;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+/* 범례 표식은 선 마크와 같은 모양이어야 어느 선인지 바로 이어진다 */
+.legend i {
+  display: inline-block;
+  width: 14px;
+  border-top: 2px solid;
+  vertical-align: 4px;
+  margin-right: 6px;
 }

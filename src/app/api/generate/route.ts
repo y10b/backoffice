@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { generateDraft } from "@/lib/gemini";
-import { db, nowIso } from "@/lib/db";
+import { insertDraft } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,25 +26,7 @@ export async function POST(req: Request) {
 
     let postId: number | null = null;
     if (body.save !== false) {
-      const ts = nowIso();
-      const info = db()
-        .prepare(
-          `INSERT INTO posts
-             (main_keyword, sub_keyword, title, body_html, body_markdown, tags, meta_desc, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
-        )
-        .run(
-          mainKeyword,
-          subKeyword,
-          draft.title,
-          draft.bodyHtml,
-          draft.bodyMarkdown,
-          JSON.stringify(draft.tags),
-          draft.metaDescription,
-          ts,
-          ts,
-        );
-      postId = Number(info.lastInsertRowid);
+      postId = insertDraft({ mainKeyword, subKeyword, draft });
     }
 
     return NextResponse.json({ ok: true, draft, postId });
