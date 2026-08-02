@@ -1,0 +1,7 @@
+node_modules/
+.next/
+.env.local
+# SQLite 본체와 부속 파일(WAL/SHM/journal) 전부. 쿠키·API 키가 들어간다.
+data/
+*.tsbuildinfo
+next-env.d.ts
