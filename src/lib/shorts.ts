@@ -123,6 +123,13 @@ export type RenderOptions = {
    */
   cutSec?: number;
   /**
+   * 컷 위치를 장면 전환에서 딸 것인가.
+   *
+   * 끄면 원본 전체를 산수로 균등 분할한다. 켜면 원본을 한 번 훑어 실제 전환
+   * 지점을 찾고 그 경계에서 뜬다 — 첫 분석에 시간이 들지만 결과는 캐시된다.
+   */
+  sceneDetect?: boolean;
+  /**
    * 시간별 자막. 있으면 caption 대신 이걸 쓴다.
    * 하나짜리 caption 은 처음부터 끝까지 같은 문구라 읽고 나면 볼 게 없다.
    */
@@ -144,6 +151,20 @@ export type RenderResult = {
   url: string;
   sizeBytes: number;
   command: string;
+  /** 실제로 쓴 컷 목록 */
+  segments: Segment[];
+  /** 컷을 장면 전환에서 땄는가. false 면 균등 분할로 되돌아간 것이다 */
+  sceneDetected: boolean;
+};
+
+/** 감지된 장면 전환 지점 하나 */
+export type SceneCut = {
+  /** 원본에서의 위치(초). 새 샷의 첫 프레임이다 */
+  time: number;
+  /** 프레임 평균 밝기 0~255. 검은 화면·페이드를 걸러내는 데 쓴다 */
+  brightness: number | null;
+  /** 이 샷이 다음 전환까지 이어지는 길이(초). 마지막 샷은 알 수 없다 */
+  shotSec: number | null;
 };
 
 /**
@@ -377,6 +398,158 @@ export function buildFilter(
 }
 
 /**
+ * 장면 전환 감지.
+ *
+ * 컷 위치를 산수로 균등 분할하면 샷 한가운데나 페이드 도중에 떨어진다. 18분짜리
+ * 원본에서는 간격이 넓어 우연히 다른 장면이 걸리지만, 3분짜리면 같은 시퀀스 안에서
+ * 여섯 번 떠서 컷이 바뀐 티가 안 난다.
+ *
+ * ffmpeg 의 `select=gt(scene,T)` 는 앞 프레임과의 차이가 임계값을 넘는 지점을 준다.
+ * 그 지점이 새 샷의 첫 프레임이므로, 거기서 자르면 샷 경계에 맞는다.
+ *
+ * 분석은 320px 로 줄여서 한다. 장면 전환은 큰 화면 변화라 해상도를 낮춰도 잘 잡히고,
+ * 디코딩이 훨씬 빠르다.
+ */
+const SCENE_CACHE_DIR = path.join(process.cwd(), "data", "scenes");
+
+/** 페이드아웃 중인 검은 화면은 이 밝기 밑으로 떨어진다 */
+const MIN_BRIGHTNESS = 24;
+
+/**
+ * `metadata=print` 출력 파싱.
+ *
+ *   frame:12  pts:45000  pts_time:55.06
+ *   lavfi.scene_score=0.512
+ *   lavfi.signalstats.YAVG=98.3
+ */
+export function parseSceneOutput(text: string): SceneCut[] {
+  const cuts: SceneCut[] = [];
+  let cur: SceneCut | null = null;
+
+  for (const line of text.split(/\r?\n/)) {
+    const t = /pts_time:([0-9.]+)/.exec(line);
+    if (t) {
+      cur = { time: Number(t[1]), brightness: null, shotSec: null };
+      cuts.push(cur);
+      continue;
+    }
+    const y = /lavfi\.signalstats\.YAVG=([0-9.]+)/.exec(line);
+    if (y && cur) cur.brightness = Number(y[1]);
+  }
+
+  // 샷 길이는 다음 전환까지의 간격이다. 마지막 샷은 원본 끝을 몰라 비워 둔다
+  for (let i = 0; i < cuts.length; i++) {
+    cuts[i].shotSec = i + 1 < cuts.length ? cuts[i + 1].time - cuts[i].time : null;
+  }
+  return cuts;
+}
+
+/**
+ * 원본을 한 번 훑어 장면 전환 지점을 모은다.
+ *
+ * 원격 파일이면 여기서 통째로 받게 되므로 오래 걸린다. 같은 소재로 여러 편을 만들
+ * 것이라 결과를 파일로 캐시한다. data/ 는 gitignore 라 저장소에 안 남는다.
+ */
+export async function detectScenes(input: string, threshold = 0.35): Promise<SceneCut[]> {
+  const key = crypto
+    .createHash("sha1")
+    .update(`${input}|${threshold}`)
+    .digest("hex")
+    .slice(0, 16);
+  const cacheFile = path.join(SCENE_CACHE_DIR, `${key}.json`);
+
+  try {
+    const cached = JSON.parse(await fs.readFile(cacheFile, "utf8"));
+    if (Array.isArray(cached?.scenes)) return cached.scenes;
+  } catch {
+    /* 캐시가 없거나 깨졌으면 다시 감지한다 */
+  }
+
+  const out = await run(
+    "ffmpeg",
+    [
+      "-v", "error",
+      "-i", input,
+      "-vf",
+      `scale=320:-2,select='gt(scene,${threshold})',signalstats,metadata=print:file=-`,
+      // 영상만 본다. 오디오·자막 디코딩은 순전히 낭비다
+      "-an", "-sn",
+      "-f", "null", "-",
+    ],
+    20 * 60 * 1000,
+  );
+
+  const scenes = parseSceneOutput(out);
+  try {
+    await fs.mkdir(SCENE_CACHE_DIR, { recursive: true });
+    await fs.writeFile(cacheFile, JSON.stringify({ input, threshold, scenes }, null, 2));
+  } catch {
+    /* 캐시를 못 써도 감지 결과는 쓸 수 있다 */
+  }
+  return scenes;
+}
+
+/**
+ * 감지된 전환 지점 중에서 실제로 쓸 컷을 고른다.
+ *
+ * 후보를 앞에서부터 순서대로 집으면 도입부 몇 분에 몰린다. 그래서 전체에 목표
+ * 지점을 균등하게 찍고, 각 목표에 가장 가까운 후보를 하나씩 가져온다.
+ * 결과는 고르게 퍼지면서도 샷 경계에 맞는다.
+ *
+ * 후보가 목표 개수보다 적으면 null 을 준다. 호출한 쪽이 균등 분할로 되돌린다 —
+ * 고정 화면 위주라 전환이 거의 없는 원본이 실제로 있다.
+ */
+export function pickCuts(
+  scenes: SceneCut[],
+  count: number,
+  cutSec: number,
+  sourceDuration: number | null,
+): Segment[] | null {
+  // 앞뒤 끝자락은 타이틀 카드와 엔딩 슬레이트라 화면으로 쓸 게 없다
+  const from = sourceDuration ? sourceDuration * 0.03 : 0;
+  const to = sourceDuration ? sourceDuration * 0.97 - cutSec : Infinity;
+
+  const usable = scenes.filter(
+    (s) =>
+      s.time >= from &&
+      s.time <= to &&
+      (s.brightness == null || s.brightness >= MIN_BRIGHTNESS) &&
+      // 컷 길이보다 짧은 샷에서 뜨면 컷 안에 또 전환이 들어간다
+      (s.shotSec == null || s.shotSec >= Math.min(cutSec, 2)),
+  );
+  if (usable.length < count) return null;
+
+  const first = usable[0].time;
+  const last = usable[usable.length - 1].time;
+  const used = new Set<number>();
+  const picked: SceneCut[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const target = count > 1 ? first + ((last - first) * i) / (count - 1) : first;
+    let best = -1;
+    let bestDist = Infinity;
+    usable.forEach((s, idx) => {
+      if (used.has(idx)) return;
+      const d = Math.abs(s.time - target);
+      if (d < bestDist) {
+        bestDist = d;
+        best = idx;
+      }
+    });
+    if (best < 0) return null;
+    used.add(best);
+    picked.push(usable[best]);
+  }
+
+  picked.sort((a, b) => a.time - b.time);
+  // 전환 프레임 바로 위에서 시작하면 앞 샷의 잔상이 한두 프레임 걸린다
+  return picked.map((s) => ({
+    start: Math.round((s.time + 0.08) * 100) / 100,
+    duration: cutSec,
+  }));
+}
+
+/**
  * 원본 전체에 컷을 고르게 흩어 놓는다.
  *
  * 한 지점에서 30초를 통째로 뜨면 같은 장면이 계속 나온다. 기록영상은 특히
@@ -556,6 +729,7 @@ export function parseRenderOptions(body: any): RenderOptions {
     startSec: Math.max(0, num(body?.startSec, 0)),
     durationSec: Math.min(Math.max(num(body?.durationSec, 30), 1), 180),
     cutSec: body?.cutSec ? Math.min(Math.max(num(body.cutSec, 4), 1), 60) : undefined,
+    sceneDetect: Boolean(body?.sceneDetect),
     segments: Array.isArray(body?.segments)
       ? body.segments
           .map((s: any) => ({ start: num(s?.start, 0), duration: num(s?.duration, 0) }))
@@ -577,18 +751,45 @@ export function parseRenderOptions(body: any): RenderOptions {
   };
 }
 
+/**
+ * 이번 렌더에 쓸 컷을 정한다.
+ *
+ * segments 를 직접 준 경우가 최우선. 그다음이 장면 전환 감지, 마지막이 균등 분할이다.
+ * 감지가 실패하거나 후보가 모자라도 렌더는 진행한다 — 컷이 조금 어긋날 뿐이다.
+ */
+async function resolveSegments(
+  o: RenderOptions,
+  source: MediaInfo | null,
+): Promise<{ segments: Segment[]; sceneDetected: boolean }> {
+  const even = effectiveSegments(o, source);
+  if (o.segments?.length || !o.sceneDetect || !o.cutSec) {
+    return { segments: even, sceneDetected: false };
+  }
+
+  try {
+    const scenes = await detectScenes(o.input);
+    // 균등 분할이 정한 컷 수·길이를 그대로 따른다. 위치만 샷 경계로 옮기는 것이다
+    const picked = pickCuts(scenes, even.length, even[0].duration, source?.durationSec ?? null);
+    if (picked) return { segments: picked, sceneDetected: true };
+  } catch {
+    /* 감지가 실패해도 균등 분할로 만들 수 있다 */
+  }
+  return { segments: even, sceneDetected: false };
+}
+
 export async function renderShort(o: RenderOptions): Promise<RenderResult> {
   const check = await checkFfmpeg();
   if (!check.ok) throw new Error(check.error!);
 
   // 폰트와 원본 정보를 미리 확보한다. 둘 다 실패해도 렌더는 진행된다
   const [font, source] = await Promise.all([fontPath(), probeMedia(o.input)]);
+  const { segments, sceneDetected } = await resolveSegments(o, source);
 
   await fs.mkdir(OUT_DIR, { recursive: true });
   const name = `${Date.now()}-${crypto.randomBytes(3).toString("hex")}.mp4`;
   const out = path.join(OUT_DIR, name);
 
-  const args = buildArgs(o, out, font, source);
+  const args = buildArgs({ ...o, segments }, out, font, source);
   await run("ffmpeg", args);
 
   const stat = await fs.stat(out);
@@ -597,6 +798,8 @@ export async function renderShort(o: RenderOptions): Promise<RenderResult> {
     url: `/api/shorts/file/${encodeURIComponent(name)}`,
     sizeBytes: stat.size,
     command: `ffmpeg ${args.join(" ")}`,
+    segments,
+    sceneDetected,
   };
 }
 

@@ -144,6 +144,8 @@ export default function ShortsPage() {
   const [caption, setCaption] = useState("");
   /* 컷 길이. 0 이면 한 구간을 통째로 쓴다 */
   const [cutSec, setCutSec] = useState(4);
+  /* 컷 위치를 실제 장면 전환에서 딸지. 첫 분석은 오래 걸리지만 소재별로 캐시된다 */
+  const [sceneDetect, setSceneDetect] = useState(true);
   /* 줄바꿈으로 나눈 자막 대본. 전체 길이에 고르게 배분된다 */
   const [script, setScript] = useState("");
   const [picked, setPicked] = useState<Comment | null>(null);
@@ -304,6 +306,7 @@ export default function ShortsPage() {
           startSec,
           durationSec,
           cutSec: cutSec > 0 ? cutSec : undefined,
+          sceneDetect: cutSec > 0 && sceneDetect,
           script,
           title,
           caption,
@@ -722,6 +725,21 @@ export default function ShortsPage() {
             />
           </div>
         </div>
+        {cutSec > 0 && (
+          <label
+            className="hint"
+            style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, cursor: "pointer" }}
+          >
+            <input
+              type="checkbox"
+              checked={sceneDetect}
+              onChange={(e) => setSceneDetect(e.target.checked)}
+            />
+            장면 전환 감지 — 샷이 바뀌는 지점에서 컷을 뜹니다. 소재를 처음 쓸 때
+            한 번 전체를 훑어 몇 분 걸리고, 그다음부터는 캐시라 바로 됩니다.
+            끄면 시간만 균등 분할해 샷 한가운데에서 잘릴 수 있습니다.
+          </label>
+        )}
         <p className="hint" style={{ marginTop: 6 }}>
           컷 길이만큼씩 원본 여러 지점에서 떠서 이어 붙입니다
           {cutSec > 0 && durationSec > 0 && (
