@@ -32,6 +32,8 @@ type ArchiveRow = {
   creator: string;
   year: string;
   license: string;
+  /** 재사용해도 되는지 확인됐는가. 표기 없음은 확인 안 된 것이지 공개 도메인이 아니다 */
+  licenseConfirmed: boolean;
   detailUrl: string;
   thumbnail: string;
 };
@@ -46,7 +48,32 @@ type ArchiveFile = {
 
 type Comment = { id: string; author: string; text: string; likes: number };
 type Source = { id: string; label: string; ok: boolean; message: string };
-type Short = { name: string; url: string; sizeBytes: number; createdAt: string };
+type Job = {
+  id: number;
+  status: "queued" | "running" | "done" | "failed";
+  options: { title?: string; input?: string };
+  result_url: string;
+  size_bytes: number | null;
+  error: string;
+  created_at: string;
+};
+
+/**
+ * 채널 방향에 맞춘 소재 검색어 프리셋.
+ *
+ * 한국 근현대사 기록영상으로 잡았다. 미국 뉴스릴이 16만 건으로 훨씬 많지만 한국
+ * 시청자에게는 남의 나라 이야기라 스크롤을 멈추지 않는다. 한국 관련은 2,000건대로
+ * 적어도 대부분 처음 보는 영상이라 쇼츠에서 강하다.
+ *
+ * 좁은 검색어는 금방 마른다(`seoul 1950` 은 88건뿐이었다). 넓게 훑고 그 안에서 고른다.
+ */
+const SEED_PRESETS = [
+  { label: "한국전쟁", q: '"korean war"' },
+  { label: "미군 한국 기록", q: "korea AND (army OR marines OR navy)" },
+  { label: "조선·대한제국", q: "joseon OR corea OR \"korean empire\"" },
+  { label: "옛 서울", q: "seoul OR korea city" },
+  { label: "한국 일반", q: "korea OR korean" },
+];
 
 function num(n: number | null | undefined): string {
   return n === null || n === undefined ? "—" : n.toLocaleString();
@@ -100,24 +127,39 @@ export default function ShortsPage() {
 
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState("");
-  const [ffmpeg, setFfmpeg] = useState<{ ok: boolean; version?: string; error?: string } | null>(null);
-  const [shorts, setShorts] = useState<Short[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
 
-  const loadShorts = useCallback(() => {
-    fetch("/api/shorts/render")
+  const loadJobs = useCallback(() => {
+    fetch("/api/shorts/jobs")
       .then((r) => r.json())
-      .then((d) => {
-        setFfmpeg(d.ffmpeg ?? null);
-        setShorts(d.shorts ?? []);
-      })
+      .then((d) => setJobs(d.jobs ?? []))
       .catch(() => {});
   }, []);
 
   useEffect(() => {
-    loadShorts();
+    loadJobs();
     loadTrending();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /*
+   * 처리 중인 작업이 있을 때만 폴링한다. 워커가 가져가 렌더를 마치는 순간을
+   * 화면이 알 방법이 이것뿐이고, 다 끝났는데 계속 두드릴 이유는 없다.
+   */
+  const pending = jobs.filter((j) => j.status === "queued" || j.status === "running");
+  useEffect(() => {
+    if (!pending.length) return;
+    const t = setInterval(loadJobs, 4000);
+    return () => clearInterval(t);
+  }, [pending.length, loadJobs]);
+
+  /**
+   * 워커가 안 떠 있으면 작업이 queued 에서 움직이지 않는다. 그 상태가 길어지면
+   * 화면이 멈춘 것처럼 보이므로, 30초 넘게 대기 중인 게 있으면 안내한다.
+   */
+  const stalled = jobs.some(
+    (j) => j.status === "queued" && Date.now() - new Date(j.created_at).getTime() > 30_000,
+  );
 
   async function loadTrending() {
     setLoadingTrend(true);
@@ -190,7 +232,11 @@ export default function ShortsPage() {
     setRendering(true);
     setError("");
     try {
-      const res = await fetch("/api/shorts/render", {
+      /*
+       * 여기서 직접 렌더하지 않는다. ffmpeg 는 서버리스에서 못 돌아 배포본에서는
+       * 버튼이 죽는다. 작업만 등록하고 로컬 워커가 가져가 처리한다.
+       */
+      const res = await fetch("/api/shorts/jobs", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -204,10 +250,10 @@ export default function ShortsPage() {
       });
       const d = await res.json();
       if (!d.ok) {
-        setError(d.error ?? "렌더에 실패했습니다.");
+        setError(d.error ?? "작업 등록에 실패했습니다.");
         return;
       }
-      loadShorts();
+      loadJobs();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -215,11 +261,7 @@ export default function ShortsPage() {
     }
   }
 
-  async function removeShort(name: string) {
-    if (!confirm(`${name} 을 삭제할까요?`)) return;
-    await fetch(`/api/shorts/file/${encodeURIComponent(name)}`, { method: "DELETE" });
-    loadShorts();
-  }
+
 
   return (
     <>
@@ -229,7 +271,6 @@ export default function ShortsPage() {
         얹어 9:16 세로 영상으로 만듭니다.
       </p>
 
-      {ffmpeg && !ffmpeg.ok && <div className="alert error">{ffmpeg.error}</div>}
       {error && <div className="alert warn">{error}</div>}
 
       <div className="alert ok">
@@ -334,6 +375,25 @@ export default function ShortsPage() {
               ))}
             </div>
 
+            <div className="row" style={{ marginTop: 8, gap: 6 }}>
+              <span className="hint" style={{ margin: 0, alignSelf: "center" }}>
+                채널 방향:
+              </span>
+              {SEED_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  className="small ghost"
+                  onClick={() => {
+                    setQuery(p.q);
+                    // 프리셋을 누르면 바로 찾아본다. 한 번 더 누르게 할 이유가 없다
+                    setTimeout(searchSources, 0);
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
             {ytCc.length > 0 && (
               <>
                 <h2 style={{ marginTop: 16 }}>유튜브 CC 라이선스</h2>
@@ -372,7 +432,13 @@ export default function ShortsPage() {
 
             {archive.length > 0 && (
               <>
-                <h2 style={{ marginTop: 16 }}>Internet Archive · 다운로드 허용</h2>
+                <h2 style={{ marginTop: 16 }}>Internet Archive</h2>
+                <p className="hint" style={{ marginTop: 0 }}>
+                  <strong>표기 없음은 공개 도메인이 아닙니다.</strong> archive.org 는 누구나
+                  올릴 수 있어서, 업로더가 라이선스를 안 적었을 뿐입니다. 실제로 방송사 뉴스
+                  클립이 표기 없이 올라와 있습니다. 초록 배지(확인된 것)만 그대로 쓰고, 나머지는
+                  항목 페이지에서 출처를 직접 확인하세요.
+                </p>
                 <div className="table-wrap">
                   <table>
                     <tbody>
@@ -388,8 +454,10 @@ export default function ShortsPage() {
                               {a.creator} {a.year}
                             </div>
                           </td>
-                          <td style={{ width: 190 }}>
-                            <span className="badge on">{a.license}</span>
+                          <td style={{ width: 200 }}>
+                            <span className={`badge ${a.licenseConfirmed ? "on" : "off"}`}>
+                              {a.license}
+                            </span>
                           </td>
                           <td style={{ width: 100 }}>
                             <button className="small" onClick={() => loadFiles(a.identifier)}>
@@ -510,31 +578,68 @@ export default function ShortsPage() {
           </p>
         )}
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="primary" onClick={render} disabled={rendering || !ffmpeg?.ok}>
+          <button className="primary" onClick={render} disabled={rendering}>
             {rendering && <span className="spinner" />}
-            {rendering ? "렌더 중 (수십 초)" : "쇼츠 만들기"}
+            {rendering ? "등록 중" : "쇼츠 만들기"}
           </button>
+          <span className="hint" style={{ margin: 0, alignSelf: "center" }}>
+            작업을 큐에 넣으면 로컬 워커(<span className="mono">npm run worker</span>)가
+            렌더합니다.
+          </span>
         </div>
       </div>
 
-      {shorts.length > 0 && (
+      {jobs.length > 0 && (
         <div className="card">
-          <h2>만든 쇼츠 {shorts.length}개</h2>
+          <div className="card-head">
+            <h2 style={{ margin: 0 }}>
+              작업 {jobs.length}건
+              {pending.length > 0 && (
+                <span className="badge" style={{ marginLeft: 8 }}>
+                  <span className="spinner" />
+                  처리 중 {pending.length}
+                </span>
+              )}
+            </h2>
+            <button className="small ghost" onClick={loadJobs}>새로고침</button>
+          </div>
+
+          {stalled && (
+            <div className="alert warn">
+              작업이 대기 상태에서 움직이지 않습니다. 로컬에서{" "}
+              <span className="mono">npm run worker</span> 가 떠 있는지 확인하세요.
+              워커를 켜면 쌓인 작업부터 순서대로 처리합니다.
+            </div>
+          )}
+
           <div className="short-grid">
-            {shorts.map((s) => (
-              <div key={s.name} className="short-item">
-                <video src={s.url} controls preload="metadata" />
-                <div className="row" style={{ gap: 4, marginTop: 6 }}>
-                  <a href={s.url} download>
-                    <button className="small">저장</button>
-                  </a>
-                  <button className="small ghost" onClick={() => removeShort(s.name)}>
-                    삭제
-                  </button>
-                  <span className="dim" style={{ fontSize: 11, alignSelf: "center" }}>
-                    {Math.round(s.sizeBytes / 1024)}KB
-                  </span>
+            {jobs.map((j) => (
+              <div key={j.id} className="short-item">
+                {j.status === "done" && j.result_url ? (
+                  <video src={j.result_url} controls preload="metadata" />
+                ) : (
+                  <div className={`job-placeholder ${j.status}`}>
+                    {j.status === "failed" ? "실패" : j.status === "running" ? "렌더 중" : "대기 중"}
+                  </div>
+                )}
+                <div className="dim" style={{ fontSize: 11, marginTop: 5 }}>
+                  #{j.id} {j.options?.title || "(제목 없음)"}
                 </div>
+                {j.error && (
+                  <div className="dim" style={{ fontSize: 11, color: "var(--danger)" }}>
+                    {j.error.slice(0, 80)}
+                  </div>
+                )}
+                {j.status === "done" && j.result_url && (
+                  <div className="row" style={{ gap: 4, marginTop: 5 }}>
+                    <a href={j.result_url} download target="_blank" rel="noreferrer">
+                      <button className="small">저장</button>
+                    </a>
+                    <span className="dim" style={{ fontSize: 11, alignSelf: "center" }}>
+                      {Math.round((j.size_bytes ?? 0) / 1024)}KB
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
           </div>

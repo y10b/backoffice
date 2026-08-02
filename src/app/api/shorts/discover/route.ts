@@ -78,7 +78,10 @@ export async function GET(req: Request) {
 
     const archive =
       ar.status === "fulfilled"
-        ? ar.value.map((a) => ({ ...a, license: licenseLabel(a.licenseUrl) }))
+        ? ar.value.map((a) => {
+            const lic = licenseLabel(a.licenseUrl);
+            return { ...a, license: lic.label, licenseConfirmed: lic.confirmed };
+          })
         : [];
     sources.push({
       id: "archive",

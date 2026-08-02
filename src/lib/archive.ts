@@ -66,7 +66,16 @@ export async function searchArchive(
   url.searchParams.set("rows", String(Math.min(Math.max(rows, 1), 50)));
   url.searchParams.set("page", "1");
   url.searchParams.set("output", "json");
-  url.searchParams.set("sort[]", "downloads desc");
+  /*
+   * 정렬을 걸지 않는다.
+   *
+   * `downloads desc` 로 두면 검색어와 무관한 인기 항목이 위로 올라온다. 실제로
+   * `"korean war"` 를 넣었는데 `Duck and Cover`, `Nazi Concentration Camps` 가 나왔다.
+   * 다운로드 수가 압도적이라 관련도를 눌러버린 것이다.
+   *
+   * 정렬을 비우면 archive.org 가 관련도순으로 준다. 쇼츠 소재는 "많이 받은 것"보다
+   * "주제에 맞는 것"이 중요하다.
+   */
 
   const res = await fetch(url.toString(), { cache: "no-store" });
   if (!res.ok) throw new Error(`Archive.org 검색 실패 (HTTP ${res.status})`);
@@ -118,13 +127,35 @@ export async function archiveFiles(identifier: string): Promise<ArchiveFile[]> {
 
 /**
  * 라이선스 표기를 사람이 읽는 말로.
- * archive.org 는 공개 도메인이면 licenseurl 을 비워두는 경우가 많아, 빈 값도 의미가 있다.
+ *
+ * 처음에는 표기가 없으면 "대개 공개 도메인"이라고 안내했는데, 그건 틀렸다.
+ * archive.org 는 누구나 올릴 수 있어서 **표기 없음은 그냥 업로더가 안 적은 것**이다.
+ * 실제로 `seoul korea` 를 찾으니 SBS 뉴스 클립이 표기 없이 여럿 올라와 있었다.
+ * 명백한 방송사 저작물인데 "공개 도메인"이라고 띄우면 그대로 쓰다가 사고가 난다.
+ *
+ * 그래서 확인된 것만 확인됐다고 말하고, 나머지는 직접 확인하라고 되돌린다.
  */
-export function licenseLabel(licenseUrl: string): string {
-  if (!licenseUrl) return "표기 없음 (대개 공개 도메인)";
+export type LicenseInfo = {
+  label: string;
+  /** 재사용해도 되는지 확인됐는가. 화면에서 이 값으로 색을 가른다 */
+  confirmed: boolean;
+};
+
+export function licenseLabel(licenseUrl: string): LicenseInfo {
+  if (!licenseUrl) return { label: "표기 없음 — 직접 확인 필요", confirmed: false };
   const u = licenseUrl.toLowerCase();
-  if (u.includes("publicdomain") || u.includes("/zero/")) return "공개 도메인 (CC0)";
+  if (u.includes("publicdomain") || u.includes("/zero/")) {
+    return { label: "공개 도메인 (CC0)", confirmed: true };
+  }
   const m = /creativecommons\.org\/licenses\/([a-z-]+)\//.exec(u);
-  if (m) return `CC ${m[1].toUpperCase()}`;
-  return licenseUrl;
+  // nc(비상업)·nd(변경금지)는 쇼츠로 가공해 수익화하는 데 맞지 않는다
+  if (m) {
+    const code = m[1].toUpperCase();
+    const restricted = /NC|ND/.test(code);
+    return {
+      label: `CC ${code}${restricted ? " — 가공·수익화 제한" : ""}`,
+      confirmed: !restricted,
+    };
+  }
+  return { label: licenseUrl, confirmed: false };
 }

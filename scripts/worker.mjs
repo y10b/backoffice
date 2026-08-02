@@ -13,24 +13,22 @@
  * 포트 개방도 공인 IP도 필요 없다. 워커가 꺼져 있으면 작업은 큐에 남아 있다가
  * 다시 켜면 처리된다.
  *
+ * 렌더 로직은 src/lib/shorts.ts 를 그대로 가져다 쓴다. 여기에 복제해 두면 필터나
+ * 레이아웃을 고칠 때 한쪽만 바뀌어 조용히 어긋난다 (Node 22+ 는 .ts 를 직접 읽는다).
+ *
  * 실행: npm run worker
  */
 import { createClient } from "@supabase/supabase-js";
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import crypto from "node:crypto";
-
-/* ---------------- 설정 ---------------- */
+import { OUT_DIR, checkFfmpeg, renderShort } from "../src/lib/shorts.ts";
 
 const POLL_MS = 5000;
 const BUCKET = "shorts";
-const WIDTH = 1080;
-const HEIGHT = 1920;
 
+/** .env.local 을 직접 읽는다. 이 워커는 Next 밖에서 돌아 자동 주입이 없다 */
 async function loadEnv() {
-  // .env.local 을 직접 읽는다. 이 워커는 Next 밖에서 도니 자동 주입이 없다
   try {
     const text = await fs.readFile(".env.local", "utf8");
     for (const line of text.split(/\r?\n/)) {
@@ -44,159 +42,6 @@ async function loadEnv() {
   }
 }
 
-/* ---------------- ffmpeg ---------------- */
-
-function run(cmd, args, timeoutMs = 15 * 60 * 1000) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { windowsHide: true });
-    let out = "";
-    let err = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`시간 초과 (${Math.round(timeoutMs / 1000)}초)`));
-    }, timeoutMs);
-    child.stdout.on("data", (d) => (out += d));
-    child.stderr.on("data", (d) => (err += d));
-    child.on("error", (e) => (clearTimeout(timer), reject(e)));
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(out || err);
-      else reject(new Error(err.trim().split("\n").slice(-4).join(" ").slice(0, 400)));
-    });
-  });
-}
-
-const FONT_CANDIDATES = [
-  path.join(process.cwd(), "data", "fonts", "Pretendard-ExtraBold.ttf"),
-  path.join(process.cwd(), "data", "fonts", "Pretendard-Bold.ttf"),
-  "C:/Windows/Fonts/malgunbd.ttf",
-  "C:/Windows/Fonts/malgun.ttf",
-];
-
-let fontCache;
-
-/**
- * Windows ffmpeg 는 fontfile= 값에 비ASCII 경로가 들어가면 파일을 열지 못한다.
- * (text= 의 한글은 멀쩡한데 경로만 안 된다.) 임시 폴더로 복사해 우회한다.
- */
-async function resolveFont() {
-  if (fontCache !== undefined) return fontCache;
-  for (const p of FONT_CANDIDATES) {
-    try {
-      await fs.access(p);
-      if (/^[\x20-\x7E]*$/.test(p)) return (fontCache = p);
-      const dir = path.join(os.tmpdir(), "backoffice-fonts");
-      const dst = path.join(dir, path.basename(p));
-      await fs.mkdir(dir, { recursive: true });
-      const [a, b] = await Promise.all([fs.stat(p), fs.stat(dst).catch(() => null)]);
-      if (!b || b.size !== a.size) await fs.copyFile(p, dst);
-      return (fontCache = dst);
-    } catch {
-      /* 다음 후보 */
-    }
-  }
-  return (fontCache = null);
-}
-
-const escText = (s) =>
-  String(s)
-    .replace(/\\/g, "\\\\")
-    .replace(/'/g, "’")
-    .replace(/:/g, "\\:")
-    .replace(/%/g, "\\%")
-    .replace(/\r?\n/g, " ")
-    .trim();
-
-const escPath = (p) => p.replace(/\\/g, "/").replace(/:/g, "\\:");
-
-function wrap(s, perLine) {
-  const weight = (t) => [...t].reduce((n, ch) => n + (/[ -~]/.test(ch) ? 1 : 2), 0);
-  const out = [];
-  let cur = "";
-  for (const w of String(s).split(/\s+/).filter(Boolean)) {
-    if (cur && weight(cur) + weight(w) + 1 > perLine) (out.push(cur), (cur = w));
-    else cur = cur ? `${cur} ${w}` : w;
-  }
-  if (cur) out.push(cur);
-  return out;
-}
-
-async function probeSize(input) {
-  try {
-    const out = await run(
-      "ffprobe",
-      ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
-       "-of", "csv=p=0:s=x", input],
-      120000,
-    );
-    const m = /(\d+)x(\d+)/.exec(out.trim());
-    return m ? { width: Number(m[1]), height: Number(m[2]) } : null;
-  } catch {
-    return null;
-  }
-}
-
-function buildFilter(o, font, source) {
-  const maxH = Math.round(HEIGHT * Math.min(Math.max(o.videoRatio ?? 0.72, 0.4), 0.9));
-  // 가로를 1080 에 맞추면 세로는 원본 비율이 정한다. 그 값으로 배치해야 검은 띠가 안 생긴다
-  const naturalH = source?.width ? Math.round((WIDTH * source.height) / source.width) : maxH;
-  const videoH = Math.min(naturalH, maxH);
-  const topH = Math.round((HEIGHT - videoH) * 0.4);
-
-  const parts = [
-    `scale=${WIDTH}:-2`,
-    ...(naturalH > videoH ? [`crop=${WIDTH}:${videoH}`] : []),
-    `pad=${WIDTH}:${HEIGHT}:0:${topH}:color=black`,
-  ];
-
-  const fontOpt = font ? `:fontfile='${escPath(font)}'` : "";
-  const draw = (text, y, size, color) =>
-    `drawtext=text='${escText(text)}'${fontOpt}:fontcolor=${color}:fontsize=${size}` +
-    `:borderw=6:bordercolor=black@0.85:x=(w-text_w)/2:y=${y}`;
-
-  if (o.title?.trim()) {
-    const lines = wrap(o.title.trim(), 22).slice(0, 3);
-    const startY = Math.max(40, Math.round(topH / 2 - (lines.length * 78) / 2));
-    lines.forEach((l, i) => parts.push(draw(l, startY + i * 78, 62, "white")));
-  }
-  if (o.caption?.trim()) {
-    const lines = wrap(o.caption.trim(), 24).slice(0, 2);
-    const startY = topH + videoH - 40 - lines.length * 58;
-    lines.forEach((l, i) => parts.push(draw(l, startY + i * 58, 50, "0xFFF07A")));
-  }
-  if (o.comment?.text?.trim()) {
-    const base = topH + videoH + 70;
-    parts.push(draw(`@${o.comment.author}`, base, 40, "0xAAAAAA"));
-    wrap(o.comment.text.trim(), 26)
-      .slice(0, 4)
-      .forEach((l, i) => parts.push(draw(l, base + 62 + i * 56, 46, "white")));
-  }
-  return parts.join(",");
-}
-
-async function render(o) {
-  const [font, source] = await Promise.all([resolveFont(), probeSize(o.input)]);
-  const dir = path.join(process.cwd(), "data", "shorts");
-  await fs.mkdir(dir, { recursive: true });
-  const name = `${Date.now()}-${crypto.randomBytes(3).toString("hex")}.mp4`;
-  const out = path.join(dir, name);
-
-  await run("ffmpeg", [
-    "-y",
-    "-ss", String(Math.max(0, o.startSec ?? 0)),
-    "-i", o.input,
-    "-t", String(Math.min(Math.max(o.durationSec ?? 30, 1), 180)),
-    "-vf", buildFilter(o, font, source),
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "-r", "30",
-    out,
-  ]);
-
-  return { name, path: out, size: (await fs.stat(out)).size };
-}
-
-/* ---------------- 메인 루프 ---------------- */
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
@@ -209,13 +54,12 @@ async function main() {
     process.exit(1);
   }
 
-  try {
-    const v = await run("ffmpeg", ["-version"], 15000);
-    console.log("ffmpeg:", v.split("\n")[0].slice(0, 60));
-  } catch {
-    console.error("ffmpeg 를 찾지 못했습니다. PATH 에 있는지 확인하세요.");
+  const ff = await checkFfmpeg();
+  if (!ff.ok) {
+    console.error(ff.error);
     process.exit(1);
   }
+  console.log("ffmpeg:", ff.version);
 
   const db = createClient(url, key, { auth: { persistSession: false } });
   const workerId = `${os.hostname()}-${process.pid}`;
@@ -247,10 +91,18 @@ async function main() {
     console.log(`#${job.id} 렌더 시작 · ${String(job.options.input).slice(0, 60)}`);
     const started = Date.now();
     try {
-      const r = await render(job.options);
+      const r = await renderShort({
+        input: job.options.input,
+        startSec: job.options.startSec ?? 0,
+        durationSec: job.options.durationSec ?? 30,
+        title: job.options.title || undefined,
+        caption: job.options.caption || undefined,
+        comment: job.options.comment || undefined,
+        videoRatio: job.options.videoRatio || undefined,
+      });
 
-      // Storage 에 올려 배포본에서도 볼 수 있게 한다. 로컬 파일 경로는 웹에서 못 연다
-      const bytes = await fs.readFile(r.path);
+      // Storage 에 올려야 배포본에서도 볼 수 있다. 로컬 파일 경로는 웹에서 못 연다
+      const bytes = await fs.readFile(path.join(OUT_DIR, r.name));
       const { error: upErr } = await db.storage
         .from(BUCKET)
         .upload(r.name, bytes, { contentType: "video/mp4", upsert: true });
@@ -264,14 +116,14 @@ async function main() {
           status: "done",
           result_url: pub.publicUrl,
           result_name: r.name,
-          size_bytes: r.size,
+          size_bytes: r.sizeBytes,
           error: "",
           updated_at: new Date().toISOString(),
         })
         .eq("id", job.id);
 
       console.log(
-        `#${job.id} 완료 · ${Math.round(r.size / 1024)}KB · ${Math.round((Date.now() - started) / 1000)}초`,
+        `#${job.id} 완료 · ${Math.round(r.sizeBytes / 1024)}KB · ${Math.round((Date.now() - started) / 1000)}초`,
       );
     } catch (e) {
       console.error(`#${job.id} 실패:`, e.message);
