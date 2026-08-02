@@ -73,7 +73,7 @@ export default function SettingsPage() {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("gemini-2.5-pro");
+  const [model, setModel] = useState("gemini-flash-latest");
   const [ga4Json, setGa4Json] = useState("");
   const [ga4Property, setGa4Property] = useState("");
   const [adsenseId, setAdsenseId] = useState("");
@@ -486,9 +486,12 @@ export default function SettingsPage() {
           <div className="field">
             <label>모델</label>
             <select value={model} onChange={(e) => setModel(e.target.value)}>
-              <option value="gemini-2.5-pro">gemini-2.5-pro (품질)</option>
-              <option value="gemini-2.5-flash">gemini-2.5-flash (속도·저비용)</option>
-              <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+              {/* 무료 티어에서 실제로 200 이 오는 것만 둔다. pro 계열과 2.0-flash 는
+                  입력 토큰 쿼터가 0 이라 첫 호출부터 429 다 */}
+              <option value="gemini-flash-latest">gemini-flash-latest (권장 · 항상 최신)</option>
+              <option value="gemini-3.6-flash">gemini-3.6-flash</option>
+              <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash (오래된 프로젝트만)</option>
             </select>
           </div>
           <button

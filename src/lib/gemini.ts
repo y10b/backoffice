@@ -53,10 +53,15 @@ export async function geminiKey(): Promise<string | null> {
 let keyCursor = 0;
 
 /** 키를 바꾸면 풀릴 만한 오류인가. 잘못된 키나 프롬프트 문제라면 바꿔도 소용없다 */
-function isQuotaError(status: number, body: string): boolean {
+function shouldTryNextKey(status: number, body: string): boolean {
   if (status === 429) return true;
   // 키가 정지되거나 프로젝트 한도에 걸리면 403 에 quota/exhausted 가 실려 온다
-  return status === 403 && /quota|exhaust|rate.?limit/i.test(body);
+  if (status === 403 && /quota|exhaust|rate.?limit/i.test(body)) return true;
+  /*
+   * 모델 접근 가능 여부는 키가 속한 프로젝트마다 다르다. 오래된 모델은 나중에 만든
+   * 프로젝트에서만 404 가 나므로, 다른 키로 넘기면 실제로 풀린다.
+   */
+  return status === 404 && /no longer available|not found|not supported/i.test(body);
 }
 
 /**
@@ -97,26 +102,38 @@ export async function geminiCall(model: string, body: unknown): Promise<any> {
 
     last = { status: res.status, body: text.slice(0, 500) };
     // 쿼터 문제가 아니면 다른 키로 바꿔도 같은 답이 온다. 남은 키를 낭비하지 않는다
-    if (!isQuotaError(res.status, text)) break;
+    if (!shouldTryNextKey(res.status, text)) break;
   }
 
   throw geminiError(last!.status, last!.body, keys.length);
 }
 
 /**
- * 폴백이 flash 인 이유: 무료 티어에서 gemini-2.5-pro 는 입력 토큰 쿼터에 걸려 429 로 막힌다.
- * 설정 화면이나 GEMINI_MODEL 로 pro 를 지정하면 그대로 존중한다.
+ * 기본 모델.
+ *
+ * 무료 티어에서 pro 계열(gemini-2.5-pro, gemini-pro-latest)은 입력 토큰 쿼터가 0 이라
+ * 첫 호출부터 429 다. 2.0-flash 도 마찬가지다. 그래서 flash 계열이어야 한다.
+ *
+ * 버전을 박지 않고 별칭을 쓰는 이유: 구글은 오래된 모델을 **새로 만든 프로젝트에만**
+ * 막는다. 실제로 키 두 개 중 나중에 만든 쪽에서 gemini-2.5-flash 가
+ * "no longer available to new users" 404 를 냈다. 목록 API 는 여전히 쓸 수 있다고
+ * 답하기 때문에 호출해 보기 전에는 모른다.
+ *
+ * 키를 새로 추가할 때마다 같은 일이 생기므로 별칭으로 둔다. 특정 버전이 필요하면
+ * 설정 화면이나 GEMINI_MODEL 로 지정하면 그대로 존중한다.
  */
+export const DEFAULT_MODEL = "gemini-flash-latest";
+
 export async function geminiModel(): Promise<string> {
   const s = await getSettings(["gemini_model"]);
-  return s.gemini_model || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  return s.gemini_model || process.env.GEMINI_MODEL || DEFAULT_MODEL;
 }
 
 /**
  * 1패스(사실 조사) 전용 모델. 조사는 요약 작업이라 flash 로 충분하고,
  * 2패스까지 합치면 호출이 2배라 비싼 모델로 두면 쿼터가 금방 마른다.
  */
-const RESEARCH_MODEL = "gemini-2.5-flash";
+const RESEARCH_MODEL = DEFAULT_MODEL;
 
 export type GenerateOptions = {
   mainKeyword: string;
@@ -155,6 +172,13 @@ function geminiError(status: number, body: string, triedKeys = 1): Error {
     detail = JSON.parse(body)?.error?.message ?? body;
   } catch {
     /* 원문 유지 */
+  }
+  if (status === 404 && /no longer available/i.test(detail)) {
+    return new Error(
+      `등록된 키 ${triedKeys}개 모두 이 모델을 쓸 수 없습니다 (HTTP 404). ` +
+        `구글이 오래된 모델을 새 프로젝트에 막았습니다. 설정 화면에서 모델을 ` +
+        `${DEFAULT_MODEL} 로 바꾸세요. 원문: ${detail}`,
+    );
   }
   if (status === 429 || status === 403) {
     const tried =
