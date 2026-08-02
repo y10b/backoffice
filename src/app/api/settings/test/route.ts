@@ -36,7 +36,7 @@ export async function POST(req: Request) {
   }
 
   if (target === "search" || target === "datalab") {
-    const creds = openApiCreds();
+    const creds = await openApiCreds();
     if (!creds) {
       return NextResponse.json({
         ok: false,

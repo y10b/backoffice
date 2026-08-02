@@ -72,7 +72,7 @@ export async function POST(req: Request) {
   let warning: string | null = null;
   if (body.save !== false) {
     try {
-      postId = insertDraft({ mainKeyword, subKeyword, draft, auto: true });
+      postId = await insertDraft({ mainKeyword, subKeyword, draft, auto: true });
     } catch (e) {
       // 수십 초 걸려 뽑은 본문을 저장 실패만으로 버리면 손해가 크다.
       // 초안은 그대로 돌려주고 어느 단계가 어긋났는지만 경고로 알린다

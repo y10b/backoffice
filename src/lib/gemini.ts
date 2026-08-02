@@ -1,20 +1,22 @@
-import { getSetting } from "./db";
+import { getSettings } from "./db";
 import { appendFaqHtml, buildJsonLd, markdownToHtml, normalizeFaq } from "./markdown";
 import { applyVisuals, parseVisuals } from "./visuals";
 import type { GeneratedDraft } from "./types";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
-export function geminiKey(): string | null {
-  return getSetting("gemini_api_key") || process.env.GEMINI_API_KEY || null;
+export async function geminiKey(): Promise<string | null> {
+  const s = await getSettings(["gemini_api_key"]);
+  return s.gemini_api_key || process.env.GEMINI_API_KEY || null;
 }
 
 /**
  * 폴백이 flash 인 이유: 무료 티어에서 gemini-2.5-pro 는 입력 토큰 쿼터에 걸려 429 로 막힌다.
  * 설정 화면이나 GEMINI_MODEL 로 pro 를 지정하면 그대로 존중한다.
  */
-export function geminiModel(): string {
-  return getSetting("gemini_model") || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+export async function geminiModel(): Promise<string> {
+  const s = await getSettings(["gemini_model"]);
+  return s.gemini_model || process.env.GEMINI_MODEL || "gemini-2.5-flash";
 }
 
 /**
@@ -280,13 +282,13 @@ export function buildPrompt(o: GenerateOptions, research?: ResearchResult | null
 }
 
 export async function generateDraft(o: GenerateOptions): Promise<GeneratedDraft> {
-  const key = geminiKey();
+  const key = await geminiKey();
   if (!key) {
     throw new Error("Gemini API 키가 없습니다. 설정 화면에서 등록하세요.");
   }
   if (!o.mainKeyword.trim()) throw new Error("메인 키워드가 비어 있습니다.");
 
-  const model = geminiModel();
+  const model = await geminiModel();
 
   // 1패스: 검색 그라운딩으로 최신 사실 수집. 실패하면 null 이 와서 조용히 2패스만 돈다.
   const research = o.grounded === false ? null : await researchLatest(o, key);
@@ -370,7 +372,7 @@ export async function suggestSubKeywords(
   mainKeyword: string,
   context: string[],
 ): Promise<{ subKeyword: string; title: string; reason: string }[]> {
-  const key = geminiKey();
+  const key = await geminiKey();
   if (!key) throw new Error("Gemini API 키가 없습니다. 설정 화면에서 등록하세요.");
 
   const prompt = [
@@ -389,7 +391,7 @@ export async function suggestSubKeywords(
     .join("\n");
 
   const res = await fetch(
-    `${API_BASE}/models/${encodeURIComponent(geminiModel())}:generateContent`,
+    `${API_BASE}/models/${encodeURIComponent(await geminiModel())}:generateContent`,
     {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": key },

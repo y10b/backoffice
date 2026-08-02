@@ -11,7 +11,7 @@ function iso(d: Date): string {
 /** 선택한 키워드(최대 5개)의 검색어 트렌드를 조회한다. */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
-  const creds = openApiCreds();
+  const creds = await openApiCreds();
   if (!creds) {
     return NextResponse.json(
       {

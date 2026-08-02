@@ -97,12 +97,15 @@ export async function researchKeywords(
   const seeds = normalizeHints(o.seeds);
   const sources: SourceStatus[] = [];
 
+  // 자격증명 확인은 DB 왕복이라 루프 밖에서 한 번만 한다
+  const searchAdConfigured = (await searchAdCreds()) !== null;
+
   /* 1. 연관 키워드 + 검색량 */
   const rel = await fetchRelatedKeywords(o.seeds);
   sources.push({
     id: "searchad",
     label: "검색광고 키워드도구",
-    configured: searchAdCreds() !== null,
+    configured: searchAdConfigured,
     ok: rel.ok,
     skipped: false,
     message: rel.error ?? `연관 키워드 ${rel.keywords.length}건`,
@@ -173,7 +176,7 @@ export async function researchKeywords(
   // 입찰가까지 채운 뒤 최종 정렬하고 요청한 개수로 자른다
   keywords = sortKeywords(keywords, o.sort).slice(0, o.limit);
 
-  const creds = openApiCreds();
+  const creds = await openApiCreds();
   const openApiConfigured = creds !== null;
 
   /* 2. 블로그 문서수 → 경쟁률 */

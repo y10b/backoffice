@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSetting, setSetting } from "@/lib/db";
+import { getSettings, setSetting } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,24 +11,36 @@ function mask(v: string): string {
 }
 
 /** DB 값이 우선이고, 없으면 환경변수로 떨어진다. */
-function resolve(key: string, env: string): { value: string; fromEnv: boolean } {
-  const stored = getSetting(key) ?? "";
+function resolve(
+  stored: string | undefined,
+  env: string,
+): { value: string; fromEnv: boolean } {
   if (stored) return { value: stored, fromEnv: false };
   return { value: process.env[env] ?? "", fromEnv: Boolean(process.env[env]) };
 }
 
 export async function GET() {
-  const adKey = resolve("searchad_api_key", "NAVER_SEARCHAD_API_KEY");
-  const adSecret = resolve("searchad_secret_key", "NAVER_SEARCHAD_SECRET_KEY");
-  const adCustomer = resolve("searchad_customer_id", "NAVER_SEARCHAD_CUSTOMER_ID");
-  const clientId = resolve("naver_client_id", "NAVER_CLIENT_ID");
-  const clientSecret = resolve("naver_client_secret", "NAVER_CLIENT_SECRET");
-  const gemini = resolve("gemini_api_key", "GEMINI_API_KEY");
-  const gaKey = resolve("ga4_service_account", "GA4_SERVICE_ACCOUNT");
-  const gaProp = resolve("ga4_property_id", "GA4_PROPERTY_ID");
-  const adsenseId = resolve("adsense_client_id", "ADSENSE_CLIENT_ID");
-  const adsenseSecret = resolve("adsense_client_secret", "ADSENSE_CLIENT_SECRET");
-  const adsenseToken = getSetting("adsense_refresh_token") ?? "";
+  // 설정 화면은 키를 열 개 넘게 읽는다. 하나씩 왕복하면 화면이 눈에 띄게 느려진다
+  const s = await getSettings([
+    "searchad_api_key", "searchad_secret_key", "searchad_customer_id",
+    "naver_client_id", "naver_client_secret",
+    "gemini_api_key", "gemini_model",
+    "ga4_service_account", "ga4_property_id",
+    "adsense_client_id", "adsense_client_secret",
+    "adsense_refresh_token", "adsense_account",
+  ]);
+
+  const adKey = resolve(s.searchad_api_key, "NAVER_SEARCHAD_API_KEY");
+  const adSecret = resolve(s.searchad_secret_key, "NAVER_SEARCHAD_SECRET_KEY");
+  const adCustomer = resolve(s.searchad_customer_id, "NAVER_SEARCHAD_CUSTOMER_ID");
+  const clientId = resolve(s.naver_client_id, "NAVER_CLIENT_ID");
+  const clientSecret = resolve(s.naver_client_secret, "NAVER_CLIENT_SECRET");
+  const gemini = resolve(s.gemini_api_key, "GEMINI_API_KEY");
+  const gaKey = resolve(s.ga4_service_account, "GA4_SERVICE_ACCOUNT");
+  const gaProp = resolve(s.ga4_property_id, "GA4_PROPERTY_ID");
+  const adsenseId = resolve(s.adsense_client_id, "ADSENSE_CLIENT_ID");
+  const adsenseSecret = resolve(s.adsense_client_secret, "ADSENSE_CLIENT_SECRET");
+  const adsenseToken = s.adsense_refresh_token ?? "";
 
   // 서비스 계정 JSON 은 통째로 저장되므로, 화면에는 어느 계정인지만 보여준다
   let gaEmail = "";
@@ -51,7 +63,7 @@ export async function GET() {
       fromEnv: adsenseId.fromEnv,
       clientIdPreview: mask(adsenseId.value),
       connected: Boolean(adsenseToken),
-      account: getSetting("adsense_account") ?? "",
+      account: s.adsense_account ?? "",
     },
     searchAd: {
       configured: Boolean(adKey.value && adSecret.value && adCustomer.value),
@@ -70,7 +82,7 @@ export async function GET() {
       configured: Boolean(gemini.value),
       fromEnv: gemini.fromEnv,
       apiKeyPreview: mask(gemini.value),
-      model: getSetting("gemini_model") || process.env.GEMINI_MODEL || "gemini-2.5-pro",
+      model: s.gemini_model || process.env.GEMINI_MODEL || "gemini-2.5-flash",
     },
   });
 }
@@ -95,7 +107,7 @@ export async function POST(req: Request) {
 
   for (const [field, key] of Object.entries(TEXT_FIELDS)) {
     const v = body[field];
-    if (typeof v === "string" && v.trim()) setSetting(key, v.trim());
+    if (typeof v === "string" && v.trim()) await setSetting(key, v.trim());
   }
 
   if (
@@ -107,24 +119,24 @@ export async function POST(req: Request) {
   }
 
   if (body.clearSearchAd) {
-    setSetting("searchad_api_key", "");
-    setSetting("searchad_secret_key", "");
-    setSetting("searchad_customer_id", "");
+    await setSetting("searchad_api_key", "");
+    await setSetting("searchad_secret_key", "");
+    await setSetting("searchad_customer_id", "");
   }
   if (body.clearOpenApi) {
-    setSetting("naver_client_id", "");
-    setSetting("naver_client_secret", "");
+    await setSetting("naver_client_id", "");
+    await setSetting("naver_client_secret", "");
   }
   if (body.clearGa4) {
-    setSetting("ga4_service_account", "");
-    setSetting("ga4_property_id", "");
+    await setSetting("ga4_service_account", "");
+    await setSetting("ga4_property_id", "");
   }
   if (body.clearAdsense) {
-    setSetting("adsense_client_id", "");
-    setSetting("adsense_client_secret", "");
+    await setSetting("adsense_client_id", "");
+    await setSetting("adsense_client_secret", "");
     // 토큰과 계정 캐시까지 지워야 다음 연결이 깨끗하게 시작된다
-    setSetting("adsense_refresh_token", "");
-    setSetting("adsense_account", "");
+    await setSetting("adsense_refresh_token", "");
+    await setSetting("adsense_account", "");
   }
 
   // 서비스 계정 JSON 은 형식이 틀리면 조회 시점에야 실패해서, 저장할 때 미리 잡아준다

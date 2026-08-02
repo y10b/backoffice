@@ -39,7 +39,7 @@ export async function GET(req: Request) {
   const state = params.get("state");
 
   // state 는 성공하든 실패하든 한 번 쓰고 버린다(재사용 차단)
-  const savedState = getSetting(KEY_STATE);
+  const savedState = await getSetting(KEY_STATE);
   setSetting(KEY_STATE, "");
 
   if (denied) {
@@ -59,7 +59,7 @@ export async function GET(req: Request) {
     ]);
   }
 
-  const creds = adsenseCreds();
+  const creds = await adsenseCreds();
   if (!creds) {
     return fail("OAuth 클라이언트가 없습니다", [
       "연결 도중 클라이언트 ID/시크릿이 지워졌습니다. 설정 화면에서 다시 저장한 뒤 시도하세요.",

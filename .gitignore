@@ -5,3 +5,9 @@ node_modules/
 data/
 *.tsbuildinfo
 next-env.d.ts
+
+# Supabase CLI 로컬 상태 (프로젝트 링크 정보)
+.supabase/
+supabase/.temp/
+# Vercel 프로젝트 링크
+.vercel/

@@ -25,7 +25,7 @@ function html(body: string, status: number): NextResponse {
  * 애드센스 Management API 는 서비스 계정을 못 쓰므로 사용자 동의를 반드시 거쳐야 한다.
  */
 export async function GET() {
-  const creds = adsenseCreds();
+  const creds = await adsenseCreds();
   if (!creds) {
     // 사람이 브라우저로 여는 화면이라 JSON 대신 안내를 보여준다
     return html(
@@ -44,7 +44,7 @@ export async function GET() {
 
   // CSRF 방지용 난수. 콜백에서 이 값과 대조해 남이 흘린 code 를 삼키지 않게 한다.
   const state = newState();
-  setSetting(KEY_STATE, stateRecord(state));
+  await setSetting(KEY_STATE, stateRecord(state));
 
   return NextResponse.redirect(buildConsentUrl(creds.clientId, state), 302);
 }

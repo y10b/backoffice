@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db, nowIso } from "@/lib/db";
+import { deletePost, getPost, updatePost } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,11 +8,21 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(_req: Request, { params }: Ctx) {
   const { id } = await params;
-  const row = db().prepare("SELECT * FROM posts WHERE id = ?").get(Number(id));
-  if (!row) return NextResponse.json({ ok: false, error: "없는 글입니다." }, { status: 404 });
-  return NextResponse.json({ ok: true, post: row });
+  try {
+    const post = await getPost(Number(id));
+    if (!post) {
+      return NextResponse.json({ ok: false, error: "없는 글입니다." }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true, post });
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: (e as Error).message },
+      { status: 500 },
+    );
+  }
 }
 
+/** 화이트리스트 밖의 필드는 무시한다. 요청 본문이 그대로 컬럼이 되면 안 된다. */
 const EDITABLE = [
   "main_keyword",
   "sub_keyword",
@@ -21,44 +31,55 @@ const EDITABLE = [
   "body_markdown",
   "meta_desc",
   "status",
-  "posted_naver",
-  "posted_tistory",
 ] as const;
+
+/** Postgres 에서는 boolean 컬럼이라 0/1 이 아니라 true/false 로 넣어야 한다. */
+const BOOLEAN_FIELDS = ["posted_naver", "posted_tistory"] as const;
 
 export async function PATCH(req: Request, { params }: Ctx) {
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
 
-  const sets: string[] = [];
-  const values: (string | number)[] = [];
-
+  const patch: Record<string, unknown> = {};
   for (const field of EDITABLE) {
-    if (!(field in body)) continue;
-    sets.push(`${field} = ?`);
-    const v = body[field];
-    values.push(typeof v === "boolean" ? (v ? 1 : 0) : typeof v === "number" ? v : String(v));
+    if (field in body) patch[field] = String(body[field] ?? "");
+  }
+  for (const field of BOOLEAN_FIELDS) {
+    if (field in body) patch[field] = Boolean(body[field]);
+  }
+  // jsonb 컬럼이라 문자열로 감싸지 않고 배열 그대로 넘긴다
+  if ("tags" in body) patch.tags = Array.isArray(body.tags) ? body.tags : [];
+
+  if (!Object.keys(patch).length) {
+    return NextResponse.json(
+      { ok: false, error: "변경할 필드가 없습니다." },
+      { status: 400 },
+    );
   }
 
-  if ("tags" in body) {
-    sets.push("tags = ?");
-    values.push(JSON.stringify(Array.isArray(body.tags) ? body.tags : []));
+  try {
+    const post = await updatePost(Number(id), patch);
+    if (!post) {
+      return NextResponse.json({ ok: false, error: "없는 글입니다." }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true, post });
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: (e as Error).message },
+      { status: 500 },
+    );
   }
-
-  if (!sets.length) {
-    return NextResponse.json({ ok: false, error: "변경할 필드가 없습니다." }, { status: 400 });
-  }
-
-  sets.push("updated_at = ?");
-  values.push(nowIso());
-  values.push(Number(id));
-
-  db().prepare(`UPDATE posts SET ${sets.join(", ")} WHERE id = ?`).run(...values);
-  const row = db().prepare("SELECT * FROM posts WHERE id = ?").get(Number(id));
-  return NextResponse.json({ ok: true, post: row });
 }
 
 export async function DELETE(_req: Request, { params }: Ctx) {
   const { id } = await params;
-  db().prepare("DELETE FROM posts WHERE id = ?").run(Number(id));
-  return NextResponse.json({ ok: true });
+  try {
+    await deletePost(Number(id));
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: (e as Error).message },
+      { status: 500 },
+    );
+  }
 }

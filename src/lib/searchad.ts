@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getSetting } from "./db";
+import { getSettings } from "./db";
 
 /**
  * 네이버 검색광고 API (키워드도구).
@@ -16,13 +16,17 @@ export type SearchAdCreds = {
   customerId: string;
 };
 
-export function searchAdCreds(): SearchAdCreds | null {
-  const apiKey =
-    getSetting("searchad_api_key") || process.env.NAVER_SEARCHAD_API_KEY || "";
-  const secretKey =
-    getSetting("searchad_secret_key") || process.env.NAVER_SEARCHAD_SECRET_KEY || "";
+/** 세 키를 한 번에 읽는다. 하나씩 왕복하면 조회가 그만큼 느려진다 */
+export async function searchAdCreds(): Promise<SearchAdCreds | null> {
+  const s = await getSettings([
+    "searchad_api_key",
+    "searchad_secret_key",
+    "searchad_customer_id",
+  ]);
+  const apiKey = s.searchad_api_key || process.env.NAVER_SEARCHAD_API_KEY || "";
+  const secretKey = s.searchad_secret_key || process.env.NAVER_SEARCHAD_SECRET_KEY || "";
   const customerId =
-    getSetting("searchad_customer_id") || process.env.NAVER_SEARCHAD_CUSTOMER_ID || "";
+    s.searchad_customer_id || process.env.NAVER_SEARCHAD_CUSTOMER_ID || "";
   if (!apiKey || !secretKey || !customerId) return null;
   return { apiKey, secretKey, customerId };
 }
@@ -73,7 +77,7 @@ export async function fetchBids(
   device: "PC" | "MOBILE" = "MOBILE",
 ): Promise<{ bids: Map<string, number>; error?: string }> {
   const bids = new Map<string, number>();
-  const creds = searchAdCreds();
+  const creds = await searchAdCreds();
   if (!creds || !keywords.length) return { bids };
 
   const CHUNK = 50;
@@ -211,7 +215,7 @@ export function parseRelKeywords(payload: unknown): RelKeyword[] {
 
 /** 힌트 키워드로 연관 키워드 + 월간 검색수를 가져온다. */
 export async function fetchRelatedKeywords(seeds: string[]): Promise<SearchAdResult> {
-  const creds = searchAdCreds();
+  const creds = await searchAdCreds();
   const hints = normalizeHints(seeds);
   const url = new URL(KEYWORDSTOOL_PATH, SEARCHAD_ORIGIN);
   url.searchParams.set("hintKeywords", hints.join(","));

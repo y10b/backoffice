@@ -1,4 +1,4 @@
-import { getSetting } from "./db";
+import { getSettings } from "./db";
 
 /**
  * 네이버 개발자센터 오픈 API (developers.naver.com).
@@ -8,10 +8,10 @@ export const OPENAPI_ORIGIN = "https://openapi.naver.com";
 
 export type OpenApiCreds = { clientId: string; clientSecret: string };
 
-export function openApiCreds(): OpenApiCreds | null {
-  const clientId = getSetting("naver_client_id") || process.env.NAVER_CLIENT_ID || "";
-  const clientSecret =
-    getSetting("naver_client_secret") || process.env.NAVER_CLIENT_SECRET || "";
+export async function openApiCreds(): Promise<OpenApiCreds | null> {
+  const s = await getSettings(["naver_client_id", "naver_client_secret"]);
+  const clientId = s.naver_client_id || process.env.NAVER_CLIENT_ID || "";
+  const clientSecret = s.naver_client_secret || process.env.NAVER_CLIENT_SECRET || "";
   if (!clientId || !clientSecret) return null;
   return { clientId, clientSecret };
 }

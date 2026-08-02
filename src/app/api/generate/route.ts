@@ -26,7 +26,7 @@ export async function POST(req: Request) {
 
     let postId: number | null = null;
     if (body.save !== false) {
-      postId = insertDraft({ mainKeyword, subKeyword, draft });
+      postId = await insertDraft({ mainKeyword, subKeyword, draft });
     }
 
     return NextResponse.json({ ok: true, draft, postId });

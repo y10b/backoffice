@@ -1,4 +1,4 @@
-import { getSetting } from "./db";
+import { getSettings } from "./db";
 import {
   GA4_READONLY_SCOPE,
   getAccessToken,
@@ -71,9 +71,10 @@ export function clampDays(v: unknown): number {
  * 자격증명이 없는 것은 오류가 아니라 "아직 설정을 안 한 상태"다. 다른 라우트와 마찬가지로
  * 던지지 않고 안내 문구를 돌려줘서 대시보드가 500 대신 설명을 띄우게 한다.
  */
-export function ga4Creds(): { creds: Ga4Creds } | { error: string } {
-  const raw = getSetting("ga4_service_account")?.trim() || "";
-  const propertyId = (getSetting("ga4_property_id") || "").trim();
+export async function ga4Creds(): Promise<{ creds: Ga4Creds } | { error: string }> {
+  const s = await getSettings(["ga4_service_account", "ga4_property_id"]);
+  const raw = (s.ga4_service_account || "").trim();
+  const propertyId = (s.ga4_property_id || "").trim();
 
   if (!raw) {
     return {
@@ -283,7 +284,7 @@ function emptyReport(days: number, error?: string): Ga4Report {
 export async function fetchGa4Report(daysInput: unknown): Promise<Ga4Report> {
   const days = clampDays(daysInput);
 
-  const resolved = ga4Creds();
+  const resolved = await ga4Creds();
   if ("error" in resolved) return emptyReport(days, resolved.error);
   const { creds } = resolved;
 

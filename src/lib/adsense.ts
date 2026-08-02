@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { getSetting, setSetting } from "./db";
+import { getSetting, getSettings, setSetting } from "./db";
+import { oauthRedirectUri } from "./origin";
 
 /**
  * 구글 애드센스 Management API v2.
@@ -15,9 +16,10 @@ export const SCOPE = "https://www.googleapis.com/auth/adsense.readonly";
 
 /**
  * OAuth 클라이언트에 등록한 값과 한 글자라도 다르면 redirect_uri_mismatch 가 난다.
- * 요청 Host 에서 유추하면 127.0.0.1 · 다른 포트로 새는 순간 깨지므로 상수로 못박는다.
+ * 요청 Host 에서 유추하면 127.0.0.1 · 다른 포트로 새는 순간 깨지므로 환경변수로 고정한다.
+ * APP_ORIGIN 을 바꾸면 GCP 콘솔의 승인된 리디렉션 URI 도 같이 고쳐야 한다.
  */
-export const REDIRECT_URI = "http://localhost:3939/api/oauth/callback";
+export const REDIRECT_URI = oauthRedirectUri();
 
 /** 설정 테이블 키. 오타로 조용히 어긋나는 걸 막으려고 한곳에 모은다. */
 export const KEY_CLIENT_ID = "adsense_client_id";
@@ -33,10 +35,10 @@ export const KEY_STATE = "adsense_oauth_state";
 export type AdsenseCreds = { clientId: string; clientSecret: string };
 
 /** DB 값이 우선이고, 없으면 환경변수로 떨어진다(다른 API 들과 같은 규칙). */
-export function adsenseCreds(): AdsenseCreds | null {
-  const clientId = getSetting(KEY_CLIENT_ID) || process.env.ADSENSE_CLIENT_ID || "";
-  const clientSecret =
-    getSetting(KEY_CLIENT_SECRET) || process.env.ADSENSE_CLIENT_SECRET || "";
+export async function adsenseCreds(): Promise<AdsenseCreds | null> {
+  const s = await getSettings([KEY_CLIENT_ID, KEY_CLIENT_SECRET]);
+  const clientId = s[KEY_CLIENT_ID] || process.env.ADSENSE_CLIENT_ID || "";
+  const clientSecret = s[KEY_CLIENT_SECRET] || process.env.ADSENSE_CLIENT_SECRET || "";
   if (!clientId || !clientSecret) return null;
   return { clientId, clientSecret };
 }
@@ -46,8 +48,8 @@ export function adsenseCreds(): AdsenseCreds | null {
  * 폐기된 토큰을 지워 재연결로 유도하는 흐름이 있는데, 환경변수는 지울 수가 없어서
  * "지웠는데도 계속 같은 오류" 라는 막다른 길이 생긴다.
  */
-export function storedRefreshToken(): string {
-  return getSetting(KEY_REFRESH_TOKEN) || "";
+export async function storedRefreshToken(): Promise<string> {
+  return (await getSetting(KEY_REFRESH_TOKEN)) || "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -283,7 +285,7 @@ export type TokenResult = { ok: true; token: string } | { ok: false; error: stri
  * 만료 60초 전까지는 메모리 캐시를 그대로 쓴다(호출 도중 만료되는 경계를 피하려는 여유분).
  */
 export async function getAccessToken(): Promise<TokenResult> {
-  const creds = adsenseCreds();
+  const creds = await adsenseCreds();
   if (!creds) {
     return {
       ok: false,
@@ -293,7 +295,7 @@ export async function getAccessToken(): Promise<TokenResult> {
     };
   }
 
-  const refreshToken = storedRefreshToken();
+  const refreshToken = await storedRefreshToken();
   if (!refreshToken) {
     return {
       ok: false,
@@ -316,7 +318,7 @@ export async function getAccessToken(): Promise<TokenResult> {
   if (!r.ok) {
     if (r.invalidGrant) {
       // 폐기된 토큰을 계속 쥐고 있으면 매번 같은 실패를 반복한다. 지워서 재연결로 유도한다.
-      setSetting(KEY_REFRESH_TOKEN, "");
+      await setSetting(KEY_REFRESH_TOKEN, "");
       cachedToken = null;
     }
     return { ok: false, error: r.error, connected: !r.invalidGrant };
@@ -362,7 +364,7 @@ async function apiGet(url: string, token: string): Promise<ApiResult> {
  * 리포트마다 다시 조회할 이유가 없으므로 한 번 알아내면 설정에 캐시한다.
  */
 export async function resolveAccount(token: string): Promise<{ ok: true; account: string } | { ok: false; error: string }> {
-  const cached = getSetting(KEY_ACCOUNT) || "";
+  const cached = (await getSetting(KEY_ACCOUNT)) || "";
   if (cached) return { ok: true, account: cached };
 
   const r = await apiGet(`${ADSENSE_ORIGIN}/v2/accounts`, token);
@@ -377,7 +379,7 @@ export async function resolveAccount(token: string): Promise<{ ok: true; account
         "이 구글 계정에 연결된 애드센스 계정이 없습니다. 애드센스에 로그인한 그 계정으로 동의했는지 확인하세요.",
     };
   }
-  setSetting(KEY_ACCOUNT, name);
+  await setSetting(KEY_ACCOUNT, name);
   return { ok: true, account: name };
 }
 

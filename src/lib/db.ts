@@ -1,90 +1,86 @@
-import { DatabaseSync } from "node:sqlite";
-import fs from "node:fs";
-import path from "node:path";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "backoffice.db");
+/**
+ * 저장소. 원래는 로컬 파일 SQLite(`node:sqlite`)였는데 Supabase Postgres 로 옮겼다.
+ *
+ * Vercel 은 서버리스라 파일시스템이 읽기 전용이고 인스턴스마다 초기화된다. SQLite 파일에
+ * 쓰기가 안 되고, 써지더라도 다음 요청은 다른 인스턴스로 가서 사라진다.
+ *
+ * 직접 Postgres 연결 대신 PostgREST(supabase-js)를 쓴다. 서버리스에서 커넥션 풀이
+ * 금세 고갈되는 문제를 HTTP 가 통째로 피해 간다. 우리 질의는 전부 단순 CRUD 라
+ * 쿼리 빌더로 충분하다.
+ *
+ * SQLite 는 동기였지만 여기는 전부 비동기다. 그래서 이 모듈을 쓰는 쪽도 async 가 된다.
+ */
 
-let _db: DatabaseSync | null = null;
+let _client: SupabaseClient | null = null;
 
-export function db(): DatabaseSync {
-  if (_db) return _db;
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const d = new DatabaseSync(DB_PATH);
-  d.exec("PRAGMA journal_mode = WAL;");
+export function supabase(): SupabaseClient {
+  if (_client) return _client;
 
-  // 크리에이터 어드바이저 시절 스냅샷은 컬럼 구성이 달라 그냥 버린다.
-  // 조회 결과 캐시일 뿐이라 보존할 값이 없다.
-  const legacy = d
-    .prepare("PRAGMA table_info(keyword_snapshots)")
-    .all() as { name: string }[];
-  if (legacy.length && !legacy.some((c) => c.name === "seeds")) {
-    d.exec("DROP TABLE keyword_snapshots;");
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error(
+      "SUPABASE_URL 과 SUPABASE_SERVICE_ROLE_KEY 가 필요합니다. .env.local 또는 배포 환경변수를 확인하세요.",
+    );
   }
 
-  d.exec(`
-    CREATE TABLE IF NOT EXISTS settings (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
+  _client = createClient(url, key, {
+    // 서버 전용이라 세션을 붙들 이유가 없다. 서버리스에서 불필요한 상태는 버그의 근원이다
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return _client;
+}
 
-    CREATE TABLE IF NOT EXISTS keyword_snapshots (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      fetched_at TEXT NOT NULL,
-      seeds      TEXT NOT NULL DEFAULT '',
-      count      INTEGER NOT NULL DEFAULT 0,
-      payload    TEXT NOT NULL
-    );
+export function nowIso(): string {
+  return new Date().toISOString();
+}
 
-    CREATE TABLE IF NOT EXISTS posts (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      main_keyword  TEXT NOT NULL,
-      sub_keyword   TEXT NOT NULL DEFAULT '',
-      title         TEXT NOT NULL DEFAULT '',
-      body_html     TEXT NOT NULL DEFAULT '',
-      body_markdown TEXT NOT NULL DEFAULT '',
-      tags          TEXT NOT NULL DEFAULT '[]',
-      meta_desc     TEXT NOT NULL DEFAULT '',
-      status        TEXT NOT NULL DEFAULT 'draft',
-      posted_naver  INTEGER NOT NULL DEFAULT 0,
-      posted_tistory INTEGER NOT NULL DEFAULT 0,
-      created_at    TEXT NOT NULL,
-      updated_at    TEXT NOT NULL
-    );
+/* ------------------------------------------------------------------ *
+ * settings — API 키·토큰 보관
+ * ------------------------------------------------------------------ */
 
-    CREATE INDEX IF NOT EXISTS idx_posts_updated ON posts(updated_at DESC);
-  `);
+export async function getSetting(key: string): Promise<string | null> {
+  const { data, error } = await supabase()
+    .from("settings")
+    .select("value")
+    .eq("key", key)
+    .maybeSingle();
+  if (error) throw new Error(`설정 조회 실패(${key}): ${error.message}`);
+  return data?.value ?? null;
+}
 
-  /*
-   * SEO·그라운딩 결과를 담는 컬럼은 나중에 붙었다. 이미 글이 쌓인 DB 도 있으므로
-   * 테이블을 다시 만들지 않고 없는 컬럼만 덧붙인다.
-   */
-  const postCols = new Set(
-    (d.prepare("PRAGMA table_info(posts)").all() as { name: string }[]).map(
-      (c) => c.name,
-    ),
-  );
-  const added: [string, string][] = [
-    ["faq", "TEXT NOT NULL DEFAULT '[]'"],
-    ["json_ld", "TEXT NOT NULL DEFAULT ''"],
-    ["sources", "TEXT NOT NULL DEFAULT '[]'"],
-    ["visuals", "TEXT NOT NULL DEFAULT '[]'"],
-    // 자동 생성분과 손으로 다듬은 글의 성과를 나중에 갈라 보기 위한 표시
-    ["auto_generated", "INTEGER NOT NULL DEFAULT 0"],
-  ];
-  for (const [name, decl] of added) {
-    if (!postCols.has(name)) d.exec(`ALTER TABLE posts ADD COLUMN ${name} ${decl};`);
-  }
-
-  _db = d;
-  return d;
+export async function setSetting(key: string, value: string): Promise<void> {
+  const { error } = await supabase()
+    .from("settings")
+    .upsert({ key, value }, { onConflict: "key" });
+  if (error) throw new Error(`설정 저장 실패(${key}): ${error.message}`);
 }
 
 /**
- * 초안 저장. `/api/generate` 와 `/api/autowrite` 가 같은 INSERT 를 각자 들고 있으면
- * 컬럼이 늘 때 한쪽만 고쳐져 조용히 어긋난다. 저장 경로를 여기 하나로 모은다.
+ * 여러 키를 한 번에 읽는다.
+ *
+ * 자격증명은 보통 2~3개를 같이 본다(`searchAdCreds` 는 3개). 하나씩 await 하면
+ * 왕복이 그만큼 늘어 화면이 눈에 띄게 느려진다.
  */
-export function insertDraft(input: {
+export async function getSettings(keys: string[]): Promise<Record<string, string>> {
+  if (!keys.length) return {};
+  const { data, error } = await supabase()
+    .from("settings")
+    .select("key, value")
+    .in("key", keys);
+  if (error) throw new Error(`설정 조회 실패: ${error.message}`);
+  const out: Record<string, string> = {};
+  for (const row of data ?? []) out[row.key as string] = row.value as string;
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * posts — 초안
+ * ------------------------------------------------------------------ */
+
+export type DraftInput = {
   mainKeyword: string;
   subKeyword: string;
   draft: {
@@ -99,50 +95,109 @@ export function insertDraft(input: {
     visuals?: { type: string; title: string; html: string }[];
   };
   auto?: boolean;
-}): number {
-  const ts = nowIso();
+};
+
+/**
+ * 초안 저장. `/api/generate` 와 `/api/autowrite` 가 같은 INSERT 를 각자 들고 있으면
+ * 컬럼이 늘 때 한쪽만 고쳐져 조용히 어긋난다. 저장 경로를 여기 하나로 모은다.
+ */
+export async function insertDraft(input: DraftInput): Promise<number> {
   const { draft } = input;
-  const res = db()
-    .prepare(
-      `INSERT INTO posts
-         (main_keyword, sub_keyword, title, body_html, body_markdown, tags, meta_desc,
-          faq, json_ld, sources, visuals, auto_generated, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+  const { data, error } = await supabase()
+    .from("posts")
+    .insert({
+      main_keyword: input.mainKeyword,
+      sub_keyword: input.subKeyword,
+      title: draft.title,
+      body_html: draft.bodyHtml,
+      body_markdown: draft.bodyMarkdown,
+      tags: draft.tags ?? [],
+      meta_desc: draft.metaDescription,
+      faq: draft.faq ?? [],
+      json_ld: draft.jsonLd ?? "",
+      sources: draft.sources ?? [],
+      visuals: draft.visuals ?? [],
+      auto_generated: Boolean(input.auto),
+      status: "draft",
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(`초안 저장 실패: ${error.message}`);
+  return Number(data.id);
+}
+
+/** 글 목록. 본문은 빼서 목록 응답이 무거워지지 않게 한다 */
+export async function listPosts(limit = 200) {
+  const { data, error } = await supabase()
+    .from("posts")
+    .select(
+      "id, main_keyword, sub_keyword, title, meta_desc, tags, status, posted_naver, posted_tistory, created_at, updated_at",
     )
-    .run(
-      input.mainKeyword,
-      input.subKeyword,
-      draft.title,
-      draft.bodyHtml,
-      draft.bodyMarkdown,
-      JSON.stringify(draft.tags ?? []),
-      draft.metaDescription,
-      JSON.stringify(draft.faq ?? []),
-      draft.jsonLd ?? "",
-      JSON.stringify(draft.sources ?? []),
-      JSON.stringify(draft.visuals ?? []),
-      input.auto ? 1 : 0,
-      ts,
-      ts,
-    );
-  return Number(res.lastInsertRowid);
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`글 목록 조회 실패: ${error.message}`);
+  return data ?? [];
 }
 
-export function getSetting(key: string): string | null {
-  const row = db().prepare("SELECT value FROM settings WHERE key = ?").get(key) as
-    | { value: string }
-    | undefined;
-  return row?.value ?? null;
+export async function getPost(id: number) {
+  const { data, error } = await supabase()
+    .from("posts")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`글 조회 실패: ${error.message}`);
+  return data;
 }
 
-export function setSetting(key: string, value: string): void {
-  db()
-    .prepare(
-      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    )
-    .run(key, value);
+export async function updatePost(id: number, patch: Record<string, unknown>) {
+  const { data, error } = await supabase()
+    .from("posts")
+    .update({ ...patch, updated_at: nowIso() })
+    .eq("id", id)
+    .select("*")
+    .maybeSingle();
+  if (error) throw new Error(`글 수정 실패: ${error.message}`);
+  return data;
 }
 
-export function nowIso(): string {
-  return new Date().toISOString();
+export async function deletePost(id: number): Promise<void> {
+  const { error } = await supabase().from("posts").delete().eq("id", id);
+  if (error) throw new Error(`글 삭제 실패: ${error.message}`);
+}
+
+/* ------------------------------------------------------------------ *
+ * keyword_snapshots — 조회 결과 캐시
+ * ------------------------------------------------------------------ */
+
+export async function insertSnapshot(
+  seeds: string,
+  count: number,
+  payload: unknown,
+): Promise<void> {
+  const { error } = await supabase()
+    .from("keyword_snapshots")
+    .insert({ seeds, count, payload });
+  // 스냅샷은 캐시라 실패해도 조회 결과는 살려야 한다. 던지지 않고 흘린다
+  if (error) console.warn("스냅샷 저장 실패:", error.message);
+}
+
+export async function listSnapshots(limit = 30) {
+  const { data, error } = await supabase()
+    .from("keyword_snapshots")
+    .select("id, fetched_at, seeds, count")
+    .order("id", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`스냅샷 목록 조회 실패: ${error.message}`);
+  return data ?? [];
+}
+
+export async function latestSnapshot() {
+  const { data, error } = await supabase()
+    .from("keyword_snapshots")
+    .select("seeds, fetched_at, payload")
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`최근 스냅샷 조회 실패: ${error.message}`);
+  return data;
 }

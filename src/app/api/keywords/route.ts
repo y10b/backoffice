@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db, nowIso } from "@/lib/db";
+import { insertSnapshot, latestSnapshot, listSnapshots } from "@/lib/db";
 import { researchKeywords, type SortKey } from "@/lib/research";
 
 export const runtime = "nodejs";
@@ -56,16 +56,8 @@ export async function POST(req: Request) {
   });
 
   if (result.ok && result.keywords.length) {
-    db()
-      .prepare(
-        "INSERT INTO keyword_snapshots (fetched_at, seeds, count, payload) VALUES (?, ?, ?, ?)",
-      )
-      .run(
-        nowIso(),
-        result.seeds.join(", "),
-        result.keywords.length,
-        JSON.stringify(result.keywords),
-      );
+    // jsonb 컬럼이라 문자열로 감싸지 않고 배열 그대로 넣는다
+    await insertSnapshot(result.seeds.join(", "), result.keywords.length, result.keywords);
   }
 
   return NextResponse.json(result);
@@ -78,31 +70,19 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   const wantLatest = new URL(req.url).searchParams.get("latest") === "1";
 
-  const rows = db()
-    .prepare(
-      "SELECT id, fetched_at, seeds, count FROM keyword_snapshots ORDER BY id DESC LIMIT 30",
-    )
-    .all();
+  const rows = await listSnapshots();
 
   if (!wantLatest || !rows.length) return NextResponse.json({ snapshots: rows });
 
-  const row = db()
-    .prepare("SELECT seeds, fetched_at, payload FROM keyword_snapshots ORDER BY id DESC LIMIT 1")
-    .get() as { seeds: string; fetched_at: string; payload: string } | undefined;
-
-  let keywords: unknown[] = [];
-  try {
-    const parsed = JSON.parse(row?.payload ?? "[]");
-    if (Array.isArray(parsed)) keywords = parsed;
-  } catch {
-    /* 저장이 깨졌으면 빈 표로 시작하고 목록만 준다 */
-  }
+  const row = await latestSnapshot();
+  // payload 는 jsonb 라 이미 배열로 돌아온다. 모양이 다르면 빈 표로 시작한다
+  const keywords: unknown[] = Array.isArray(row?.payload) ? row.payload : [];
 
   return NextResponse.json({
     snapshots: rows,
     latest: row
       ? {
-          seeds: row.seeds.split(",").map((s) => s.trim()).filter(Boolean),
+          seeds: String(row.seeds).split(",").map((s: string) => s.trim()).filter(Boolean),
           fetchedAt: row.fetched_at,
           keywords,
         }
