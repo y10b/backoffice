@@ -1,11 +1,21 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { markdownToHtml, countChars } from "@/lib/markdown";
 import { copyRichHtml, copyText } from "@/lib/clipboard";
 
 type Suggestion = { subKeyword: string; title: string; reason: string };
+
+/** 자동 작성 진행 표시용. 0=대기, 1=서브 키워드 제안, 2=본문 생성, 3=완료 */
+type AutoPhase = 0 | 1 | 2 | 3;
+
+/**
+ * 자동 작성은 한 번의 요청 안에서 두 단계가 이어 돌아 서버 진행률을 받아올 수 없다.
+ * 그래서 첫 단계가 대략 끝날 시점을 경과 시간으로 잡아 라벨만 넘긴다.
+ * (제안 호출은 보통 10~20초, 본문 생성이 나머지를 먹는다)
+ */
+const SUGGEST_ESTIMATE_SEC = 18;
 
 function occurrences(haystack: string, needle: string): number {
   if (!needle.trim()) return 0;
@@ -26,19 +36,37 @@ function WritePageInner() {
   const [suggesting, setSuggesting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
   const [notice, setNotice] = useState("");
+
+  const [autoRunning, setAutoRunning] = useState(false);
+  const [autoPhase, setAutoPhase] = useState<AutoPhase>(0);
+  const [autoElapsed, setAutoElapsed] = useState(0);
+  /** ?auto=1 로 들어왔을 때 딱 한 번만 자동 실행 (개발 모드의 이펙트 2회 실행 방어) */
+  const autoStarted = useRef(false);
 
   const [postId, setPostId] = useState<number | null>(null);
   const [title, setTitle] = useState("");
   const [metaDesc, setMetaDesc] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [markdown, setMarkdown] = useState("");
+  const [jsonLd, setJsonLd] = useState("");
+  const [sources, setSources] = useState<{ title: string; uri: string }[]>([]);
 
   useEffect(() => {
     const main = params.get("main");
     if (main) setMainKeyword(main);
     const ctx = params.get("context");
-    if (ctx) setContext(ctx.split("|").filter(Boolean));
+    const ctxList = ctx ? ctx.split("|").filter(Boolean) : [];
+    if (ctx) setContext(ctxList);
+
+    // 키워드 탐색에서 "자동 작성"으로 넘어온 경우 도착 즉시 파이프라인을 돌린다.
+    // 상태 반영을 기다리면 첫 렌더에서는 아직 비어 있으므로 쿼리에서 읽은 값을 그대로 넘긴다.
+    if (main && params.get("auto") === "1" && !autoStarted.current) {
+      autoStarted.current = true;
+      runAuto(main, ctxList);
+    }
+
     const id = params.get("post");
     if (id) {
       fetch(`/api/posts/${id}`)
@@ -92,27 +120,112 @@ function WritePageInner() {
     }
   }
 
-  async function generate() {
+  /** 후보 표에서 곧바로 재생성할 때는 setState 반영을 기다리지 않게 서브 키워드를 인자로 받는다 */
+  async function generate(sub?: string) {
+    const useSub = sub ?? subKeyword;
     setError("");
     setGenerating(true);
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mainKeyword, subKeyword, tone, targetChars, outline }),
+        body: JSON.stringify({
+          mainKeyword,
+          subKeyword: useSub,
+          tone,
+          targetChars,
+          outline,
+        }),
       });
       const d = await res.json();
       if (!d.ok) throw new Error(d.error);
-      setTitle(d.draft.title);
-      setMetaDesc(d.draft.metaDescription);
-      setTags(d.draft.tags);
-      setMarkdown(d.draft.bodyMarkdown);
-      setPostId(d.postId ?? null);
+      applyDraft(d.draft, d.postId ?? null);
       flash("초안을 생성하고 글 목록에 저장했습니다.");
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setGenerating(false);
+    }
+  }
+
+  /** 서버가 준 초안을 편집·미리보기 상태로 옮긴다. 수동·자동 경로가 같은 결과를 갖게 하는 지점 */
+  function applyDraft(
+    draft: {
+      title: string;
+      metaDescription: string;
+      tags: string[];
+      bodyMarkdown: string;
+      jsonLd?: string;
+      sources?: { title: string; uri: string }[];
+    },
+    id: number | null,
+  ) {
+    setTitle(draft.title);
+    setMetaDesc(draft.metaDescription);
+    setTags(draft.tags);
+    setMarkdown(draft.bodyMarkdown);
+    // 본문은 마크다운을 다시 변환해 쓰지만, 구조화 데이터와 출처는 생성 시점 값이라 따로 보관한다
+    setJsonLd(draft.jsonLd ?? "");
+    setSources(draft.sources ?? []);
+    setPostId(id);
+  }
+
+  /**
+   * 서브 키워드 제안 → 본문 생성 → 저장을 서버에서 한 번에 돌린다.
+   * 키워드만 있으면 되므로 탐색 화면에서 넘어온 값도 인자로 바로 받는다.
+   */
+  async function runAuto(main?: string, ctx?: string[]) {
+    const mk = (main ?? mainKeyword).trim();
+    if (!mk || autoRunning) return;
+
+    setError("");
+    setWarning("");
+    setAutoRunning(true);
+    setAutoPhase(1);
+    setAutoElapsed(0);
+
+    // 응답이 한 번에 오므로 진행률을 알 수 없다. 멈춘 것처럼 보이지 않게
+    // 경과 시간을 계속 갱신하고, 첫 단계의 예상 소요를 넘기면 라벨만 다음 단계로 넘긴다.
+    const startedAt = Date.now();
+    const ticker = setInterval(() => {
+      const sec = Math.round((Date.now() - startedAt) / 1000);
+      setAutoElapsed(sec);
+      setAutoPhase(sec < SUGGEST_ESTIMATE_SEC ? 1 : 2);
+    }, 1000);
+
+    try {
+      const res = await fetch("/api/autowrite", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          mainKeyword: mk,
+          context: ctx ?? context,
+          tone,
+          targetChars,
+          outline,
+        }),
+      });
+      const d = await res.json();
+      // 서버가 실패 단계를 메시지 앞에 붙여 주므로 그대로 보여주면 어디서 끊겼는지 드러난다
+      if (!d.ok) throw new Error(d.error ?? "자동 작성에 실패했습니다.");
+
+      setMainKeyword(mk);
+      setSubKeyword(d.subKeyword ?? "");
+      setSuggestions(d.suggestions ?? []);
+      applyDraft(d.draft, d.postId ?? null);
+      setAutoPhase(3);
+      if (d.warning) setWarning(d.warning);
+      flash(
+        d.subKeyword
+          ? `서브 키워드 "${d.subKeyword}" 로 초안까지 만들었습니다.`
+          : "서브 키워드 후보가 없어 메인 키워드만으로 초안을 만들었습니다.",
+      );
+    } catch (e) {
+      setError((e as Error).message);
+      setAutoPhase(0);
+    } finally {
+      clearInterval(ticker);
+      setAutoRunning(false);
     }
   }
 
@@ -152,10 +265,12 @@ function WritePageInner() {
       <h1 className="page-title">글 작성</h1>
       <p className="page-desc">
         메인 키워드 + 서브 키워드로 초안을 만들고, 네이버·티스토리에 각각 맞는 형식으로
-        복사합니다.
+        복사합니다. <strong>자동 작성</strong> 은 서브 키워드 제안부터 본문까지 한 번에
+        돌리고, 아래 수동 버튼은 자동이 실패했을 때 단계별로 다시 밟는 용도입니다.
       </p>
 
       {error && <div className="alert error">{error}</div>}
+      {warning && <div className="alert warn">{warning}</div>}
       {notice && <div className="alert ok">{notice}</div>}
 
       <div className="card">
@@ -177,11 +292,45 @@ function WritePageInner() {
               placeholder="예: 3박4일 코스"
             />
           </div>
-          <button onClick={suggest} disabled={suggesting || !mainKeyword.trim()}>
+          <button
+            className="primary"
+            onClick={() => runAuto()}
+            disabled={autoRunning || generating || suggesting || !mainKeyword.trim()}
+            title="서브 키워드 제안부터 본문 생성·저장까지 한 번에 실행합니다"
+          >
+            {autoRunning && <span className="spinner" />}
+            자동 작성
+          </button>
+          <button
+            onClick={suggest}
+            disabled={suggesting || autoRunning || !mainKeyword.trim()}
+          >
             {suggesting && <span className="spinner" />}
             서브 키워드 제안
           </button>
         </div>
+
+        {(autoRunning || autoPhase === 3) && (
+          <div className="steps">
+            <span className={`step ${autoPhase > 1 ? "done" : "now"}`}>
+              1. 서브 키워드 제안
+            </span>
+            <span
+              className={`step ${autoPhase === 2 ? "now" : autoPhase === 3 ? "done" : ""}`}
+            >
+              2. 본문 생성
+            </span>
+            <span className={`step ${autoPhase === 3 ? "done" : ""}`}>3. 완료</span>
+            {autoRunning && <span className="dim">{autoElapsed}초 경과</span>}
+          </div>
+        )}
+
+        {autoRunning && (
+          <p className="hint">
+            Gemini 를 두 번 연달아 부르기 때문에 1~2분까지 걸릴 수 있습니다. 창을 닫지
+            마세요. 단계 표시는 응답이 한 번에 오는 구조라 경과 시간 기준 추정값입니다.
+          </p>
+        )}
 
         {context.length > 0 && (
           <p className="hint">
@@ -194,28 +343,47 @@ function WritePageInner() {
           <table style={{ marginTop: 14 }}>
             <thead>
               <tr>
-                <th style={{ width: 140 }}>서브 키워드</th>
+                <th style={{ width: 160 }}>서브 키워드</th>
                 <th>제목안</th>
                 <th>이유</th>
-                <th style={{ width: 60 }} />
+                <th style={{ width: 150 }} />
               </tr>
             </thead>
             <tbody>
               {suggestions.map((s, i) => (
                 <tr key={i}>
-                  <td className="kw-cell">{s.subKeyword}</td>
+                  <td className="kw-cell">
+                    {s.subKeyword}
+                    {s.subKeyword === subKeyword && (
+                      <span className="tag seed">선택됨</span>
+                    )}
+                  </td>
                   <td>{s.title}</td>
                   <td style={{ color: "var(--text-dim)" }}>{s.reason}</td>
                   <td>
-                    <button
-                      className="small"
-                      onClick={() => {
-                        setSubKeyword(s.subKeyword);
-                        setTitle(s.title);
-                      }}
-                    >
-                      선택
-                    </button>
+                    <span className="cell-actions">
+                      <button
+                        className="small"
+                        onClick={() => {
+                          setSubKeyword(s.subKeyword);
+                          setTitle(s.title);
+                        }}
+                      >
+                        선택
+                      </button>
+                      {/* 자동 선택이 마음에 안 들 때의 갈아타기. 제안은 이미 받았으니
+                          제안 단계를 건너뛰고 본문만 다시 뽑는다 */}
+                      <button
+                        className="small ghost"
+                        disabled={generating || autoRunning}
+                        onClick={() => {
+                          setSubKeyword(s.subKeyword);
+                          generate(s.subKeyword);
+                        }}
+                      >
+                        이걸로 재생성
+                      </button>
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -256,8 +424,8 @@ function WritePageInner() {
         <button
           className="primary"
           style={{ marginTop: 12 }}
-          onClick={generate}
-          disabled={generating || !mainKeyword.trim()}
+          onClick={() => generate()}
+          disabled={generating || autoRunning || !mainKeyword.trim()}
         >
           {generating && <span className="spinner" />}
           {generating ? "생성 중… (30초 내외)" : "초안 생성"}
@@ -337,9 +505,24 @@ function WritePageInner() {
               </button>
               <button
                 className="tistory"
-                onClick={() => copyText(html).then(() => flash("티스토리용 HTML 복사됨"))}
+                onClick={() =>
+                  // 구조화 데이터가 있으면 본문 뒤에 붙여 한 번에 넣게 한다.
+                  // 따로 복사시키면 붙여넣기를 빠뜨려 스키마가 통째로 사라진다.
+                  copyText(jsonLd ? `${html}\n\n${jsonLd}` : html).then(() =>
+                    flash(
+                      jsonLd
+                        ? "티스토리용 HTML + 구조화 데이터 복사됨"
+                        : "티스토리용 HTML 복사됨",
+                    ),
+                  )
+                }
+                title={
+                  jsonLd
+                    ? "본문 HTML 뒤에 JSON-LD(Article·FAQPage)가 함께 복사됩니다"
+                    : "구조화 데이터가 없어 본문만 복사됩니다"
+                }
               >
-                티스토리 본문 (HTML)
+                티스토리 본문 (HTML{jsonLd ? " + 스키마" : ""})
               </button>
               <button
                 onClick={() => copyText(markdown).then(() => flash("마크다운 복사됨"))}
@@ -361,8 +544,31 @@ function WritePageInner() {
             </div>
             <p className="hint">
               네이버는 스마트에디터 본문에 그대로 붙여넣기(⌘V), 티스토리는 에디터를 HTML
-              모드로 바꾼 뒤 붙여넣으세요.
+              모드로 바꾼 뒤 붙여넣으세요. 구조화 데이터는 티스토리에서만 동작합니다 —
+              네이버 블로그는 스크립트 태그를 지웁니다.
             </p>
+
+            {sources.length > 0 ? (
+              <details style={{ marginTop: 12 }}>
+                <summary>
+                  최신 정보 출처 {sources.length}건 — 본문의 수치를 검증하세요
+                </summary>
+                <ul className="hint" style={{ paddingLeft: 18, marginTop: 8 }}>
+                  {sources.map((s, i) => (
+                    <li key={`${s.uri}-${i}`}>
+                      <a href={s.uri} target="_blank" rel="noreferrer">
+                        {s.title || s.uri}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : (
+              <p className="hint">
+                이 초안은 <strong>검색 그라운딩 없이</strong> 만들어졌습니다. 수치·날짜·
+                금액이 최신인지 직접 확인하세요.
+              </p>
+            )}
           </div>
 
           <div className="split">

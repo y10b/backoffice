@@ -1,90 +1,111 @@
 import { NextResponse } from "next/server";
 import { db, nowIso } from "@/lib/db";
-import { buildUrl, fetchCreatorAdvisor, loadPresets } from "@/lib/naver";
-import { parseCurl } from "@/lib/curl";
+import { researchKeywords, type SortKey } from "@/lib/research";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function todayKst(): string {
-  // 네이버 통계는 KST 기준이라 UTC 로 계산하면 하루가 밀린다
-  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  return kst.toISOString().slice(0, 10);
+const SORT_KEYS: SortKey[] = [
+  "searches",
+  "competition",
+  "docs",
+  "mobile",
+  "absorption",
+];
+
+function parseSeeds(input: unknown): string[] {
+  if (Array.isArray(input)) return input.map((s) => String(s));
+  if (typeof input === "string") return input.split(/[,\n]/);
+  return [];
 }
 
-function shiftDate(iso: string, days: number): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
+function clamp(v: unknown, min: number, max: number, fallback: number): number {
+  // Number(null) 과 Number("") 은 0 이라 그냥 두면 값이 최소치로 눌린다.
+  // JSON 에 null 이 실려 오는 경우가 있어 숫자 변환 전에 걸러낸다.
+  if (v === null || v === undefined || v === "") return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
 
-  let url: string;
-  let presetId = String(body.presetId ?? "");
-  const label = String(body.label ?? "");
-
-  if (typeof body.curl === "string" && body.curl.trim()) {
-    // cURL 붙여넣기 경로: URL 을 그대로 쓰되 쿠키는 저장된 것을 쓴다
-    try {
-      const parsed = parseCurl(body.curl);
-      url = parsed.url;
-      presetId = "curl";
-    } catch (e) {
-      return NextResponse.json(
-        { ok: false, error: `cURL 파싱 실패: ${(e as Error).message}` },
-        { status: 400 },
-      );
-    }
-  } else {
-    const presets = loadPresets();
-    const preset = presets.find((p) => p.id === presetId) ?? presets[0];
-    if (!preset) {
-      return NextResponse.json(
-        { ok: false, error: "사용 가능한 엔드포인트 프리셋이 없습니다." },
-        { status: 400 },
-      );
-    }
-    presetId = preset.id;
-
-    // 어제 데이터가 기본. 당일 통계는 집계 전이라 비는 경우가 많다.
-    const date = String(body.date ?? shiftDate(todayKst(), -1));
-    const days = Number(body.days ?? 7);
-    url = buildUrl(preset, {
-      date,
-      dateStart: shiftDate(date, -(days - 1)),
-      dateEnd: date,
-      categoryId: body.categoryId ? String(body.categoryId) : undefined,
-      limit: String(body.limit ?? 30),
-    });
+  const seeds = parseSeeds(body.seeds).map((s) => s.trim()).filter(Boolean);
+  if (!seeds.length) {
+    return NextResponse.json(
+      {
+        ok: false,
+        seeds: [],
+        keywords: [],
+        sources: [],
+        error: "시드 키워드를 하나 이상 입력하세요. (최대 5개)",
+      },
+      { status: 400 },
+    );
   }
 
-  const result = await fetchCreatorAdvisor(url);
+  const sort = SORT_KEYS.includes(body.sort) ? (body.sort as SortKey) : "searches";
+  const result = await researchKeywords({
+    seeds,
+    limit: clamp(body.limit, 5, 200, 50),
+    minSearches: clamp(body.minSearches, 0, 1_000_000, 100),
+    includeDocs: body.includeDocs !== false,
+    includeTrend: body.includeTrend === true,
+    sort,
+  });
 
   if (result.ok && result.keywords.length) {
     db()
       .prepare(
-        "INSERT INTO keyword_snapshots (fetched_at, preset, category_id, label, payload) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO keyword_snapshots (fetched_at, seeds, count, payload) VALUES (?, ?, ?, ?)",
       )
       .run(
         nowIso(),
-        presetId,
-        body.categoryId ? String(body.categoryId) : null,
-        label,
+        result.seeds.join(", "),
+        result.keywords.length,
         JSON.stringify(result.keywords),
       );
   }
 
-  return NextResponse.json(result, { status: result.ok ? 200 : 200 });
+  return NextResponse.json(result);
 }
 
-/** 저장된 스냅샷 목록 */
-export async function GET() {
+/**
+ * 저장된 스냅샷 목록. `?latest=1` 이면 가장 최근 것의 키워드까지 함께 준다.
+ * 화면에 들어오자마자 지난 조회 결과를 보여주기 위한 것이라, API 를 다시 때리지 않는다.
+ */
+export async function GET(req: Request) {
+  const wantLatest = new URL(req.url).searchParams.get("latest") === "1";
+
   const rows = db()
     .prepare(
-      "SELECT id, fetched_at, preset, category_id, label FROM keyword_snapshots ORDER BY id DESC LIMIT 30",
+      "SELECT id, fetched_at, seeds, count FROM keyword_snapshots ORDER BY id DESC LIMIT 30",
     )
     .all();
-  return NextResponse.json({ snapshots: rows });
+
+  if (!wantLatest || !rows.length) return NextResponse.json({ snapshots: rows });
+
+  const row = db()
+    .prepare("SELECT seeds, fetched_at, payload FROM keyword_snapshots ORDER BY id DESC LIMIT 1")
+    .get() as { seeds: string; fetched_at: string; payload: string } | undefined;
+
+  let keywords: unknown[] = [];
+  try {
+    const parsed = JSON.parse(row?.payload ?? "[]");
+    if (Array.isArray(parsed)) keywords = parsed;
+  } catch {
+    /* 저장이 깨졌으면 빈 표로 시작하고 목록만 준다 */
+  }
+
+  return NextResponse.json({
+    snapshots: rows,
+    latest: row
+      ? {
+          seeds: row.seeds.split(",").map((s) => s.trim()).filter(Boolean),
+          fetchedAt: row.fetched_at,
+          keywords,
+        }
+      : null,
+  });
 }
