@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { markdownToHtml, countChars } from "@/lib/markdown";
 import { copyRichHtml, copyText } from "@/lib/clipboard";
 import type { StoredImage } from "@/lib/images";
+import { applyVisuals, type Visual } from "@/lib/visuals";
+import { downloadHtmlAsPng } from "@/lib/htmlImage";
 
 type Suggestion = { subKeyword: string; title: string; reason: string };
 
@@ -17,6 +19,28 @@ type AutoPhase = 0 | 1 | 2 | 3;
  * (제안 호출은 보통 10~20초, 본문 생성이 나머지를 먹는다)
  */
 const SUGGEST_ESTIMATE_SEC = 18;
+
+/**
+ * 저장된 시각 자료를 배열로 되돌린다.
+ * jsonb 컬럼이라 배열로 오지만, 예전 저장분은 문자열일 수 있어 양쪽을 받는다.
+ */
+function parseStoredVisuals(raw: unknown): Visual[] {
+  const arr =
+    Array.isArray(raw)
+      ? raw
+      : (() => {
+          try {
+            const parsed = JSON.parse(String(raw || "[]"));
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })();
+  return arr.filter(
+    (v: unknown): v is Visual =>
+      typeof v === "object" && v !== null && typeof (v as Visual).html === "string",
+  );
+}
 
 function occurrences(haystack: string, needle: string): number {
   if (!needle.trim()) return 0;
@@ -53,6 +77,14 @@ function WritePageInner() {
   const [markdown, setMarkdown] = useState("");
   const [jsonLd, setJsonLd] = useState("");
   const [sources, setSources] = useState<{ title: string; uri: string }[]>([]);
+  /*
+   * 시각 자료는 본문 마크다운에 {{visual:N}} 자리로만 들어 있고 실체는 따로 온다.
+   * 그동안 이 값을 화면에서 아예 안 들고 있어서, 미리보기에는 자리표시자가 그대로
+   * 보이고 저장하면 자료가 통째로 사라졌다.
+   */
+  const [visuals, setVisuals] = useState<Visual[]>([]);
+  const [visualBusy, setVisualBusy] = useState("");
+  const [visualError, setVisualError] = useState("");
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
   const [images, setImages] = useState<StoredImage[]>([]);
   const [showImages, setShowImages] = useState(false);
@@ -148,6 +180,7 @@ function WritePageInner() {
           setTitle(p.title);
           setMetaDesc(p.meta_desc);
           setMarkdown(p.body_markdown);
+          setVisuals(parseStoredVisuals(p.visuals));
           // jsonb 라 배열로 온다. 예전 저장분이 문자열일 수 있어 양쪽을 받는다
           setTags(
             Array.isArray(p.tags)
@@ -165,7 +198,11 @@ function WritePageInner() {
     }
   }, [params]);
 
-  const html = useMemo(() => markdownToHtml(markdown), [markdown]);
+  // 자리표시자를 실제 자료로 바꿔야 미리보기가 발행본과 같아진다
+  const html = useMemo(
+    () => applyVisuals(markdownToHtml(markdown), visuals),
+    [markdown, visuals],
+  );
   const charCount = useMemo(() => countChars(html), [html]);
   const mainInTitle = mainKeyword.trim() ? title.includes(mainKeyword.trim()) : false;
   const subInTitle = subKeyword.trim() ? title.includes(subKeyword.trim()) : false;
@@ -224,6 +261,27 @@ function WritePageInner() {
     }
   }
 
+  /**
+   * 시각 자료 하나를 PNG 로 받는다.
+   *
+   * 티스토리는 HTML 을 그대로 붙이면 되지만 네이버 스마트에디터는 태그와 스타일을
+   * 지워버려서, 네이버에 올리려면 결국 그림이어야 한다.
+   */
+  async function saveVisualPng(v: Visual, index: number) {
+    setVisualError("");
+    setVisualBusy(`${index}`);
+    try {
+      await downloadHtmlAsPng(v.html, v.title || `${title || "visual"}-${index + 1}`, {
+        width: 800,
+        scale: 2,
+      });
+    } catch (e) {
+      setVisualError((e as Error).message);
+    } finally {
+      setVisualBusy("");
+    }
+  }
+
   /** 서버가 준 초안을 편집·미리보기 상태로 옮긴다. 수동·자동 경로가 같은 결과를 갖게 하는 지점 */
   function applyDraft(
     draft: {
@@ -233,6 +291,7 @@ function WritePageInner() {
       bodyMarkdown: string;
       jsonLd?: string;
       sources?: { title: string; uri: string }[];
+      visuals?: Visual[];
     },
     id: number | null,
   ) {
@@ -243,6 +302,7 @@ function WritePageInner() {
     // 본문은 마크다운을 다시 변환해 쓰지만, 구조화 데이터와 출처는 생성 시점 값이라 따로 보관한다
     setJsonLd(draft.jsonLd ?? "");
     setSources(draft.sources ?? []);
+    setVisuals(draft.visuals ?? []);
     setPostId(id);
   }
 
@@ -314,6 +374,7 @@ function WritePageInner() {
       tags,
       body_markdown: markdown,
       body_html: html,
+      visuals,
     };
     if (postId) {
       await fetch(`/api/posts/${postId}`, {
@@ -732,6 +793,47 @@ function WritePageInner() {
                 </div>
               )}
             </div>
+
+            {visuals.length > 0 && (
+              <div className="card">
+                <h2>시각 자료 {visuals.length}개</h2>
+                <p className="hint">
+                  티스토리는 아래 HTML 이 본문에 그대로 들어가 글자로 읽힙니다(검색엔진도
+                  읽습니다). 네이버 스마트에디터는 태그와 스타일을 지우므로, 네이버에는
+                  <strong> PNG로 저장</strong> 해서 이미지로 올리세요.
+                </p>
+                {visualError && <div className="alert warn">{visualError}</div>}
+                {visuals.map((v, i) => (
+                  <div key={i} className="visual-item">
+                    <div className="row" style={{ justifyContent: "space-between" }}>
+                      <strong>
+                        <span className="badge">{v.type}</span> {v.title}
+                      </strong>
+                      <div className="row" style={{ gap: 6 }}>
+                        <button
+                          className="small"
+                          disabled={visualBusy === `${i}`}
+                          onClick={() => saveVisualPng(v, i)}
+                        >
+                          {visualBusy === `${i}` ? "굽는 중" : "PNG로 저장"}
+                        </button>
+                        <button
+                          className="small ghost"
+                          onClick={() => copyText(v.html).then(() => flash("HTML 을 복사했습니다."))}
+                        >
+                          HTML 복사
+                        </button>
+                      </div>
+                    </div>
+                    {/* 실제로 발행될 모양 그대로 보여준다. 정제를 거친 HTML 이다 */}
+                    <div
+                      className="visual-preview"
+                      dangerouslySetInnerHTML={{ __html: v.html }}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="card">
               <h2>미리보기</h2>

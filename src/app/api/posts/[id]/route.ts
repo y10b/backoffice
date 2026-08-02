@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deletePost, getPost, updatePost } from "@/lib/db";
+import { parseVisuals } from "@/lib/visuals";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,6 +50,14 @@ export async function PATCH(req: Request, { params }: Ctx) {
   }
   // jsonb 컬럼이라 문자열로 감싸지 않고 배열 그대로 넘긴다
   if ("tags" in body) patch.tags = Array.isArray(body.tags) ? body.tags : [];
+  /*
+   * 시각 자료도 jsonb 다. 이걸 받지 않아서 글을 한 번 저장하면 자료가 사라졌다.
+   * 모델이 만든 HTML 을 그대로 믿지 않고 여기서 다시 정제한다 — 클라이언트를 거쳐
+   * 오는 값이라 중간에 무엇이 섞였는지 알 수 없다.
+   */
+  if ("visuals" in body) {
+    patch.visuals = parseVisuals(body.visuals);
+  }
 
   if (!Object.keys(patch).length) {
     return NextResponse.json(

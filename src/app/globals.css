@@ -798,3 +798,21 @@ button.icon {
   border-color: rgba(255, 107, 107, 0.4);
   color: #ffb3b3;
 }
+
+/* 시각 자료 목록 — 발행 전에 실제 모양을 보고 PNG 로 받는 자리 */
+.visual-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 10px;
+}
+.visual-preview {
+  margin-top: 10px;
+  padding: 12px;
+  /* 시각 자료는 밝은 배경을 전제로 만들어진다. 어두운 테마에서 그대로 두면 글자가 안 보인다 */
+  background: #fff;
+  color: #111;
+  border-radius: 6px;
+  /* 표가 넓으면 카드를 밀어내지 않고 안에서 스크롤되게 한다 */
+  overflow-x: auto;
+}
