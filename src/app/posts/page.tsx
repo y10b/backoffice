@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { copyText } from "@/lib/clipboard";
+import Help from "@/components/Help";
 
 type PostRow = {
   id: number;
@@ -87,9 +88,9 @@ export default function PostsPage() {
                 </th>
                 <th>제목</th>
                 <th style={{ width: 170 }}>키워드</th>
-                <th style={{ width: 60 }}>네이버</th>
-                <th style={{ width: 70 }}>티스토리</th>
-                <th style={{ width: 96 }}>태그</th>
+                <th style={{ width: 60 }} title="네이버 블로그에 올렸는지 직접 체크하는 칸입니다. 자동 발행은 API 가 폐지돼 불가능하므로, 붙여넣고 발행한 뒤 눌러 기록하세요">네이버</th>
+                <th style={{ width: 70 }} title="티스토리에 올렸는지 직접 체크하는 칸입니다. 같은 글을 두 곳에 올리므로 어디까지 했는지 여기서 봅니다">티스토리</th>
+                <th style={{ width: 96 }} title="누르면 #태그 형태로 클립보드에 복사됩니다. 네이버·티스토리 태그 입력란에 그대로 붙여넣으세요">태그</th>
                 <th style={{ width: 100 }}>수정일</th>
                 <th style={{ width: 110 }} />
               </tr>

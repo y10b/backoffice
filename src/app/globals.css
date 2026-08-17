@@ -816,3 +816,76 @@ button.icon {
   /* 표가 넓으면 카드를 밀어내지 않고 안에서 스크롤되게 한다 */
   overflow-x: auto;
 }
+
+/* ------------------------------------------------------------------ *
+ * 사용법 툴팁 (components/Help.tsx)
+ *
+ * JS 없이 hover/focus 로만 뜬다. `.table-wrap` 안에서는 잘리므로 표 밖에서 쓴다.
+ * ------------------------------------------------------------------ */
+.help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  vertical-align: middle;
+  flex: 0 0 auto;
+}
+
+.help:hover,
+.help:focus-visible {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  outline: none;
+}
+
+.help-tip {
+  display: none;
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 300px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #0b0d11;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.65;
+  text-align: left;
+  white-space: pre-line;
+  /* 카드 경계와 다음 행 위로 확실히 올라와야 한다 */
+  z-index: 50;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+/* 오른쪽 끝 컨트롤은 가운데 정렬하면 화면 밖으로 나간다 */
+.help-left .help-tip {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.help:hover .help-tip,
+.help:focus .help-tip,
+.help:focus-visible .help-tip {
+  display: block;
+}
+
+/* 라벨 안에 들어가도 줄이 어긋나지 않게 */
+label .help {
+  margin-left: 4px;
+}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Help from "@/components/Help";
 import type { Ga4Report } from "@/lib/ga4";
 import type { AdsenseSummary } from "@/lib/adsense";
 
@@ -749,7 +750,10 @@ export default function AnalyticsPage() {
       )}
 
       <div className="card">
-        <h2>요약 · 최근 {days}일</h2>
+        <h2>
+          요약 · 최근 {days}일
+          <Help text="네이버 블로그는 외부 스크립트를 막아서 여기 숫자는 티스토리만 집계됩니다.&#10;GA4 는 태그를 단 시점부터만 쌓이고 소급되지 않습니다." />
+        </h2>
         <div className="stats">
           <div className="stat">
             <div className="k">조회수</div>
@@ -812,7 +816,10 @@ export default function AnalyticsPage() {
       </div>
 
       <div className="card">
-        <h2>일별 추이</h2>
+        <h2>
+          일별 추이
+          <Help text="조회수와 수익이 같이 움직이는지 봅니다. 조회수만 오르고 수익이 안 따라오면 광고가 안 붙는 주제라는 뜻이니, 키워드 탐색에서 '수익 잠재력' 정렬로 바꿔보세요." />
+        </h2>
         {daily.length < 2 ? (
           <div className="empty">
             {loading
@@ -863,16 +870,28 @@ export default function AnalyticsPage() {
                   <th style={{ width: 96 }} className="num">
                     {sortLabel("views", "조회수")}
                   </th>
-                  <th style={{ width: 80 }} className="num">
+                  <th
+                    style={{ width: 80 }}
+                    className="num"
+                    title="순 방문자 수. 조회수보다 훨씬 적으면 한 사람이 여러 번 본 것이거나 새로고침이 섞인 것입니다"
+                  >
                     사용자
                   </th>
-                  <th style={{ width: 90 }} className="num">
+                  <th
+                    style={{ width: 90 }}
+                    className="num"
+                    title="글에 머문 평균 시간. 30초 미만이면 제목과 본문이 안 맞아 바로 나간 것입니다 — 검색 의도를 다시 보세요"
+                  >
                     평균 체류
                   </th>
                   <th style={{ width: 130 }} className="num">
                     {sortLabel("earnings", "수익")}
                   </th>
-                  <th style={{ width: 70 }} className="num">
+                  <th
+                    style={{ width: 70 }}
+                    className="num"
+                    title="애드센스 광고 클릭 수. 조회수 대비 너무 낮으면 광고 위치나 주제의 상업적 의도를 점검하세요"
+                  >
                     클릭
                   </th>
                   <th

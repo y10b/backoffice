@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { copyText } from "@/lib/clipboard";
+import Help from "@/components/Help";
 
 /**
  * 유아 채널.
@@ -405,10 +406,16 @@ export default function KidsPage() {
       {notice && <div className="alert ok">{notice}</div>}
 
       <div className="card">
-        <h2>1. 무엇이 먹히는지 보기</h2>
+        <h2>
+            1. 무엇이 먹히는지 보기
+            <Help text="유아 콘텐츠 인기 영상을 조회합니다. 제목과 조회수만 봅니다 — 남의 영상 파일은 쓰지 않습니다. 마음에 드는 구성을 체크하면 제목이 기획 근거로 넘어갑니다." />
+          </h2>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 220 }}>
-            <label>검색어</label>
+            <label>
+              검색어
+              <Help text="부모가 검색할 말로 넣으세요. 예: 유아 동요, 아기 색깔놀이, 유아 숫자.&#10;영어로 넣으면 해외 채널이 잡혀 참고가 덜 됩니다." />
+            </label>
             <input
               value={query}
               placeholder="예: 유아 동요, 아기 색깔놀이"
@@ -417,7 +424,10 @@ export default function KidsPage() {
             />
           </div>
           <div className="field">
-            <label>카테고리</label>
+            <label>
+              카테고리
+              <Help text="유아 콘텐츠는 보통 영화·애니메이션에 몰려 있습니다. 결과가 너무 적으면 전체로 넓히세요." />
+            </label>
             <select value={category} onChange={(e) => setCategory(e.target.value)}>
               {CATEGORIES.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -479,10 +489,16 @@ export default function KidsPage() {
       </div>
 
       <div className="card">
-        <h2>2. 기획</h2>
+        <h2>
+          2. 기획
+          <Help text="Claude 가 캐릭터·대본·장면별 영어 프롬프트를 한 번에 만듭니다. 기존 캐릭터를 닮게 만들지 않도록 프롬프트에 제약을 걸어두었고, 결과에 사람이 확인할 항목이 함께 나옵니다." />
+        </h2>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 220 }}>
-            <label>주제</label>
+            <label>
+              주제
+              <Help text="한 편에 하나만 다루세요. '색깔 배우기'처럼 좁을수록 반복 구조가 잘 나옵니다.&#10;아래 버튼으로 검증된 주제를 바로 넣을 수 있습니다." />
+            </label>
             <input
               value={theme}
               placeholder="예: 색깔 배우기"
@@ -490,7 +506,10 @@ export default function KidsPage() {
             />
           </div>
           <div className="field">
-            <label>장면 수</label>
+            <label>
+              장면 수
+              <Help text="장면 하나가 클립 하나입니다. 8개면 Flow 에서 8번 만들어야 합니다.&#10;처음에는 4개로 짧게 만들어 화풍을 확인한 뒤 늘리세요." />
+            </label>
             <input
               type="number"
               min={3}
@@ -501,7 +520,10 @@ export default function KidsPage() {
             />
           </div>
           <div className="field">
-            <label>장면당 초</label>
+            <label>
+              장면당 초
+              <Help text="유아용은 한 장면이 길어도 됩니다(5~8초). 장면이 빨리 바뀌면 오히려 산만합니다.&#10;Veo 로 렌더할 경우 4·6·8초만 받아 가장 가까운 값으로 맞춰 보냅니다." />
+            </label>
             <input
               type="number"
               min={4}
@@ -527,7 +549,10 @@ export default function KidsPage() {
         </div>
 
         <div className="field" style={{ marginTop: 10 }}>
-          <label>추가 지시 (선택)</label>
+          <label>
+            추가 지시 (선택)
+            <Help text="꼭 넣을 요소나 피할 요소를 적으세요. 예: 노래 후렴을 3번 반복, 물놀이 장면은 빼기.&#10;캐릭터 외형을 여기서 지정하면 characterSheet 에 반영됩니다." />
+          </label>
           <textarea
             rows={2}
             value={notes}
@@ -565,11 +590,17 @@ export default function KidsPage() {
             </p>
 
             <div className="field" style={{ marginTop: 10 }}>
-              <label>캐릭터 고정 묘사 — 매 장면 프롬프트 앞에 자동으로 붙습니다</label>
+              <label>
+                캐릭터 고정 묘사 — 매 장면 프롬프트 앞에 자동으로 붙습니다
+                <Help text="AI 영상 모델은 장면마다 캐릭터 외형이 흔들립니다. 이 문장을 모든 장면 프롬프트 앞에 똑같이 붙여 외형을 고정합니다.&#10;Flow 에 직접 넣을 때도 이 문장을 반드시 앞에 붙이세요 — 아래 '전체 프롬프트 복사' 버튼이 이미 붙여줍니다." />
+              </label>
               <textarea className="mono" rows={3} value={plan.characterSheet} readOnly />
             </div>
             <div className="field" style={{ marginTop: 10 }}>
-              <label>화풍</label>
+              <label>
+                화풍
+                <Help text="영상 전체의 그림 스타일입니다. 캐릭터 묘사와 함께 매 장면에 붙어 편 전체의 톤을 맞춥니다." />
+              </label>
               <textarea className="mono" rows={2} value={plan.styleSheet} readOnly />
             </div>
 
@@ -594,7 +625,10 @@ export default function KidsPage() {
           </div>
 
           <div className="card">
-            <h2>3. 장면 렌더</h2>
+            <h2>
+              3. 장면 렌더
+              <Help text="두 가지 길이 있습니다.&#10;· 무료 — '전체 프롬프트 복사' 로 Flow 웹에서 만들어 내려받고, 아래 4단계에 올립니다.&#10;· 유료 — '렌더' 버튼으로 Veo API 를 직접 부릅니다." />
+            </h2>
             <div className="alert warn" style={{ marginBottom: 12 }}>
               <strong>Veo 는 유료입니다.</strong> 초당 약 $0.15~0.40 라 8초 클면 $1.2~3.2,
               8장면이면 한 편에 $10~26 입니다. <strong>무료로 하려면</strong>{" "}
@@ -607,14 +641,20 @@ export default function KidsPage() {
             </div>
             <div className="row" style={{ marginBottom: 12 }}>
               <div className="field">
-                <label>화면비</label>
+                <label>
+                  화면비
+                  <Help text="쇼츠는 9:16 입니다. 유아 채널은 태블릿으로 보는 비중이 높아 일반 영상(16:9)도 함께 만들면 좋습니다." />
+                </label>
                 <select value={ratio} onChange={(e) => setRatio(e.target.value as "9:16")}>
                   <option value="9:16">9:16 (쇼츠)</option>
                   <option value="16:9">16:9 (일반)</option>
                 </select>
               </div>
               <div className="field">
-                <label>해상도</label>
+                <label>
+                  해상도
+                  <Help text="Veo API 로 렌더할 때만 적용됩니다. 720p 로도 쇼츠에는 충분하고 비용이 절반 이하입니다." />
+                </label>
                 <select
                   value={resolution}
                   onChange={(e) => setResolution(e.target.value as "720p")}
@@ -641,7 +681,7 @@ export default function KidsPage() {
                   <th>장면 프롬프트 (영문)</th>
                   <th style={{ width: 130 }}>상태</th>
                   <th style={{ width: 80 }} />
-                  <th style={{ width: 150 }}>내레이션</th>
+                  <th style={{ width: 150 }} title="장면 대사를 Fish Audio 로 읽힙니다. 여기서 만드는 건 미리듣기용이고, 실제 영상에 깔리는 오디오는 4단계의 &#39;내레이션 만들기&#39; 입니다">내레이션</th>
                 </tr>
               </thead>
               <tbody>
@@ -733,7 +773,10 @@ export default function KidsPage() {
         </div>
 
           <div className="card">
-            <h2>4. 조립</h2>
+            <h2>
+              4. 조립
+              <Help text="Flow 에서 받은 클립들을 한 편으로 합칩니다.&#10;순서대로 이어붙이고 → 장면 대사를 자막으로 얹고 → 내레이션을 오디오로 깔아 9:16 영상을 만듭니다.&#10;ffmpeg 가 필요해 로컬에서 npm run worker 가 돌고 있어야 합니다." />
+            </h2>
             <p className="hint" style={{ marginTop: 0 }}>
               Flow 에서 만들어 받은 클립들을 한 번에 올리면 순서대로 이어 붙이고, 장면 대사를
               자막으로 얹고, 내레이션을 오디오로 깔아 한 편으로 만듭니다.
@@ -741,7 +784,10 @@ export default function KidsPage() {
 
             <div className="row" style={{ marginTop: 12 }}>
               <div className="field" style={{ flex: 1, minWidth: 260 }}>
-                <label>장면 클립 (여러 개 한 번에 선택)</label>
+                <label>
+                  장면 클립 (여러 개 한 번에 선택)
+                  <Help text="Flow 에서 받은 파일을 전부 한 번에 선택하세요(⌘A).&#10;파일명 속 숫자 순서로 정렬합니다 — scene-1, scene-2 … scene-10 처럼 번호가 들어가면 그대로 순서가 맞습니다.&#10;순서가 틀리면 아래 표에서 확인하고 제거 후 다시 올리세요." />
+                </label>
                 <input
                   type="file"
                   accept="video/*"
@@ -769,7 +815,9 @@ export default function KidsPage() {
                       순서
                     </th>
                     <th>파일</th>
-                    <th style={{ width: 200 }}>이 순서에 붙는 자막</th>
+                    <th style={{ width: 200 }} title="이 클립 구간에 얹힐 장면 대사입니다. 여기가 어긋나면 클립 순서가 틀린 것입니다">
+                      이 순서에 붙는 자막
+                    </th>
                     <th style={{ width: 90 }} className="num">
                       크기
                     </th>
@@ -813,6 +861,7 @@ export default function KidsPage() {
                 {makingNarration && <span className="spinner" />}
                 내레이션 만들기
               </button>
+              <Help text="장면 대사를 전부 이어 한 번에 읽혀 파일로 저장합니다. 장면마다 따로 만들어 붙이면 문장 사이가 끊긴 티가 납니다.&#10;안 만들면 무성 영상이 됩니다 — 클립 자체의 소리는 쓰지 않습니다." />
               {narration && (
                 <span className="badge on" style={{ alignSelf: "center" }}>
                   {narration.originalName}
@@ -828,6 +877,7 @@ export default function KidsPage() {
                 />
                 <span style={{ fontSize: 12 }}>제목 얹기</span>
               </label>
+              <Help text="영상 위쪽 여백에 기획안 제목을 큰 글씨로 얹습니다. 쇼츠 첫 화면에서 무슨 영상인지 바로 보여 이탈이 줄어듭니다." />
               <button
                 className="primary"
                 onClick={assemble}

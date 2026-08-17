@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Help from "@/components/Help";
 
 /**
  * 쇼츠 만들기.
@@ -501,7 +502,10 @@ export default function ShortsPage() {
           <>
             <div className="row">
               <div className="field" style={{ flex: 1, minWidth: 240 }}>
-                <label>소재 검색어</label>
+                <label>
+                  소재 검색어
+                  <Help text="가공해도 되는 소재만 찾습니다(CC 라이선스 · 공개 도메인).&#10;검색어는 영어로 넣으세요 — Internet Archive 와 유튜브 CC 자료는 대부분 영문 메타데이터입니다.&#10;아래 프리셋 버튼이 검증된 검색어를 넣어줍니다." />
+                </label>
                 <input
                   placeholder="nature, seoul, retro …"
                   value={query}
@@ -664,7 +668,10 @@ export default function ShortsPage() {
 
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 240 }}>
-            <label>출처 (발행 설명란에 그대로 쓸 문구)</label>
+            <label>
+              출처 (발행 설명란에 그대로 쓸 문구)
+              <Help text="영상 설명란에 그대로 붙여넣을 문구를 적으세요. 예: 국가기록원, 공공누리 제1유형.&#10;공공누리와 CC BY 는 출처 표시가 이용 조건이라, 적어두지 않으면 나중에 어디서 받았는지 알 수 없습니다." />
+            </label>
             <input
               placeholder="e영상역사관 대한뉴스 제1234호 (국가기록원)"
               value={upOrigin}
@@ -672,7 +679,10 @@ export default function ShortsPage() {
             />
           </div>
           <div className="field">
-            <label>라이선스</label>
+            <label>
+              라이선스
+              <Help text="받아온 자료에 표기된 이용 조건을 고르세요. 확실하지 않으면 원본 페이지에서 먼저 확인하세요 — 표기가 없는 것은 공개 도메인이 아니라 '확인되지 않음' 입니다." />
+            </label>
             <select value={upLicense} onChange={(e) => setUpLicense(e.target.value)}>
               <option>공공누리 제1유형</option>
               <option>공개 도메인 (CC0)</option>
@@ -781,7 +791,10 @@ export default function ShortsPage() {
 
           <div className="row" style={{ marginBottom: 14 }}>
             <div className="field">
-              <label>리드인 (초)</label>
+              <label>
+                리드인 (초)
+                <Help text="댓글이 가리킨 지점보다 몇 초 앞에서 컷을 시작할지.&#10;사람은 좋은 장면이 시작될 때가 아니라 반응한 뒤에 댓글을 씁니다. 0 으로 두면 클라이맥스가 지나간 자리에서 시작합니다.&#10;바꾸면 '하이라이트' 를 다시 눌러야 반영됩니다." />
+              </label>
               <input
                 type="number"
                 min={0}
@@ -792,7 +805,10 @@ export default function ShortsPage() {
               />
             </div>
             <div className="field">
-              <label>컷 길이 (초)</label>
+              <label>
+                컷 길이 (초)
+                <Help text="하이라이트 구간 하나를 몇 초로 뜰지. 쇼츠 한 편이 이 길이로 만들어집니다.&#10;15~30초가 무난합니다." />
+              </label>
               <input
                 type="number"
                 min={3}
@@ -888,7 +904,10 @@ export default function ShortsPage() {
         <h2>3. 렌더</h2>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 300 }}>
-            <label>원본 주소 (Archive 파일에서 &lsquo;쓰기&rsquo; 를 누르면 채워집니다)</label>
+            <label>
+              원본 주소 (Archive 파일에서 &lsquo;쓰기&rsquo; 를 누르면 채워집니다)
+              <Help text="로컬 파일 경로나 http(s) 주소를 넣습니다. Archive 직링크를 그대로 써도 됩니다.&#10;위 소재 목록에서 '쓰기' 를 누르면 자동으로 채워집니다." />
+            </label>
             <input
               className="mono"
               placeholder="https://archive.org/download/... 또는 로컬 파일 경로"
@@ -897,7 +916,10 @@ export default function ShortsPage() {
             />
           </div>
           <div className="field">
-            <label>시작(초)</label>
+            <label>
+              시작(초)
+              <Help text="원본에서 잘라낼 시작 지점. 하이라이트 표의 '구간 적용' 을 누르면 자동으로 채워집니다." />
+            </label>
             <input
               type="number" min={0} style={{ width: 90 }}
               value={startSec}
@@ -905,7 +927,10 @@ export default function ShortsPage() {
             />
           </div>
           <div className="field">
-            <label>길이(초)</label>
+            <label>
+              길이(초)
+              <Help text="결과 영상 전체 길이. 쇼츠는 60초를 넘기지 않는 편이 낫습니다." />
+            </label>
             <input
               type="number" min={1} max={180} style={{ width: 90 }}
               value={durationSec}
@@ -913,7 +938,10 @@ export default function ShortsPage() {
             />
           </div>
           <div className="field">
-            <label>컷 길이(초)</label>
+            <label>
+              컷 길이(초)
+              <Help text="0 이면 한 지점에서 통째로 뜹니다. 값을 주면 원본 여러 지점에서 이 길이만큼 떠서 이어붙입니다.&#10;한 장면이 30초 내내 이어지면 끝까지 안 보므로, 4초 정도로 두면 컷이 계속 바뀝니다." />
+            </label>
             <input
               type="number" min={0} max={30} style={{ width: 90 }}
               value={cutSec}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Help from "@/components/Help";
 
 type SettingsState = {
   searchAd: {
@@ -173,6 +174,46 @@ export default function SettingsPage() {
         <span className="mono">data/backoffice.db</span> 에만 저장됩니다.
       </p>
 
+      <details style={{ marginBottom: 18 }}>
+        <summary>처음이신가요? 어디까지 등록해야 무엇이 되는지</summary>
+        <table style={{ marginTop: 10 }}>
+          <thead>
+            <tr>
+              <th style={{ width: 200 }}>등록한 것</th>
+              <th>쓸 수 있는 기능</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>검색광고 + Gemini</td>
+              <td>
+                키워드 탐색 → 글 작성 → 네이버·티스토리 복사 <strong>(블로그는 이것만으로 완결)</strong>
+              </td>
+            </tr>
+            <tr>
+              <td>+ YouTube</td>
+              <td>쇼츠 소재 검색 · 댓글 타임스탬프 하이라이트 · 유아 인기 영상 조회</td>
+            </tr>
+            <tr>
+              <td>+ Claude</td>
+              <td>유아 채널 기획안 (캐릭터 · 대본 · 장면 프롬프트)</td>
+            </tr>
+            <tr>
+              <td>+ Fish Audio</td>
+              <td>내레이션 음성 (무료 등급 가능)</td>
+            </tr>
+            <tr>
+              <td>+ GA4 · 애드센스</td>
+              <td>발행 후 조회수 · 수익 회수 (티스토리만)</td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="hint" style={{ marginBottom: 0 }}>
+          영상 렌더는 ffmpeg 가 필요해 로컬에서만 됩니다. 터미널에{" "}
+          <span className="mono">npm run worker</span> 를 띄워두세요.
+        </p>
+      </details>
+
       {notice && <div className="alert ok">{notice}</div>}
       {error && (
         <div className="alert warn" style={{ whiteSpace: "pre-wrap" }}>
@@ -182,7 +223,8 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          네이버 검색광고 API{" "}
+          네이버 검색광고 API
+          <Help text="이 백오피스의 핵심 소스입니다. 이것만 있어도 키워드 탐색 → 글 작성 → 복사까지 전부 됩니다.&#10;광고를 집행하지 않아도 발급되고, 무료입니다." />{" "}
           {state && (
             <Status
               configured={state.searchAd.configured}
@@ -473,7 +515,8 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          Gemini API{" "}
+          Gemini API
+          <Help text="블로그 본문·제목·태그를 생성합니다. 무료 티어로 충분하지만 쿼터가 빡빡해서, 키를 여러 개 넣으면 걸린 키를 건너뜁니다.&#10;유아 채널의 Veo 영상 생성도 같은 키를 씁니다(단 Veo 는 유료 프로젝트 키 필요)." />{" "}
           {state && (
             <Status
               configured={state.gemini.configured}
@@ -527,7 +570,8 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          YouTube Data API{" "}
+          YouTube Data API
+          <Help text="쇼츠의 인기 영상·CC 소재 검색과 댓글 하이라이트, 유아 채널의 인기 영상 조회에 씁니다.&#10;블로그만 쓸 거면 없어도 됩니다." />{" "}
           {state?.youtube && (
             <Status
               configured={state.youtube.configured}
@@ -563,7 +607,8 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          Claude API — 영상 기획{" "}
+          Claude API — 영상 기획
+          <Help text="유아 채널의 기획안(캐릭터·대본·장면 프롬프트)만 만듭니다. 블로그 본문은 계속 Gemini 가 담당합니다.&#10;영상을 안 만들 거면 없어도 됩니다." />{" "}
           {state?.claude && (
             <Status
               configured={state.claude.configured}
@@ -644,7 +689,8 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          Fish Audio — 내레이션 음성{" "}
+          Fish Audio — 내레이션 음성
+          <Help text="유아 채널 영상의 내레이션을 만듭니다. 무료 등급으로 시작해도 유료와 같은 모델입니다.&#10;fish.audio 에서 한국어 목소리를 골라두면 더 자연스럽습니다." />{" "}
           {state?.fish && (
             <Status
               configured={state.fish.configured}

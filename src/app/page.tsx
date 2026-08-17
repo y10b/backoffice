@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { COMPETITION_LABEL, competitionLevel } from "@/lib/competition";
 import type { SerpStats } from "@/lib/serp";
+import Help from "@/components/Help";
 import type { Keyword, KeywordFetchResult } from "@/lib/types";
 
 type SettingsState = {
@@ -360,10 +361,16 @@ export default function KeywordsPage() {
       </div>
 
       <div className="card">
-        <h2>조회 조건</h2>
+        <h2>
+          조회 조건
+          <Help text="시드 키워드를 넣으면 검색광고 API 가 연관 키워드와 월간 검색수를 돌려줍니다.&#10;여기서 후보를 좁힌 뒤, 표에서 체크해 '경쟁 분석' 으로 상위권 상태를 확인하는 2단계 흐름입니다." />
+        </h2>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 300 }}>
-            <label>시드 키워드 (콤마 구분, 최대 5개)</label>
+            <label>
+              시드 키워드 (콤마 구분, 최대 5개)
+              <Help text="넓은 주제어를 넣으세요. '제주도 여행' 처럼 큰 말을 넣으면 그 아래 연관 키워드 수백 개가 나옵니다.&#10;좁은 말을 넣으면 후보가 몇 개 안 나옵니다. 검색광고는 공백을 무시하니 띄어쓰기는 신경 쓰지 않아도 됩니다." />
+            </label>
             <input
               placeholder="제주도 여행, 캠핑 준비물"
               value={seedInput}
@@ -374,7 +381,10 @@ export default function KeywordsPage() {
             />
           </div>
           <div className="field">
-            <label>정렬</label>
+            <label>
+              정렬
+              <Help text="'광고 흡수율 낮은 순' 이 블로그에 가장 유용합니다 — 광고가 안 가져가는 정보성 검색이라는 뜻입니다.&#10;애드센스를 달았다면 '수익 잠재력' 으로 두세요.&#10;정렬은 잘라내기 전 전체 후보에 적용되므로 검색량 상위에 없는 키워드도 발굴됩니다(문서수·경쟁률 정렬만 예외)." />
+            </label>
             <select value={sort} onChange={(e) => setSort(e.target.value)}>
               {SORTS.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -384,7 +394,10 @@ export default function KeywordsPage() {
             </select>
           </div>
           <div className="field">
-            <label>최소 검색수</label>
+            <label>
+              최소 검색수
+              <Help text="이 값 미만인 키워드를 버립니다. 너무 낮으면 아무도 안 찾는 말이 섞이고, 너무 높으면 경쟁이 센 것만 남습니다.&#10;블로그 초기에는 500~2,000 정도가 무난합니다." />
+            </label>
             <input
               type="number"
               min={0}
@@ -395,7 +408,10 @@ export default function KeywordsPage() {
             />
           </div>
           <div className="field">
-            <label>개수</label>
+            <label>
+              개수
+              <Help text="표에 몇 개까지 보여줄지. 문서수를 함께 조회하면 키워드 1건당 API 1호출이라, 50 으로 두면 한 번 조회에 50회를 씁니다." />
+            </label>
             <input
               type="number"
               min={5}

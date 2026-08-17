@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { markdownToHtml, countChars } from "@/lib/markdown";
+import Help from "@/components/Help";
 import { copyRichHtml, copyText } from "@/lib/clipboard";
 import type { StoredImage } from "@/lib/images";
 import { applyVisuals, type Visual } from "@/lib/visuals";
@@ -411,10 +412,16 @@ function WritePageInner() {
       {notice && <div className="alert ok">{notice}</div>}
 
       <div className="card">
-        <h2>주제</h2>
+        <h2>
+          주제
+          <Help text="제목에 메인·서브 키워드가 원형 그대로 들어가게 만듭니다. 조사가 끼어 키워드가 끊기면 검색에 안 걸립니다.&#10;'서브 키워드 제안' 을 누르면 조합 후보 5개와 제목안을 함께 받습니다." />
+        </h2>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 200 }}>
-            <label>메인 키워드</label>
+            <label>
+              메인 키워드
+              <Help text="글의 중심 검색어입니다. 제목 앞쪽에 배치되고 본문에 5~8회 등장합니다.&#10;키워드 탐색 화면에서 '작성' 을 누르면 자동으로 채워집니다." />
+            </label>
             <input
               value={mainKeyword}
               onChange={(e) => setMainKeyword(e.target.value)}
@@ -422,7 +429,10 @@ function WritePageInner() {
             />
           </div>
           <div className="field" style={{ flex: 1, minWidth: 200 }}>
-            <label>서브 키워드</label>
+            <label>
+              서브 키워드
+              <Help text="메인 키워드와 조합해 검색 의도를 좁히는 말입니다. 예: '제주도 여행' + '3박4일 코스'.&#10;비워두면 제목이 넓어져 경쟁이 심한 검색어와 부딪칩니다." />
+            </label>
             <input
               value={subKeyword}
               onChange={(e) => setSubKeyword(e.target.value)}
@@ -530,14 +540,23 @@ function WritePageInner() {
       </div>
 
       <div className="card">
-        <h2>생성 옵션</h2>
+        <h2>
+          생성 옵션
+          <Help text="Gemini 가 제목·본문·태그·메타 설명·FAQ 를 한 번에 만들고 글 목록에 자동 저장합니다.&#10;검색 그라운딩이 켜져 있으면 본문 작성 전에 최신 수치를 먼저 조사합니다(2패스라 시간과 쿼터가 2배)." />
+        </h2>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
-            <label>문체</label>
+            <label>
+              문체
+              <Help text="말투와 밀도를 정합니다. 그대로 프롬프트에 들어가니 자유롭게 쓰세요.&#10;예: 20대 여성 대상 친근한 말투, 전문가가 설명하는 담백한 문체." />
+            </label>
             <input value={tone} onChange={(e) => setTone(e.target.value)} />
           </div>
           <div className="field">
-            <label>분량 (공백 제외)</label>
+            <label>
+              분량 (공백 제외)
+              <Help text="네이버 블로그는 1,500자 이상에서 체류시간이 붙습니다. 2,000자 내외가 무난하고, 3,000자를 넘기면 모델이 내용을 늘리려 반복하기 시작합니다." />
+            </label>
             <input
               type="number"
               step={200}
@@ -550,7 +569,10 @@ function WritePageInner() {
           </div>
         </div>
         <div className="field" style={{ marginTop: 10 }}>
-          <label>반드시 다룰 내용 (선택)</label>
+          <label>
+            반드시 다룰 내용 (선택)
+            <Help text="꼭 포함할 소제목, 내 경험, 강조할 포인트를 적으세요.&#10;여기에 적은 내용이 다른 블로그와 차별점이 됩니다 — 비워두면 어디서 본 듯한 글이 나옵니다." />
+          </label>
           <textarea
             rows={3}
             value={outline}
@@ -621,7 +643,10 @@ function WritePageInner() {
           </div>
 
           <div className="card">
-            <h2>복사</h2>
+            <h2>
+            복사
+            <Help text="네이버와 티스토리는 붙여넣기 방식이 다릅니다.&#10;· 네이버 — 스마트에디터 본문에 그대로 ⌘V (소제목·굵게가 살아납니다)&#10;· 티스토리 — 에디터를 HTML 모드로 바꾼 뒤 ⌘V" />
+          </h2>
             <div className="row">
               <button onClick={() => copyText(title).then(() => flash("제목 복사됨"))}>
                 제목
