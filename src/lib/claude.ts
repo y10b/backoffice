@@ -43,6 +43,10 @@ export type Scene = {
 };
 
 export type KidsVideoPlan = {
+  /** 참고 영상에서 읽어낸 구성. 왜 이 기획이 나왔는지 근거가 된다 */
+  analysis: string;
+  /** 모델이 정한(또는 사용자가 넣은) 주제 */
+  theme: string;
   title: string;
   description: string;
   concept: string;
@@ -65,6 +69,8 @@ const PLAN_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
+    analysis: { type: "string" },
+    theme: { type: "string" },
     title: { type: "string" },
     description: { type: "string" },
     concept: { type: "string" },
@@ -89,6 +95,8 @@ const PLAN_SCHEMA = {
     safetyNotes: { type: "array", items: { type: "string" } },
   },
   required: [
+    "analysis",
+    "theme",
     "title",
     "description",
     "concept",
@@ -100,11 +108,29 @@ const PLAN_SCHEMA = {
   ],
 } as const;
 
+/** 분석해 모티브로 삼을 참고 영상 */
+export type SourceVideo = {
+  title: string;
+  channel: string;
+  description: string;
+  durationSec: number | null;
+  views: number | null;
+};
+
 export type PlanOptions = {
   /** 모티브로 삼을 인기 영상 제목들 */
   motifs: string[];
-  /** 주제 (예: 색깔 배우기, 동물 소리) */
+  /**
+   * 주제. 참고 영상을 주면 비워도 된다 — 모델이 영상 구성을 읽고 직접 정한다.
+   */
   theme: string;
+  /**
+   * 분석할 참고 영상 하나.
+   *
+   * 제목만 넘기는 것과 다르다. 설명란과 길이까지 주면 "몇 개 항목을 어떤 순서로 다루고
+   * 후렴을 어디서 반복하는지" 같은 구성을 읽어낼 수 있다.
+   */
+  source?: SourceVideo;
   /** 대상 연령 */
   targetAge?: string;
   sceneCount?: number;
@@ -154,8 +180,31 @@ function buildPrompt(o: PlanOptions): string {
   const sceneCount = o.sceneCount ?? 8;
   const secondsPerScene = o.secondsPerScene ?? 5;
 
+  const source = o.source;
   return [
-    `## 주제\n${o.theme}`,
+    source
+      ? [
+          "## 분석할 참고 영상",
+          `제목: ${source.title}`,
+          `채널: ${source.channel}`,
+          source.durationSec ? `길이: ${Math.round(source.durationSec)}초` : "",
+          source.views ? `조회수: ${source.views.toLocaleString()}` : "",
+          // 설명란은 길면 프롬프트를 잡아먹는다. 구성 파악에는 앞부분으로 충분하다
+          source.description.trim()
+            ? `설명란:\n${source.description.trim().slice(0, 1200)}`
+            : "",
+          "",
+          "이 영상이 **왜 먹혔는지** 구성을 먼저 분석하세요 — 몇 개 항목을 어떤 순서로 다루는지,",
+          "후렴이나 반복이 어디서 들어가는지, 길이를 어떻게 배분했는지. 그 분석을 analysis 에 적고,",
+          "**같은 구성으로 완전히 새로운 캐릭터와 소재**의 기획을 만드세요.",
+          "제목·캐릭터·가사를 베끼는 게 아니라 구조만 가져옵니다.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "",
+    o.theme?.trim()
+      ? `## 주제\n${o.theme}`
+      : "## 주제\n참고 영상의 구성에 맞는 주제를 직접 정해서 theme 에 적으세요.",
     o.motifs.length
       ? `## 참고할 인기 영상 제목 (구성만 참고, 캐릭터는 새로 설계)\n${o.motifs
           .slice(0, 20)
@@ -172,13 +221,16 @@ function buildPrompt(o: PlanOptions): string {
     "- tags 는 10개.",
     "- safetyNotes 에는 이 기획에서 사람이 직접 확인해야 할 항목을 적으세요 (예: 특정 표현이 기존 IP 와",
     "  겹칠 여지, 연령 적합성 재확인 지점).",
+    "- analysis 는 한국어로, 참고 영상에서 읽어낸 구성과 그것을 어떻게 바꿔 적용했는지 적으세요.",
   ]
     .filter(Boolean)
     .join("\n\n");
 }
 
 export async function planKidsVideo(o: PlanOptions): Promise<KidsVideoPlan> {
-  if (!o.theme?.trim()) throw new Error("주제가 비어 있습니다.");
+  if (!o.theme?.trim() && !o.source) {
+    throw new Error("주제를 입력하거나 참고 영상을 고르세요.");
+  }
 
   const anthropic = await client();
   const model = await claudeModel();
@@ -237,6 +289,8 @@ export async function planKidsVideo(o: PlanOptions): Promise<KidsVideoPlan> {
   if (!scenes.length) throw new Error("기획안에 장면이 없습니다.");
 
   return {
+    analysis: String(parsed.analysis ?? "").trim(),
+    theme: String(parsed.theme ?? o.theme ?? "").trim(),
     title: String(parsed.title ?? "").trim(),
     description: String(parsed.description ?? "").trim(),
     concept: String(parsed.concept ?? "").trim(),

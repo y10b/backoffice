@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { searchPopular } from "@/lib/youtube";
+import { searchPopular, videoDetails } from "@/lib/youtube";
 import { composeScenePrompt, planKidsVideo, type KidsVideoPlan } from "@/lib/claude";
 import { fetchVideo, pollVideo, submitVideo } from "@/lib/veo";
 import { searchVoices, synthesize } from "@/lib/fishaudio";
@@ -126,9 +126,26 @@ export async function POST(req: Request) {
 
   if (mode === "plan") {
     try {
+      /*
+       * 참고 영상을 고른 경우 설명란까지 다시 받아온다.
+       * 목록(search)의 응답에도 description 이 들어 있지만, 화면이 그걸 그대로 되돌려
+       * 보내게 하면 사용자가 고친 값이 섞일 수 있다. 원본을 서버에서 다시 읽는다.
+       */
+      const sourceId = String(body.sourceVideoId ?? "").trim();
+      const detail = sourceId ? await videoDetails(sourceId).catch(() => null) : null;
+
       const plan = await planKidsVideo({
         motifs: Array.isArray(body.motifs) ? body.motifs.map(String) : [],
         theme: String(body.theme ?? ""),
+        source: detail
+          ? {
+              title: detail.title,
+              channel: detail.channel,
+              description: detail.description,
+              durationSec: detail.durationSec,
+              views: detail.views,
+            }
+          : undefined,
         targetAge: body.targetAge ? String(body.targetAge) : undefined,
         sceneCount: body.sceneCount ? Number(body.sceneCount) : undefined,
         secondsPerScene: body.secondsPerScene ? Number(body.secondsPerScene) : undefined,

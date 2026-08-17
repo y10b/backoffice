@@ -37,6 +37,9 @@ type Scene = {
 };
 
 type Plan = {
+  /** 참고 영상에서 읽어낸 구성 */
+  analysis: string;
+  theme: string;
   title: string;
   description: string;
   concept: string;
@@ -89,7 +92,8 @@ export default function KidsPage() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
   const [videos, setVideos] = useState<YtVideo[]>([]);
-  const [picked, setPicked] = useState<Set<string>>(new Set());
+  /* 분석할 참고 영상 하나. 체크박스 여러 개 대신 행 클릭으로 고른다 */
+  const [source, setSource] = useState<YtVideo | null>(null);
   const [discoverNote, setDiscoverNote] = useState("");
   const [searching, setSearching] = useState(false);
 
@@ -142,23 +146,27 @@ export default function KidsPage() {
     }
   }
 
-  function togglePick(id: string) {
-    setPicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
+  /** 목록의 나머지 제목들. 같은 장르에서 무엇이 먹히는지 함께 넘긴다 */
   const motifs = useMemo(
-    () => videos.filter((v) => picked.has(v.id)).map((v) => v.title),
-    [videos, picked],
+    () => videos.filter((v) => v.id !== source?.id).map((v) => v.title).slice(0, 20),
+    [videos, source],
   );
 
-  async function makePlan() {
-    if (!theme.trim()) {
-      setError("주제를 입력하세요.");
+  /**
+   * 참고 영상을 골라 바로 기획까지 간다.
+   *
+   * 영상을 고르는 것과 기획을 시작하는 것을 따로 누르게 하면 한 번 더 손이 간다.
+   * 행을 누르면 그 영상을 분석해 주제까지 모델이 정한다.
+   */
+  async function analyzeAndPlan(v: YtVideo) {
+    setSource(v);
+    await makePlan(v);
+  }
+
+  async function makePlan(sourceVideo?: YtVideo | null) {
+    const src = sourceVideo ?? source;
+    if (!theme.trim() && !src) {
+      setError("주제를 입력하거나 위에서 참고 영상을 고르세요.");
       return;
     }
     setPlanning(true);
@@ -174,6 +182,7 @@ export default function KidsPage() {
             mode: "plan",
             theme,
             motifs,
+            sourceVideoId: src?.id,
             sceneCount,
             secondsPerScene,
             notes,
@@ -445,45 +454,67 @@ export default function KidsPage() {
         {videos.length > 0 && (
           <>
             <p className="hint">
-              {discoverNote} · 구성을 참고할 영상을 고르세요 ({picked.size}개 선택). 제목만
-              기획 근거로 넘어갑니다.
+              {discoverNote} · <strong>행을 누르면</strong> 그 영상의 구성을 분석해 기획안까지
+              바로 만듭니다. 제목·설명란·길이만 읽습니다 — 영상 파일은 쓰지 않습니다.
             </p>
-            <table style={{ marginTop: 8 }}>
-              <thead>
-                <tr>
-                  <th style={{ width: 40 }} />
-                  <th>제목</th>
-                  <th style={{ width: 130 }}>채널</th>
-                  <th style={{ width: 90 }} className="num">
-                    조회수
-                  </th>
-                  <th style={{ width: 60 }} className="num">
-                    길이
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {videos.map((v) => (
-                  <tr key={v.id}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={picked.has(v.id)}
-                        onChange={() => togglePick(v.id)}
-                      />
-                    </td>
-                    <td>
-                      <a href={v.url} target="_blank" rel="noopener">
-                        {v.title}
-                      </a>
-                    </td>
-                    <td style={{ color: "var(--text-dim)", fontSize: 12 }}>{v.channel}</td>
-                    <td className="num">{num(v.views)}</td>
-                    <td className="num">{mmss(v.durationSec)}</td>
+            <div className="table-wrap" style={{ marginTop: 8 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ width: 70 }} />
+                    <th>제목</th>
+                    <th style={{ width: 130 }}>채널</th>
+                    <th style={{ width: 90 }} className="num">
+                      조회수
+                    </th>
+                    <th style={{ width: 60 }} className="num">
+                      길이
+                    </th>
+                    <th style={{ width: 90 }} />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {videos.map((v) => (
+                    <tr
+                      key={v.id}
+                      onClick={() => analyzeAndPlan(v)}
+                      style={{ cursor: "pointer" }}
+                      className={source?.id === v.id ? "picked-row" : ""}
+                    >
+                      <td>
+                        {/* 원격 썸네일이라 next/image 최적화 대상이 아니다 */}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={v.thumbnail} alt="" style={{ width: 60, borderRadius: 4 }} />
+                      </td>
+                      <td>
+                        {/* 제목 링크는 행 클릭과 겹치므로 전파를 멈춘다 */}
+                        <a
+                          href={v.url}
+                          target="_blank"
+                          rel="noopener"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {v.title}
+                        </a>
+                      </td>
+                      <td style={{ color: "var(--text-dim)", fontSize: 12 }}>{v.channel}</td>
+                      <td className="num">{num(v.views)}</td>
+                      <td className="num">{mmss(v.durationSec)}</td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="small"
+                          onClick={() => analyzeAndPlan(v)}
+                          disabled={planning}
+                        >
+                          {planning && source?.id === v.id && <span className="spinner" />}
+                          분석
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </>
         )}
       </div>
@@ -496,12 +527,12 @@ export default function KidsPage() {
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 220 }}>
             <label>
-              주제
-              <Help text="한 편에 하나만 다루세요. '색깔 배우기'처럼 좁을수록 반복 구조가 잘 나옵니다.&#10;아래 버튼으로 검증된 주제를 바로 넣을 수 있습니다." />
+              주제 (선택)
+              <Help text="위에서 영상을 골라 분석했다면 비워두세요 — 모델이 구성에 맞는 주제를 직접 정합니다.&#10;직접 정하고 싶을 때만 넣으세요. 한 편에 하나만 다루세요. '색깔 배우기'처럼 좁을수록 반복 구조가 잘 나옵니다.&#10;아래 버튼으로 검증된 주제를 바로 넣을 수 있습니다." />
             </label>
             <input
               value={theme}
-              placeholder="예: 색깔 배우기"
+              placeholder="비워두면 분석한 영상에 맞춰 자동으로 정합니다"
               onChange={(e) => setTheme(e.target.value)}
             />
           </div>
@@ -569,8 +600,8 @@ export default function KidsPage() {
         <button
           className="primary"
           style={{ marginTop: 10 }}
-          onClick={makePlan}
-          disabled={planning || !theme.trim()}
+          onClick={() => makePlan()}
+          disabled={planning || (!theme.trim() && !source)}
         >
           {planning && <span className="spinner" />}
           {planning ? "기획 중… (1분 내외)" : "기획안 생성"}
@@ -585,8 +616,22 @@ export default function KidsPage() {
               <label>제목</label>
               <input value={plan.title} readOnly />
             </div>
+            {plan.analysis && (
+              <details open style={{ marginTop: 12 }}>
+                <summary>
+                  참고 영상에서 읽어낸 구성
+                  {source && (
+                    <span className="dim" style={{ fontSize: 12 }}> · {source.title}</span>
+                  )}
+                </summary>
+                <p style={{ margin: "8px 0 0", whiteSpace: "pre-line", fontSize: 13 }}>
+                  {plan.analysis}
+                </p>
+              </details>
+            )}
+
             <p className="hint" style={{ marginTop: 10 }}>
-              <strong>컨셉</strong> · {plan.concept}
+              <strong>주제</strong> {plan.theme} · <strong>컨셉</strong> {plan.concept}
             </p>
 
             <div className="field" style={{ marginTop: 10 }}>
@@ -679,6 +724,9 @@ export default function KidsPage() {
                   </th>
                   <th style={{ width: 200 }}>한국어 (자막/가사)</th>
                   <th>장면 프롬프트 (영문)</th>
+                  <th style={{ width: 90 }} title="이 장면 하나의 프롬프트를 복사합니다. Flow 는 한 번에 한 클립씩 만들므로, 장면마다 눌러 붙여넣는 게 실제 작업 순서와 맞습니다">
+                    Flow
+                  </th>
                   <th style={{ width: 130 }}>상태</th>
                   <th style={{ width: 80 }} />
                   <th style={{ width: 150 }} title="장면 대사를 Fish Audio 로 읽힙니다. 여기서 만드는 건 미리듣기용이고, 실제 영상에 깔리는 오디오는 4단계의 &#39;내레이션 만들기&#39; 입니다">내레이션</th>
@@ -700,6 +748,18 @@ export default function KidsPage() {
                       </td>
                       <td className="mono" style={{ fontSize: 11 }}>
                         {s.videoPrompt}
+                      </td>
+                      <td>
+                        <button
+                          className="small"
+                          onClick={() =>
+                            copyText(
+                              `${plan.characterSheet} ${plan.styleSheet} ${s.videoPrompt}`,
+                            ).then(() => flash(`${s.index}번 장면 프롬프트 복사됨`))
+                          }
+                        >
+                          복사
+                        </button>
                       </td>
                       <td style={{ fontSize: 12 }}>
                         {!job && <span className="dim">—</span>}

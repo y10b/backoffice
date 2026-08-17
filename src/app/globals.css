@@ -889,3 +889,9 @@ button.icon {
 label .help {
   margin-left: 4px;
 }
+
+/* 표에서 지금 고른 행. 행 클릭으로 상세를 여는 표에 쓴다 */
+tbody tr.picked-row {
+  background: rgba(61, 220, 132, 0.08);
+  box-shadow: inset 3px 0 0 var(--accent);
+}

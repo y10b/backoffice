@@ -66,6 +66,8 @@ export type YtVideo = {
   title: string;
   channel: string;
   publishedAt: string;
+  /** 설명란. 기획 참고용으로 구성을 읽을 때 쓴다. 길면 잘라서 넘긴다 */
+  description: string;
   views: number | null;
   likes: number | null;
   comments: number | null;
@@ -114,6 +116,7 @@ function toVideo(item: any): YtVideo {
     title: String(item?.snippet?.title ?? ""),
     channel: String(item?.snippet?.channelTitle ?? ""),
     publishedAt: String(item?.snippet?.publishedAt ?? ""),
+    description: String(item?.snippet?.description ?? ""),
     views: num(item?.statistics?.viewCount),
     likes: num(item?.statistics?.likeCount),
     comments: num(item?.statistics?.commentCount),

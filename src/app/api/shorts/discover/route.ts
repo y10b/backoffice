@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   allComments,
   searchCreativeCommons,
+  searchPopular,
   topComments,
   trendingVideos,
   videoDetails,
@@ -58,7 +59,52 @@ export async function GET(req: Request) {
     }
   }
 
-  /* 가공 가능한 소재 — 두 소스를 나란히 */
+  /*
+   * 게임 영상 검색 — 댓글 하이라이트를 뜨기 위한 후보 목록.
+   *
+   * 라이선스로 걸러내지 않는다. 여기서 하는 건 댓글 분석이고 영상 파일에는 손대지 않는다.
+   * CC 로 좁히면 정작 댓글이 많이 달린 인기 영상이 전부 빠져 목록이 쓸모없어진다.
+   */
+  if (mode === "search") {
+    if (!query) {
+      return NextResponse.json(
+        { ok: false, error: "검색어를 입력하세요.", videos: [] },
+        { status: 400 },
+      );
+    }
+    const months = Number(url.searchParams.get("months") ?? 6) || 6;
+    const publishedAfter = new Date(
+      Date.now() - months * 30 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    try {
+      const videos = await searchPopular(query, {
+        maxResults: 25,
+        // 60개월이면 사실상 전체다. 그때는 기간 조건을 아예 빼서 옛 영상도 잡는다
+        publishedAfter: months >= 60 ? undefined : publishedAfter,
+      });
+      // 댓글이 잠긴 영상은 하이라이트를 뜰 수 없어 뒤로 보낸다
+      videos.sort((a, b) => Number(b.commentsEnabled) - Number(a.commentsEnabled));
+      return NextResponse.json({
+        ok: true,
+        mode,
+        videos,
+        note: `${months >= 60 ? "전체 기간" : `최근 ${months}개월`} · 조회수순 ${videos.length}건`,
+        sources: [
+          {
+            id: "youtube-search",
+            label: "유튜브 검색",
+            ok: true,
+            message: `${videos.length}건 · 댓글 열림 ${videos.filter((v) => v.commentsEnabled).length}건`,
+          },
+        ],
+      });
+    } catch (e) {
+      return NextResponse.json({ ok: false, mode, videos: [], error: (e as Error).message });
+    }
+  }
+
+  /* 가공 가능한 소재 — 두 소스를 나란히. 지금 화면에서는 쓰지 않지만 남겨둔다 */
   if (mode === "sources") {
     if (!query) {
       return NextResponse.json(

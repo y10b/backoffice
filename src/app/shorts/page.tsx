@@ -4,15 +4,19 @@ import { useCallback, useEffect, useState } from "react";
 import Help from "@/components/Help";
 
 /**
- * 쇼츠 만들기.
+ * 쇼츠 만들기 — 게임 채널.
  *
  * 흐름은 세 단계다.
- *   1. 무엇을 만들지 정한다 (인기 급상승 = 지금 뭐가 뜨는지)
- *   2. 실제로 가공해도 되는 소재를 고른다 (CC / 공개 도메인)
- *   3. 댓글·문구를 얹어 렌더한다
+ *   1. 게임 영상을 검색한다 (키워드 탐색 화면과 같은 표 형태)
+ *   2. 행을 누르면 그 영상의 댓글 타임스탬프를 집계해 하이라이트 구간을 찾는다
+ *   3. 그 구간을 참고해 **내가 녹화한 파일**로 렌더한다
  *
- * 1단계의 영상은 대부분 표준 라이선스라 **그대로 가공하면 안 된다.** 기획 근거로만 쓰고,
- * 소재는 2단계에서 따로 고른다. 화면에서 이 구분이 보이도록 라이선스를 항상 함께 띄운다.
+ * 2단계는 분석이라 어느 영상에든 돌려도 되지만, 나오는 건 "몇 초 지점이 먹혔나"라는
+ * 정보이지 그 영상을 쓸 권리가 아니다. 게임은 직접 플레이해 녹화하면 온전히 내 소재가
+ * 되므로, 어느 장면을 노릴지만 여기서 정한다.
+ *
+ * 역사 소재(공공누리 업로드·Internet Archive)를 쓰던 시절의 화면은 걷어냈다.
+ * API 쪽 `mode=sources` / `mode=files` 는 남겨뒀으니 되돌릴 수 있다.
  */
 
 type YtVideo = {
@@ -30,25 +34,7 @@ type YtVideo = {
   url: string;
 };
 
-type ArchiveRow = {
-  identifier: string;
-  title: string;
-  creator: string;
-  year: string;
-  license: string;
-  /** 재사용해도 되는지 확인됐는가. 표기 없음은 확인 안 된 것이지 공개 도메인이 아니다 */
-  licenseConfirmed: boolean;
-  detailUrl: string;
-  thumbnail: string;
-};
 
-type ArchiveFile = {
-  name: string;
-  format: string;
-  sizeBytes: number | null;
-  durationSec: number | null;
-  downloadUrl: string;
-};
 
 type Comment = { id: string; author: string; text: string; likes: number };
 
@@ -62,10 +48,6 @@ type Highlight = {
   samples: { at: number; likes: number; text: string; author: string }[];
 };
 type HistBin = { start: number; mentions: number; score: number };
-type SourceFile = {
-  name: string; originalName: string; origin: string; license: string;
-  sizeBytes: number; path: string;
-};
 type Source = { id: string; label: string; ok: boolean; message: string };
 type Job = {
   id: number;
@@ -86,27 +68,19 @@ type Job = {
  *
  * 좁은 검색어는 금방 마른다(`seoul 1950` 은 88건뿐이었다). 넓게 훑고 그 안에서 고른다.
  */
-const SEED_PRESETS = [
-  // 컬렉션으로 좁히지 않으면 무단 업로드가 섞인다. `seoul korea` 만 넣었을 때는
-  // SBS 뉴스 클립이 여럿 나왔다. 미국 정부 제작물은 저작권 자체가 없어 가장 안전하다.
-  {
-    label: "한국전쟁 (미 정부)",
-    q: 'korea AND collection:(FedFlix OR usgovfilms OR nationalarchives)',
-  },
-  {
-    label: "미군 촬영 기록",
-    q: 'korea AND (creator:"U.S. Army" OR creator:"United States. Department of Defense")',
-  },
-  {
-    label: "전투 기록영상",
-    q: '"combat bulletin" OR "big picture" AND korea',
-  },
-  {
-    label: "1950년대 한국",
-    q: 'korea AND date:[1950-01-01 TO 1959-12-31] AND collection:(FedFlix OR usgovfilms)',
-  },
-  // 아래는 범위가 넓어 무단 업로드가 섞일 수 있다. 라이선스 배지를 꼭 확인할 것
-  { label: "한국 일반 (확인 필요)", q: "korea OR korean" },
+/**
+ * 자주 쓰는 검색어.
+ *
+ * 게임으로 방향을 잡았다. 댓글 타임스탬프는 "그 장면"이 뚜렷한 장르에서 많이 달리고,
+ * 게임이 그중 제일 많다. 롱폼 하이라이트 영상에 특히 잘 붙는다.
+ */
+const GAME_PRESETS = [
+  "롤 하드캐리",
+  "배그 클러치",
+  "발로란트 에이스",
+  "오버워치 팀킬",
+  "스타 역전",
+  "피파 골모음",
 ];
 
 function num(n: number | null | undefined): string {
@@ -148,21 +122,14 @@ function LicenseBadge({ video }: { video: YtVideo }) {
 }
 
 export default function ShortsPage() {
-  const [tab, setTab] = useState<"trend" | "source">("trend");
-
-  const [trending, setTrending] = useState<YtVideo[]>([]);
-  const [trendSources, setTrendSources] = useState<Source[]>([]);
-  const [loadingTrend, setLoadingTrend] = useState(false);
-
+  /* 검색·인기 급상승이 같은 표를 채운다. 두 탭으로 나눌 이유가 없었다 */
+  const [videos, setVideos] = useState<YtVideo[]>([]);
+  const [listNote, setListNote] = useState("");
   const [query, setQuery] = useState("");
-  const [ytCc, setYtCc] = useState<YtVideo[]>([]);
-  const [archive, setArchive] = useState<ArchiveRow[]>([]);
+  const [months, setMonths] = useState(6);
   const [srcSources, setSrcSources] = useState<Source[]>([]);
   const [searching, setSearching] = useState(false);
-
-  const [files, setFiles] = useState<ArchiveFile[]>([]);
-  const [filesFor, setFilesFor] = useState("");
-  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [loadingTrend, setLoadingTrend] = useState(false);
 
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentsFor, setCommentsFor] = useState("");
@@ -196,41 +163,6 @@ export default function ShortsPage() {
   const [error, setError] = useState("");
   const [jobs, setJobs] = useState<Job[]>([]);
 
-  // 직접 받아온 소재 (국내 공공 아카이브는 API 가 없어 수동으로 받아 넣는다)
-  const [myFiles, setMyFiles] = useState<SourceFile[]>([]);
-  const [upOrigin, setUpOrigin] = useState("");
-  const [upLicense, setUpLicense] = useState("공공누리 제1유형");
-  const [uploading, setUploading] = useState(false);
-
-  const loadMyFiles = useCallback(() => {
-    fetch("/api/shorts/sources")
-      .then((r) => r.json())
-      .then((d) => setMyFiles(d.sources ?? []))
-      .catch(() => {});
-  }, []);
-
-  async function uploadSource(file: File | undefined) {
-    if (!file) return;
-    if (!upOrigin.trim()) {
-      setError("출처를 적어주세요. 공공누리는 출처 표시가 이용 조건입니다.");
-      return;
-    }
-    setUploading(true);
-    setError("");
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("origin", upOrigin);
-      form.append("license", upLicense);
-      const d = await (await fetch("/api/shorts/sources", { method: "POST", body: form })).json();
-      if (!d.ok) setError(d.error ?? "업로드에 실패했습니다.");
-      else loadMyFiles();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setUploading(false);
-    }
-  }
 
   const loadJobs = useCallback(() => {
     fetch("/api/shorts/jobs")
@@ -241,7 +173,6 @@ export default function ShortsPage() {
 
   useEffect(() => {
     loadJobs();
-    loadMyFiles();
     loadTrending();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -270,8 +201,9 @@ export default function ShortsPage() {
     setError("");
     try {
       const d = await (await fetch("/api/shorts/discover?mode=trending")).json();
-      setTrending(d.videos ?? []);
-      setTrendSources(d.sources ?? []);
+      setVideos(d.videos ?? []);
+      setSrcSources(d.sources ?? []);
+      setListNote("인기 급상승 (국내)");
       if (d.error) setError(d.error);
     } catch (e) {
       setError((e as Error).message);
@@ -280,18 +212,26 @@ export default function ShortsPage() {
     }
   }
 
+  /**
+   * 게임 영상 검색.
+   *
+   * 라이선스로 걸러내지 않는다. 여기서 하는 건 댓글 분석이라 영상 파일에 손대지 않고,
+   * CC 로 좁히면 정작 댓글이 많이 달린 인기 영상이 전부 빠진다.
+   */
   async function searchSources() {
     if (!query.trim()) return;
     setSearching(true);
     setError("");
-    setFiles([]);
     try {
-      const d = await (
-        await fetch(`/api/shorts/discover?mode=sources&q=${encodeURIComponent(query.trim())}`)
-      ).json();
-      setYtCc(d.youtube ?? []);
-      setArchive(d.archive ?? []);
+      const params = new URLSearchParams({
+        mode: "search",
+        q: query.trim(),
+        months: String(months),
+      });
+      const d = await (await fetch(`/api/shorts/discover?${params}`)).json();
+      setVideos(d.videos ?? []);
       setSrcSources(d.sources ?? []);
+      setListNote(d.note ?? "");
       if (d.error) setError(d.error);
     } catch (e) {
       setError((e as Error).message);
@@ -300,19 +240,7 @@ export default function ShortsPage() {
     }
   }
 
-  async function loadFiles(identifier: string) {
-    setLoadingFiles(true);
-    setFilesFor(identifier);
-    try {
-      const d = await (
-        await fetch(`/api/shorts/discover?mode=files&identifier=${encodeURIComponent(identifier)}`)
-      ).json();
-      setFiles(d.files ?? []);
-      if (d.error) setError(d.error);
-    } finally {
-      setLoadingFiles(false);
-    }
-  }
+
 
   async function loadComments(videoId: string, videoTitle: string) {
     setLoadingComments(true);
@@ -414,83 +342,157 @@ export default function ShortsPage() {
     <>
       <h1 className="page-title">쇼츠</h1>
       <p className="page-desc">
-        지금 뜨는 주제를 찾고, <strong>가공해도 되는 소재</strong>를 골라, 인기 댓글과 자막을
-        얹어 9:16 세로 영상으로 만듭니다.
+        게임 영상을 검색해 <strong>댓글이 몰린 지점</strong>을 찾습니다. 어느 순간이 반응이
+        좋았는지 보고, 그 장면을 내 플레이로 만드는 흐름입니다.
       </p>
 
       {error && <div className="alert warn">{error}</div>}
 
       <div className="alert ok">
-        <strong>남의 영상을 그대로 가공하지 않습니다.</strong> 인기 급상승은 무엇이 뜨는지
-        보는 용도이고, 실제 소재는 CC 라이선스나 공개 도메인에서만 가져옵니다. 표준 라이선스
-        영상을 내려받아 재업로드하면 저작권과 유튜브 약관 양쪽에 걸립니다.
+        <strong>남의 영상 파일은 건드리지 않습니다.</strong> 여기서 얻는 건 &ldquo;몇 초 지점이
+        먹혔나&rdquo;라는 정보이고, 그 구간을 쓸 권리가 아닙니다. 게임은 내가 직접 플레이해
+        녹화하면 온전히 내 소재가 되므로, 어느 장면을 노릴지만 여기서 정하세요.
       </div>
 
       <div className="card">
-        <div className="row" style={{ marginBottom: 12 }}>
-          <button
-            className={tab === "trend" ? "primary" : "ghost"}
-            onClick={() => setTab("trend")}
-          >
-            1. 지금 뜨는 것
+        <h2>
+          영상 찾기
+          <Help text="게임 이름이나 상황을 한국어로 넣으세요. 예: 롤 하드캐리, 배그 1인칭 클러치.&#10;댓글 타임스탬프는 게임·음악·스포츠에서 가장 많이 달립니다.&#10;아래 프리셋으로 바로 넣을 수 있습니다." />
+        </h2>
+        <div className="row">
+          <div className="field" style={{ flex: 1, minWidth: 240 }}>
+            <label>검색어</label>
+            <input
+              placeholder="롤 하드캐리, 배그 클러치, 발로란트 에이스 …"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && searchSources()}
+            />
+          </div>
+          <div className="field">
+            <label>
+              기간
+              <Help text="최근 것만 볼지. 게임은 패치와 메타가 자주 바뀌어 오래된 영상은 참고가 덜 됩니다." />
+            </label>
+            <select value={months} onChange={(e) => setMonths(Number(e.target.value))}>
+              <option value={3}>최근 3개월</option>
+              <option value={6}>최근 6개월</option>
+              <option value={12}>최근 1년</option>
+              <option value={60}>전체</option>
+            </select>
+          </div>
+          <button className="primary" onClick={searchSources} disabled={searching || !query.trim()}>
+            {searching && <span className="spinner" />}
+            검색
           </button>
-          <button
-            className={tab === "source" ? "primary" : "ghost"}
-            onClick={() => setTab("source")}
-          >
-            2. 가공 가능한 소재
+          <button className="ghost" onClick={loadTrending} disabled={loadingTrend}>
+            {loadingTrend && <span className="spinner" />}
+            지금 뜨는 것
           </button>
+          {srcSources.map((s) => (
+            <span key={s.id} className={`badge ${s.ok ? "on" : "off"}`}>
+              {s.label} · {s.message}
+            </span>
+          ))}
         </div>
 
-        {tab === "trend" ? (
+        <div className="row" style={{ marginTop: 8, gap: 6 }}>
+          <span className="hint" style={{ margin: 0, alignSelf: "center" }}>
+            자주 쓰는 검색어:
+          </span>
+          {GAME_PRESETS.map((p) => (
+            <button
+              key={p}
+              className="small ghost"
+              onClick={() => {
+                setQuery(p);
+                // 프리셋을 누르면 바로 찾아본다. 한 번 더 누르게 할 이유가 없다
+                setTimeout(searchSources, 0);
+              }}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+
+        {videos.length > 0 && (
           <>
-            <div className="row">
-              <button className="small" onClick={loadTrending} disabled={loadingTrend}>
-                {loadingTrend && <span className="spinner" />}
-                새로고침
-              </button>
-              {trendSources.map((s) => (
-                <span key={s.id} className={`badge ${s.ok ? "on" : "off"}`}>
-                  {s.label} · {s.message}
-                </span>
-              ))}
-            </div>
             <p className="hint">
-              여기 영상은 <strong>기획 근거</strong>입니다. 댓글은 가져다 쓸 수 있지만 영상
-              자체는 대부분 가공할 수 없습니다.
+              {listNote} · <strong>행을 누르면</strong> 그 영상의 댓글 타임스탬프를 집계해
+              하이라이트 구간을 찾습니다.
             </p>
-            <div className="table-wrap" style={{ marginTop: 10 }}>
+            <div className="table-wrap" style={{ marginTop: 6 }}>
               <table>
                 <thead>
                   <tr>
                     <th style={{ width: 70 }} />
                     <th>제목</th>
-                    <th style={{ width: 90 }} className="num">조회수</th>
-                    <th style={{ width: 60 }} className="num">길이</th>
-                    <th style={{ width: 130 }}>라이선스</th>
-                    <th style={{ width: 90 }} />
+                    <th style={{ width: 90 }} className="num" title="유튜브 조회수">
+                      조회수
+                    </th>
+                    <th
+                      style={{ width: 80 }}
+                      className="num"
+                      title="댓글이 많을수록 타임스탬프가 달릴 확률이 높습니다. 댓글이 잠긴 영상은 하이라이트를 찾을 수 없습니다"
+                    >
+                      댓글
+                    </th>
+                    <th style={{ width: 60 }} className="num">
+                      길이
+                    </th>
+                    <th
+                      style={{ width: 150 }}
+                      title="가공(라이선스)과 재공유(임베드)는 다른 권한입니다. 표준 라이선스여도 어느 구간이 먹혔는지 분석하는 것은 문제없습니다"
+                    >
+                      재사용
+                    </th>
+                    <th style={{ width: 130 }} />
                   </tr>
                 </thead>
                 <tbody>
-                  {trending.map((v) => (
-                    <tr key={v.id}>
+                  {videos.map((v) => (
+                    <tr
+                      key={v.id}
+                      onClick={() => loadHighlights(v.id, v.title)}
+                      style={{ cursor: v.commentsEnabled ? "pointer" : "default" }}
+                      className={highlightsFor === v.title ? "picked-row" : ""}
+                    >
                       <td>
                         {/* 원격 썸네일이라 next/image 최적화 대상이 아니다 */}
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={v.thumbnail} alt="" style={{ width: 60, borderRadius: 4 }} />
                       </td>
                       <td>
-                        <a href={v.url} target="_blank" rel="noreferrer">
+                        {/* 제목 링크는 행 클릭과 겹치므로 전파를 멈춘다 */}
+                        <a
+                          href={v.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {v.title}
                         </a>
-                        <div className="dim" style={{ fontSize: 12 }}>{v.channel}</div>
+                        <div className="dim" style={{ fontSize: 12 }}>
+                          {v.channel}
+                        </div>
                       </td>
                       <td className="num">{num(v.views)}</td>
+                      <td className="num">{num(v.comments)}</td>
                       <td className="num dim">{mmss(v.durationSec)}</td>
-                      <td><LicenseBadge video={v} /></td>
                       <td>
-                        <button className="small" onClick={() => loadComments(v.id, v.title)}>댓글
-                        </button>{" "}<button className="small" onClick={() => loadHighlights(v.id, v.title)}>하이라이트</button>
+                        <LicenseBadge video={v} />
+                      </td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="small"
+                          onClick={() => loadHighlights(v.id, v.title)}
+                          disabled={!v.commentsEnabled}
+                        >
+                          하이라이트
+                        </button>{" "}
+                        <button className="small ghost" onClick={() => loadComments(v.id, v.title)}>
+                          댓글
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -498,260 +500,9 @@ export default function ShortsPage() {
               </table>
             </div>
           </>
-        ) : (
-          <>
-            <div className="row">
-              <div className="field" style={{ flex: 1, minWidth: 240 }}>
-                <label>
-                  소재 검색어
-                  <Help text="가공해도 되는 소재만 찾습니다(CC 라이선스 · 공개 도메인).&#10;검색어는 영어로 넣으세요 — Internet Archive 와 유튜브 CC 자료는 대부분 영문 메타데이터입니다.&#10;아래 프리셋 버튼이 검증된 검색어를 넣어줍니다." />
-                </label>
-                <input
-                  placeholder="nature, seoul, retro …"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && searchSources()}
-                />
-              </div>
-              <button className="primary" onClick={searchSources} disabled={searching || !query.trim()}>
-                {searching && <span className="spinner" />}
-                검색
-              </button>
-              {srcSources.map((s) => (
-                <span key={s.id} className={`badge ${s.ok ? "on" : "off"}`}>
-                  {s.label} · {s.message}
-                </span>
-              ))}
-            </div>
-
-            <div className="row" style={{ marginTop: 8, gap: 6 }}>
-              <span className="hint" style={{ margin: 0, alignSelf: "center" }}>
-                채널 방향:
-              </span>
-              {SEED_PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  className="small ghost"
-                  onClick={() => {
-                    setQuery(p.q);
-                    // 프리셋을 누르면 바로 찾아본다. 한 번 더 누르게 할 이유가 없다
-                    setTimeout(searchSources, 0);
-                  }}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-
-            {ytCc.length > 0 && (
-              <>
-                <h2 style={{ marginTop: 16 }}>유튜브 CC 라이선스</h2>
-                <p className="hint" style={{ marginTop: 0 }}>
-                  재사용은 허용되지만 <strong>유튜브 약관상 다운로드는 별개</strong>입니다.
-                  기획·참고용으로 보고, 실제 편집 소재는 아래 Archive 쪽을 쓰세요.
-                </p>
-                <div className="table-wrap">
-                  <table>
-                    <tbody>
-                      {ytCc.map((v) => (
-                        <tr key={v.id}>
-                          <td style={{ width: 70 }}>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={v.thumbnail} alt="" style={{ width: 60, borderRadius: 4 }} />
-                          </td>
-                          <td>
-                            <a href={v.url} target="_blank" rel="noreferrer">{v.title}</a>
-                            <div className="dim" style={{ fontSize: 12 }}>
-                              {v.channel} · {mmss(v.durationSec)}
-                            </div>
-                          </td>
-                          <td style={{ width: 130 }}><LicenseBadge video={v} /></td>
-                          <td style={{ width: 90 }}>
-                            <button className="small" onClick={() => loadComments(v.id, v.title)}>댓글
-                            </button>{" "}<button className="small" onClick={() => loadHighlights(v.id, v.title)}>하이라이트</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-
-            {archive.length > 0 && (
-              <>
-                <h2 style={{ marginTop: 16 }}>Internet Archive</h2>
-                <p className="hint" style={{ marginTop: 0 }}>
-                  <strong>표기 없음은 공개 도메인이 아닙니다.</strong> archive.org 는 누구나
-                  올릴 수 있어서, 업로더가 라이선스를 안 적었을 뿐입니다. 실제로 방송사 뉴스
-                  클립이 표기 없이 올라와 있습니다. 초록 배지(확인된 것)만 그대로 쓰고, 나머지는
-                  항목 페이지에서 출처를 직접 확인하세요.
-                </p>
-                <div className="table-wrap">
-                  <table>
-                    <tbody>
-                      {archive.map((a) => (
-                        <tr key={a.identifier}>
-                          <td style={{ width: 70 }}>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={a.thumbnail} alt="" style={{ width: 60, borderRadius: 4 }} />
-                          </td>
-                          <td>
-                            <a href={a.detailUrl} target="_blank" rel="noreferrer">{a.title}</a>
-                            <div className="dim" style={{ fontSize: 12 }}>
-                              {a.creator} {a.year}
-                            </div>
-                          </td>
-                          <td style={{ width: 200 }}>
-                            <span className={`badge ${a.licenseConfirmed ? "on" : "off"}`}>
-                              {a.license}
-                            </span>
-                          </td>
-                          <td style={{ width: 100 }}>
-                            <button className="small" onClick={() => loadFiles(a.identifier)}>
-                              파일
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-
-            {(loadingFiles || files.length > 0) && (
-              <div className="card" style={{ marginTop: 12 }}>
-                <h2>
-                  파일 선택 {loadingFiles && <span className="spinner" />}
-                  <span className="dim" style={{ fontSize: 12 }}> {filesFor}</span>
-                </h2>
-                <p className="hint" style={{ marginTop: 0 }}>
-                  쇼츠로 자를 거라 최고 화질이 필요하지 않습니다. 용량이 작은 쪽이 받는 시간이
-                  짧아 먼저 나옵니다.
-                </p>
-                <div className="table-wrap">
-                  <table>
-                    <tbody>
-                      {files.map((f) => (
-                        <tr key={f.name}>
-                          <td>{f.name}</td>
-                          <td style={{ width: 120 }} className="dim">{f.format}</td>
-                          <td style={{ width: 80 }} className="num dim">
-                            {f.sizeBytes ? `${Math.round(f.sizeBytes / 1024 / 1024)}MB` : "—"}
-                          </td>
-                          <td style={{ width: 70 }} className="num dim">{mmss(f.durationSec)}</td>
-                          <td style={{ width: 80 }}>
-                            <button className="small primary" onClick={() => setInput(f.downloadUrl)}>
-                              쓰기
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </>
         )}
       </div>
 
-      <div className="card">
-        <h2>내 소재 {myFiles.length > 0 && <span className="badge on">{myFiles.length}</span>}</h2>
-        <p className="hint" style={{ marginTop: 0 }}>
-          국내 공공 아카이브는 API 가 없어 직접 받아 넣습니다. <strong>e영상역사관</strong>
-          (대한뉴스)은 <strong>공공누리 제1유형</strong>이라 상업적 편집이 허용되지만,
-          다운로드가 KTV 나누리 회원가입 + 영상 요청이라 자동화가 안 됩니다. 한 번 받아두면
-          계속 씁니다.
-        </p>
-
-        <div className="row">
-          <div className="field" style={{ flex: 1, minWidth: 240 }}>
-            <label>
-              출처 (발행 설명란에 그대로 쓸 문구)
-              <Help text="영상 설명란에 그대로 붙여넣을 문구를 적으세요. 예: 국가기록원, 공공누리 제1유형.&#10;공공누리와 CC BY 는 출처 표시가 이용 조건이라, 적어두지 않으면 나중에 어디서 받았는지 알 수 없습니다." />
-            </label>
-            <input
-              placeholder="e영상역사관 대한뉴스 제1234호 (국가기록원)"
-              value={upOrigin}
-              onChange={(e) => setUpOrigin(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label>
-              라이선스
-              <Help text="받아온 자료에 표기된 이용 조건을 고르세요. 확실하지 않으면 원본 페이지에서 먼저 확인하세요 — 표기가 없는 것은 공개 도메인이 아니라 '확인되지 않음' 입니다." />
-            </label>
-            <select value={upLicense} onChange={(e) => setUpLicense(e.target.value)}>
-              <option>공공누리 제1유형</option>
-              <option>공개 도메인 (CC0)</option>
-              <option>CC BY</option>
-              <option>직접 촬영</option>
-            </select>
-          </div>
-          <label
-            className="small ghost"
-            style={{ cursor: "pointer", padding: "8px 14px", border: "1px solid var(--border)", borderRadius: 8, alignSelf: "flex-end" }}
-          >
-            {uploading && <span className="spinner" />}
-            {uploading ? "올리는 중" : "영상 올리기"}
-            <input
-              type="file"
-              accept="video/mp4,video/quicktime,video/webm,video/x-matroska"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                uploadSource(e.target.files?.[0]);
-                e.target.value = "";
-              }}
-            />
-          </label>
-        </div>
-
-        {myFiles.length > 0 && (
-          <div className="table-wrap" style={{ marginTop: 10 }}>
-            <table>
-              <tbody>
-                {myFiles.map((f) => (
-                  <tr key={f.name}>
-                    <td>
-                      {f.originalName}
-                      <div className="dim" style={{ fontSize: 12 }}>
-                        {f.origin || "출처 미기재"}
-                      </div>
-                    </td>
-                    <td style={{ width: 150 }}>
-                      <span className={`badge ${f.license ? "on" : "off"}`}>
-                        {f.license || "미기재"}
-                      </span>
-                    </td>
-                    <td style={{ width: 80 }} className="num dim">
-                      {Math.round(f.sizeBytes / 1024 / 1024)}MB
-                    </td>
-                    <td style={{ width: 130 }}>
-                      <button className="small primary" onClick={() => setInput(f.path)}>
-                        쓰기
-                      </button>{" "}
-                      <button
-                        className="small ghost"
-                        onClick={async () => {
-                          if (!confirm(`${f.originalName} 을 삭제할까요?`)) return;
-                          await fetch(`/api/shorts/sources?name=${encodeURIComponent(f.name)}`, {
-                            method: "DELETE",
-                          });
-                          loadMyFiles();
-                        }}
-                      >
-                        삭제
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
 
       {(loadingComments || comments.length > 0) && (
         <div className="card">
@@ -905,12 +656,12 @@ export default function ShortsPage() {
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 300 }}>
             <label>
-              원본 주소 (Archive 파일에서 &lsquo;쓰기&rsquo; 를 누르면 채워집니다)
-              <Help text="로컬 파일 경로나 http(s) 주소를 넣습니다. Archive 직링크를 그대로 써도 됩니다.&#10;위 소재 목록에서 '쓰기' 를 누르면 자동으로 채워집니다." />
+              내 녹화 파일 경로
+              <Help text="**내가 직접 플레이해 녹화한 파일**을 넣습니다. 남의 영상 주소를 넣는 자리가 아닙니다.&#10;위에서 찾은 하이라이트 구간을 참고해 그 장면을 직접 플레이·녹화하면 온전히 내 소재가 됩니다.&#10;파일 탐색기에서 파일을 끌어다 놓거나, 경로를 복사해 붙여넣으세요." />
             </label>
             <input
               className="mono"
-              placeholder="https://archive.org/download/... 또는 로컬 파일 경로"
+              placeholder="/Users/mac/Movies/게임녹화.mp4"
               value={input}
               onChange={(e) => setInput(e.target.value)}
             />
