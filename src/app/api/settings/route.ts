@@ -2,10 +2,8 @@ import { NextResponse } from "next/server";
 import { getSettings, setSetting } from "@/lib/db";
 import { splitKeys } from "@/lib/gemini";
 import { DEFAULT_MODEL as CLAUDE_DEFAULT_MODEL } from "@/lib/claude";
-import {
-  DEFAULT_BASE_URL as SEEDANCE_DEFAULT_BASE_URL,
-  DEFAULT_MODEL as SEEDANCE_DEFAULT_MODEL,
-} from "@/lib/seedance";
+import { DEFAULT_MODEL as VEO_DEFAULT_MODEL } from "@/lib/veo";
+import { FREE_MODEL as FISH_FREE_MODEL } from "@/lib/fishaudio";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,7 +34,8 @@ export async function GET() {
     "adsense_refresh_token", "adsense_account",
     "youtube_api_key",
     "anthropic_api_key", "claude_model",
-    "seedance_api_key", "seedance_base_url", "seedance_model",
+    "veo_model",
+    "fish_api_key", "fish_model",
   ]);
 
   const adKey = resolve(s.searchad_api_key, "NAVER_SEARCHAD_API_KEY");
@@ -52,7 +51,7 @@ export async function GET() {
   const adsenseToken = s.adsense_refresh_token ?? "";
   const youtube = resolve(s.youtube_api_key, "YOUTUBE_API_KEY");
   const anthropic = resolve(s.anthropic_api_key, "ANTHROPIC_API_KEY");
-  const seedance = resolve(s.seedance_api_key, "SEEDANCE_API_KEY");
+  const fish = resolve(s.fish_api_key, "FISH_API_KEY");
 
   // 서비스 계정 JSON 은 통째로 저장되므로, 화면에는 어느 계정인지만 보여준다
   let gaEmail = "";
@@ -109,12 +108,17 @@ export async function GET() {
       apiKeyPreview: mask(anthropic.value),
       model: s.claude_model || process.env.CLAUDE_MODEL || CLAUDE_DEFAULT_MODEL,
     },
-    seedance: {
-      configured: Boolean(seedance.value),
-      fromEnv: seedance.fromEnv,
-      apiKeyPreview: mask(seedance.value),
-      baseUrl: s.seedance_base_url || process.env.SEEDANCE_BASE_URL || SEEDANCE_DEFAULT_BASE_URL,
-      model: s.seedance_model || process.env.SEEDANCE_MODEL || SEEDANCE_DEFAULT_MODEL,
+    veo: {
+      // Veo 는 Gemini 키를 그대로 쓴다. 별도 키가 없으니 설정 여부도 Gemini 를 따른다
+      configured: Boolean(gemini.value),
+      model: s.veo_model || process.env.VEO_MODEL || VEO_DEFAULT_MODEL,
+    },
+    fish: {
+      configured: Boolean(fish.value),
+      fromEnv: fish.fromEnv,
+      apiKeyPreview: mask(fish.value),
+      model: s.fish_model || process.env.FISH_MODEL || FISH_FREE_MODEL,
+      free: (s.fish_model || process.env.FISH_MODEL || FISH_FREE_MODEL) === FISH_FREE_MODEL,
     },
   });
 }
@@ -134,9 +138,9 @@ const TEXT_FIELDS: Record<string, string> = {
   youtubeApiKey: "youtube_api_key",
   anthropicApiKey: "anthropic_api_key",
   claudeModel: "claude_model",
-  seedanceApiKey: "seedance_api_key",
-  seedanceBaseUrl: "seedance_base_url",
-  seedanceModel: "seedance_model",
+  veoModel: "veo_model",
+  fishApiKey: "fish_api_key",
+  fishModel: "fish_model",
 };
 
 export async function POST(req: Request) {

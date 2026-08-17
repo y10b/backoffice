@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { copyText } from "@/lib/clipboard";
 
 /**
  * 유아 채널.
@@ -10,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
  *
  *   1. 무엇이 먹히는지 본다 (제목·조회수만 — 기획 근거)
  *   2. Claude 로 기획안을 만든다 (캐릭터 고정 + 장면별 영어 프롬프트)
- *   3. 장면을 하나씩 Seedance 로 렌더한다
+ *   3. 장면을 하나씩 Veo 로 렌더한다 (또는 Flow 웹에서 만들어 업로드)
  *
  * 1단계 영상은 참고용일 뿐 소재가 아니다. 캐릭터는 2단계에서 새로 설계된다.
  */
@@ -45,11 +46,14 @@ type Plan = {
   safetyNotes: string[];
 };
 
+type SourceFile = { name: string; originalName: string; sizeBytes: number; path: string };
+
 type RenderJob = {
   sceneIndex: number;
-  taskId: string;
+  /** Veo 롱러닝 오퍼레이션 이름 */
+  operation: string;
   status: string;
-  videoUrl: string | null;
+  videoUri: string | null;
   error?: string;
 };
 
@@ -96,8 +100,20 @@ export default function KidsPage() {
   const [plan, setPlan] = useState<Plan | null>(null);
 
   const [ratio, setRatio] = useState<"9:16" | "16:9">("9:16");
-  const [resolution, setResolution] = useState<"480p" | "720p" | "1080p">("720p");
+  const [resolution, setResolution] = useState<"720p" | "1080p">("720p");
+  /* 장면별 내레이션 음성 (Fish Audio). 재생 중인 것만 들고 있는다 */
+  const [ttsBusy, setTtsBusy] = useState<number | null>(null);
+  const [audio, setAudio] = useState<Record<number, string>>({});
   const [jobs, setJobs] = useState<Record<number, RenderJob>>({});
+
+  /* 조립: Flow 에서 만들어 받은 클립들 */
+  const [clips, setClips] = useState<SourceFile[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [narration, setNarration] = useState<SourceFile | null>(null);
+  const [makingNarration, setMakingNarration] = useState(false);
+  const [withTitle, setWithTitle] = useState(true);
+  const [assembling, setAssembling] = useState(false);
+  const [assembleJob, setAssembleJob] = useState<number | null>(null);
 
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -178,7 +194,7 @@ export default function KidsPage() {
     setError("");
     setJobs((prev) => ({
       ...prev,
-      [scene.index]: { sceneIndex: scene.index, taskId: "", status: "제출 중", videoUrl: null },
+      [scene.index]: { sceneIndex: scene.index, operation: "", status: "제출 중", videoUri: null },
     }));
     try {
       const d = await (
@@ -189,7 +205,7 @@ export default function KidsPage() {
             mode: "render",
             plan,
             sceneIndex: scene.index,
-            ratio,
+            aspectRatio: ratio,
             resolution,
           }),
         })
@@ -199,9 +215,9 @@ export default function KidsPage() {
         ...prev,
         [scene.index]: {
           sceneIndex: scene.index,
-          taskId: d.taskId,
-          status: "queued",
-          videoUrl: null,
+          operation: d.operation,
+          status: "생성 중",
+          videoUri: null,
         },
       }));
     } catch (e) {
@@ -214,28 +230,146 @@ export default function KidsPage() {
     }
   }
 
+  /**
+   * 장면 내레이션 음성. Fish Audio 는 오디오 바이트를 그대로 주므로 blob URL 로 재생한다.
+   * 무료 등급(s2.1-pro-free)에서도 같은 모델이 돌아간다.
+   */
+  async function speak(scene: Scene) {
+    setTtsBusy(scene.index);
+    setError("");
+    try {
+      const res = await fetch("/api/kids", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "tts", text: scene.korean }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error ?? `음성 생성에 실패했습니다 (HTTP ${res.status}).`);
+      }
+      const url = URL.createObjectURL(await res.blob());
+      setAudio((prev) => {
+        // 같은 장면을 다시 만들면 이전 blob 을 놓아준다. 안 그러면 메모리에 쌓인다
+        if (prev[scene.index]) URL.revokeObjectURL(prev[scene.index]);
+        return { ...prev, [scene.index]: url };
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTtsBusy(null);
+    }
+  }
+
+  /**
+   * Flow 에서 만들어 받은 클립들을 한 번에 올린다.
+   *
+   * 파일명 순으로 정렬해 저장하므로, Flow 에서 받을 때 장면 번호가 이름에 들어가면
+   * 그대로 순서가 맞는다. 순서가 틀리면 아래 목록에서 확인하고 다시 올리면 된다.
+   */
+  async function uploadClips(files: FileList | null) {
+    if (!files?.length) return;
+    setUploading(true);
+    setError("");
+    try {
+      const form = new FormData();
+      for (const f of Array.from(files)) form.append("file", f);
+      form.append("origin", `자체 생성 (Google Flow) · ${plan?.title ?? "유아 채널"}`);
+      form.append("license", "자체 생성물");
+      const d = await (
+        await fetch("/api/shorts/sources", { method: "POST", body: form })
+      ).json();
+      if (!d.ok) throw new Error(d.error);
+      setClips((prev) => [...prev, ...(d.sources ?? [])]);
+      if (d.failed?.length) {
+        setError(
+          `${d.failed.length}개는 올리지 못했습니다: ${d.failed.map((f: any) => f.name).join(", ")}`,
+        );
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  /** 장면 대사를 한 번에 읽혀 파일로 저장한다. 조립에서 오디오 트랙이 된다 */
+  async function makeNarration() {
+    if (!plan) return;
+    setMakingNarration(true);
+    setError("");
+    try {
+      const d = await (
+        await fetch("/api/kids", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode: "narration", plan }),
+        })
+      ).json();
+      if (!d.ok) throw new Error(d.error);
+      setNarration(d.source);
+      flash("내레이션을 만들었습니다.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setMakingNarration(false);
+    }
+  }
+
+  /** 조립을 큐에 넣는다. ffmpeg 는 로컬 워커가 돌린다 */
+  async function assemble() {
+    if (!clips.length) {
+      setError("클립을 먼저 올리세요.");
+      return;
+    }
+    setAssembling(true);
+    setError("");
+    try {
+      const d = await (
+        await fetch("/api/kids", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            mode: "assemble",
+            plan,
+            clips: clips.map((c) => c.path),
+            narration: narration?.path,
+            withTitle,
+          }),
+        })
+      ).json();
+      if (!d.ok) throw new Error(d.error);
+      setAssembleJob(d.jobId);
+      flash(`조립 작업 #${d.jobId} 을 등록했습니다. 로컬 워커가 처리합니다.`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setAssembling(false);
+    }
+  }
+
   /*
    * 렌더는 30~120초 걸린다. 진행 중인 작업이 있을 때만 폴링하고, 전부 끝나면 멈춘다.
    */
+  const DONE = ["완료", "실패"];
   const pending = Object.values(jobs).filter(
-    (j) => j.taskId && !["succeeded", "failed", "expired", "cancelled"].includes(j.status),
+    (j) => j.operation && !DONE.includes(j.status),
   );
 
   const pollAll = useCallback(async () => {
     for (const job of Object.values(jobs)) {
-      if (!job.taskId) continue;
-      if (["succeeded", "failed", "expired", "cancelled"].includes(job.status)) continue;
+      if (!job.operation || DONE.includes(job.status)) continue;
       try {
         const d = await (
-          await fetch(`/api/kids?mode=poll&taskId=${encodeURIComponent(job.taskId)}`)
+          await fetch(`/api/kids?mode=poll&operation=${encodeURIComponent(job.operation)}`)
         ).json();
         if (!d.ok) continue;
         setJobs((prev) => ({
           ...prev,
           [job.sceneIndex]: {
             ...prev[job.sceneIndex],
-            status: d.status,
-            videoUrl: d.videoUrl,
+            // Veo 는 상태 문자열이 아니라 done 플래그를 준다
+            status: d.error ? "실패" : d.done ? "완료" : "생성 중",
+            videoUri: d.videoUri,
             error: d.error,
           },
         }));
@@ -243,6 +377,7 @@ export default function KidsPage() {
         /* 폴링 실패는 다음 주기에 다시 시도한다 */
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs]);
 
   useEffect(() => {
@@ -460,6 +595,16 @@ export default function KidsPage() {
 
           <div className="card">
             <h2>3. 장면 렌더</h2>
+            <div className="alert warn" style={{ marginBottom: 12 }}>
+              <strong>Veo 는 유료입니다.</strong> 초당 약 $0.15~0.40 라 8초 클면 $1.2~3.2,
+              8장면이면 한 편에 $10~26 입니다. <strong>무료로 하려면</strong>{" "}
+              <a href="https://flow.google" target="_blank" rel="noreferrer">
+                구글 플로우
+              </a>{" "}
+              웹에서 아래 <strong>장면 프롬프트를 복사해</strong> 만들고, 내려받은 파일을{" "}
+              <a href="/shorts">쇼츠</a> 화면의 소재 업로드로 넣으세요. Flow 는 API 가 없어
+              백오피스에서 직접 부를 수 없습니다.
+            </div>
             <div className="row" style={{ marginBottom: 12 }}>
               <div className="field">
                 <label>화면비</label>
@@ -474,8 +619,7 @@ export default function KidsPage() {
                   value={resolution}
                   onChange={(e) => setResolution(e.target.value as "720p")}
                 >
-                  <option value="480p">480p (저렴)</option>
-                  <option value="720p">720p</option>
+                  <option value="720p">720p (저렴)</option>
                   <option value="1080p">1080p</option>
                 </select>
               </div>
@@ -497,6 +641,7 @@ export default function KidsPage() {
                   <th>장면 프롬프트 (영문)</th>
                   <th style={{ width: 130 }}>상태</th>
                   <th style={{ width: 80 }} />
+                  <th style={{ width: 150 }}>내레이션</th>
                 </tr>
               </thead>
               <tbody>
@@ -518,12 +663,17 @@ export default function KidsPage() {
                       </td>
                       <td style={{ fontSize: 12 }}>
                         {!job && <span className="dim">—</span>}
-                        {job?.status === "succeeded" && job.videoUrl && (
-                          <a href={job.videoUrl} target="_blank" rel="noopener">
+                        {job?.status === "완료" && job.videoUri && (
+                          /* Veo URI 는 키 헤더가 필요해 서버 프록시를 거친다 */
+                          <a
+                            href={`/api/kids?mode=video&uri=${encodeURIComponent(job.videoUri)}`}
+                            target="_blank"
+                            rel="noopener"
+                          >
                             영상 열기
                           </a>
                         )}
-                        {job && job.status !== "succeeded" && (
+                        {job && job.status !== "완료" && (
                           <span className={job.error ? "delta-down" : ""}>
                             {job.error ?? job.status}
                           </span>
@@ -533,12 +683,24 @@ export default function KidsPage() {
                         <button
                           className="small"
                           onClick={() => renderScene(s)}
-                          disabled={Boolean(
-                            job && !["failed", "expired", "cancelled"].includes(job.status),
-                          )}
+                          disabled={Boolean(job && job.status !== "실패")}
                         >
-                          {job?.status === "succeeded" ? "완료" : "렌더"}
+                          {job?.status === "완료" ? "완료" : "렌더"}
                         </button>
+                      </td>
+                      <td>
+                        {audio[s.index] ? (
+                          <audio controls src={audio[s.index]} style={{ height: 30, width: 140 }} />
+                        ) : (
+                          <button
+                            className="small ghost"
+                            onClick={() => speak(s)}
+                            disabled={ttsBusy === s.index || !s.korean.trim()}
+                          >
+                            {ttsBusy === s.index && <span className="spinner" />}
+                            음성 만들기
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -546,10 +708,147 @@ export default function KidsPage() {
               </tbody>
             </table>
 
+            <div className="row" style={{ marginTop: 12 }}>
+              <button
+                className="ghost small"
+                onClick={() =>
+                  copyText(
+                    plan.scenes
+                      .map(
+                        (s) =>
+                          `[${s.index}] ${plan.characterSheet} ${plan.styleSheet} ${s.videoPrompt}`,
+                      )
+                      .join("\n\n"),
+                  ).then(() => flash("전체 장면 프롬프트를 복사했습니다 — Flow 에 붙여넣으세요"))
+                }
+              >
+                전체 프롬프트 복사 (Flow 용)
+              </button>
+            </div>
             <p className="hint">
-              장면당 30~120초 걸립니다. 완성 영상 URL 은 24시간 뒤 만료되니 받아두세요.
-              장면들을 이어붙이고 자막을 얹는 건 쇼츠 화면의 렌더 워커를 쓰거나 편집기에서
-              하시면 됩니다.
+              Veo 는 장면당 30~120초 걸리고 4·6·8초만 받아서, 기획안의 초를 가장 가까운
+              허용값으로 맞춰 보냅니다. 결과 URL 은 24시간 뒤 만료되니 받아두세요.
+              장면 이어붙이기와 자막은 쇼츠 화면의 렌더 워커나 편집기에서 하시면 됩니다.
+            </p>
+        </div>
+
+          <div className="card">
+            <h2>4. 조립</h2>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Flow 에서 만들어 받은 클립들을 한 번에 올리면 순서대로 이어 붙이고, 장면 대사를
+              자막으로 얹고, 내레이션을 오디오로 깔아 한 편으로 만듭니다.
+            </p>
+
+            <div className="row" style={{ marginTop: 12 }}>
+              <div className="field" style={{ flex: 1, minWidth: 260 }}>
+                <label>장면 클립 (여러 개 한 번에 선택)</label>
+                <input
+                  type="file"
+                  accept="video/*"
+                  multiple
+                  disabled={uploading}
+                  onChange={(e) => {
+                    uploadClips(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+              {uploading && (
+                <span className="badge on" style={{ alignSelf: "center" }}>
+                  <span className="spinner" />
+                  올리는 중
+                </span>
+              )}
+            </div>
+
+            {clips.length > 0 && (
+              <table style={{ marginTop: 12 }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: 40 }} className="num">
+                      순서
+                    </th>
+                    <th>파일</th>
+                    <th style={{ width: 200 }}>이 순서에 붙는 자막</th>
+                    <th style={{ width: 90 }} className="num">
+                      크기
+                    </th>
+                    <th style={{ width: 60 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {clips.map((c, i) => (
+                    <tr key={c.name}>
+                      <td className="num">{i + 1}</td>
+                      <td style={{ fontSize: 12 }}>{c.originalName}</td>
+                      <td style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                        {plan.scenes[i]?.korean ?? "—"}
+                      </td>
+                      <td className="num" style={{ fontSize: 12 }}>
+                        {Math.round(c.sizeBytes / 1024 / 1024)}MB
+                      </td>
+                      <td>
+                        <button
+                          className="small ghost"
+                          onClick={() => setClips((prev) => prev.filter((x) => x.name !== c.name))}
+                        >
+                          제거
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {clips.length > 0 && clips.length !== plan.scenes.length && (
+              <div className="alert warn" style={{ marginTop: 12 }}>
+                클립 {clips.length}개, 장면 {plan.scenes.length}개로 수가 다릅니다. 자막은
+                순서대로 붙으니 남는 쪽은 비거나 버려집니다.
+              </div>
+            )}
+
+            <div className="row" style={{ marginTop: 14 }}>
+              <button onClick={makeNarration} disabled={makingNarration}>
+                {makingNarration && <span className="spinner" />}
+                내레이션 만들기
+              </button>
+              {narration && (
+                <span className="badge on" style={{ alignSelf: "center" }}>
+                  {narration.originalName}
+                </span>
+              )}
+              <label
+                style={{ display: "flex", alignItems: "center", gap: 6, alignSelf: "center" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={withTitle}
+                  onChange={(e) => setWithTitle(e.target.checked)}
+                />
+                <span style={{ fontSize: 12 }}>제목 얹기</span>
+              </label>
+              <button
+                className="primary"
+                onClick={assemble}
+                disabled={assembling || !clips.length}
+              >
+                {assembling && <span className="spinner" />}
+                한 편으로 조립
+              </button>
+            </div>
+
+            {assembleJob !== null && (
+              <div className="alert ok" style={{ marginTop: 12 }}>
+                조립 작업 <strong>#{assembleJob}</strong> 등록됨. 로컬에서{" "}
+                <span className="mono">npm run worker</span> 가 돌고 있어야 처리됩니다.
+                결과는 <a href="/shorts">쇼츠</a> 화면의 작업 목록에서 받으세요.
+              </div>
+            )}
+
+            <p className="hint">
+              내레이션을 안 만들면 무성으로 나옵니다. 클립 자체의 소리는 쓰지 않습니다 —
+              클립마다 오디오 구성이 달라 이어 붙일 때 통째로 실패하기 때문입니다.
             </p>
           </div>
         </>

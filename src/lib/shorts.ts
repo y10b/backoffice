@@ -144,6 +144,24 @@ export type RenderOptions = {
   caption?: string;
   /** 영상이 차지할 세로 비율 (0.4~0.9). 나머지가 위아래 여백이 된다 */
   videoRatio?: number;
+  /**
+   * 여러 개의 **서로 다른 파일**을 순서대로 이어 붙인다.
+   *
+   * `segments` 와 다르다. segments 는 한 원본 안에서 여러 구간을 뜨는 것이고, 이쪽은
+   * 애초에 별개 파일들을 잇는다. AI 로 장면을 하나씩 만들어 받은 뒤 한 편으로 합치는
+   * 흐름(구글 플로우 수동 생성)이 이걸 쓴다.
+   *
+   * 주면 `input`·`startSec`·`segments`·`cutSec` 는 무시된다.
+   */
+  clips?: string[];
+  /**
+   * 내레이션 오디오 파일 경로.
+   *
+   * 클립을 이어 붙일 때는 이게 유일한 오디오 트랙이 된다. 클립마다 오디오 유무와
+   * 채널 구성이 달라 concat 이 통째로 실패하는 걸 막으려고, 클립 오디오는 버리고
+   * 내레이션만 얹는다. 없으면 무성으로 나온다.
+   */
+  narration?: string;
 };
 
 export type RenderResult = {
@@ -299,48 +317,63 @@ export function wrapText(s: string, perLine: number): string[] {
  * 영상은 가로를 캔버스에 맞추고 비율을 유지한 채 세로 가운데에 놓는다.
  * 위아래 남는 자리가 여백이고, 거기에 글자를 얹는다.
  */
-export function buildFilter(
+export type Geometry = {
+  /** 상한. videoRatio 가 허용하는 최대 영상 높이 */
+  maxH: number;
+  /** 가로를 1080 에 맞췄을 때 원본 비율이 정하는 높이 */
+  naturalH: number;
+  /** 실제로 영상이 차지할 높이 */
+  videoH: number;
+  /** 영상 위쪽 여백 높이 */
+  topH: number;
+};
+
+/**
+ * 레이아웃 기하.
+ *
+ * 가로를 1080 에 맞추면 세로는 원본 비율이 정한다. 16:9 원본이면 608px 이라
+ * `videoRatio` 가 기대하는 1382px 를 채울 수 없고, 그 차이가 의도치 않은 검은 띠로
+ * 남는다. 그래서 원본 크기를 재서 실제 높이로 배치한다.
+ *
+ * 세로가 더 긴 원본은 상한(maxH)까지만 쓰고 넘치는 부분을 잘라낸다.
+ * 원본 크기를 모르면(프로브 실패) 상한을 그대로 가정한다.
+ *
+ * 영상을 세로 정가운데가 아니라 위쪽으로 올린다. 위에는 제목 두세 줄, 아래에는
+ * 작성자 + 댓글 네 줄이 들어가 아래가 늘 모자라다.
+ */
+export function geometry(
   o: RenderOptions,
-  font?: string | null,
   source?: { width: number; height: number } | null,
-): string {
+): Geometry {
   const maxRatio = Math.min(Math.max(o.videoRatio ?? 0.72, 0.4), 0.9);
   const maxH = Math.round(HEIGHT * maxRatio);
-
-  /*
-   * 영상이 실제로 차지할 높이.
-   *
-   * 가로를 1080 에 맞추면 세로는 원본 비율이 정한다. 16:9 원본이면 608px 이라
-   * `videoRatio` 가 기대하는 1382px 를 채울 수 없고, 그 차이가 의도치 않은 검은 띠로
-   * 남는다. 그래서 원본 크기를 재서 실제 높이로 배치한다.
-   *
-   * 세로가 더 긴 원본은 상한(maxH)까지만 쓰고 넘치는 부분을 잘라낸다.
-   * 원본 크기를 모르면(프로브 실패) 상한을 그대로 가정한다.
-   */
-  const naturalH = source?.width
-    ? Math.round((WIDTH * source.height) / source.width)
-    : maxH;
+  const naturalH = source?.width ? Math.round((WIDTH * source.height) / source.width) : maxH;
   const videoH = Math.min(naturalH, maxH);
+  return { maxH, naturalH, videoH, topH: Math.round((HEIGHT - videoH) * 0.4) };
+}
 
-  /*
-   * 영상을 세로 정가운데가 아니라 위쪽으로 올린다.
-   * 위에는 제목 두세 줄, 아래에는 작성자 + 댓글 네 줄이 들어가 아래가 늘 모자라다.
-   */
-  const freeH = HEIGHT - videoH;
-  const topH = Math.round(freeH * 0.4);
-
-  const parts: string[] = [
-    `scale=${WIDTH}:-2`,
-    // 세로가 상한을 넘으면 가운데를 남기고 잘라낸다
-    ...(naturalH > videoH ? [`crop=${WIDTH}:${videoH}`] : []),
-    `pad=${WIDTH}:${HEIGHT}:0:${topH}:color=black`,
-  ];
+/**
+ * 글자 레이어만. 레이아웃(scale/pad)을 이미 끝낸 프레임 위에 얹는다.
+ *
+ * 단일 원본과 다중 클립 조립이 이 함수를 공유한다. 각자 그리면 한쪽에만 손댔을 때
+ * 자막 위치가 조용히 어긋난다.
+ */
+export function buildTextChain(
+  o: RenderOptions,
+  font: string | null | undefined,
+  geom: Geometry,
+): string[] {
+  const { videoH, topH } = geom;
+  const parts: string[] = [];
 
   // 폰트를 못 찾으면 fontfile 을 빼고 시도한다. 리눅스에는 fontconfig 가 있어 그대로 동작한다
   const fontOpt = font ? `:fontfile='${escapeFontPath(font)}'` : "";
   /**
    * span 을 주면 그 구간에만 글자가 뜬다. 시간별 자막이 이걸로 갈린다.
-   * enable 값 안의 콤마는 필터 구분자와 충돌하므로 이스케이프해야 한다.
+   *
+   * `between(t,1,2)` 의 콤마는 필터 구분자와 같은 문자다. 값을 작은따옴표로 감싸면
+   * ffmpeg 필터그래프 파서가 그 안을 쪼개지 않으므로 그것만으로 충분하다.
+   * (JS 템플릿 리터럴에서 `\,` 는 백슬래시가 탈락해 그냥 `,` 가 되므로 escape 로 쓸 수 없다.)
    */
   const draw = (
     text: string,
@@ -352,7 +385,7 @@ export function buildFilter(
     `drawtext=text='${escapeDrawText(text)}'${fontOpt}:fontcolor=${color}:fontsize=${size}` +
     // 글자가 영상 위에 얹혀도 읽히도록 검은 테두리를 두른다. 자막의 기본기다
     `:borderw=6:bordercolor=black@0.85:x=(w-text_w)/2:y=${y}` +
-    (span ? `:enable='between(t\,${span.start}\,${span.end})'` : "");
+    (span ? `:enable='between(t,${span.start},${span.end})'` : "");
 
   if (o.title?.trim()) {
     // 제목 블록을 위 여백 안에서 세로 가운데로. 줄 수가 달라도 균형이 유지된다
@@ -394,7 +427,28 @@ export function buildFilter(
       .forEach((line, i) => parts.push(draw(line, base + 62 + i * 56, 46, "white")));
   }
 
-  return parts.join(",");
+  return parts;
+}
+
+/**
+ * 필터 그래프를 만든다. 순수 함수라 실제 실행 없이 검증할 수 있다.
+ *
+ * 영상은 가로를 캔버스에 맞추고 비율을 유지한 채 세로 가운데에 놓는다.
+ * 위아래 남는 자리가 여백이고, 거기에 글자를 얹는다.
+ */
+export function buildFilter(
+  o: RenderOptions,
+  font?: string | null,
+  source?: { width: number; height: number } | null,
+): string {
+  const geom = geometry(o, source);
+  return [
+    `scale=${WIDTH}:-2`,
+    // 세로가 상한을 넘으면 가운데를 남기고 잘라낸다
+    ...(geom.naturalH > geom.videoH ? [`crop=${WIDTH}:${geom.videoH}`] : []),
+    `pad=${WIDTH}:${HEIGHT}:0:${geom.topH}:color=black`,
+    ...buildTextChain(o, font, geom),
+  ].join(",");
 }
 
 /**
@@ -617,15 +671,110 @@ export function effectiveSegments(o: RenderOptions, source?: MediaInfo | null): 
   return [{ start: Math.max(0, o.startSec), duration: total }];
 }
 
+/**
+ * 대본 한 줄을 클립 하나에 맞춘다.
+ *
+ * `autoCaptions` 처럼 전체 길이를 줄 수로 균등 분할하면, 클립 길이가 서로 다를 때
+ * 자막이 장면 경계를 넘어간다. 장면마다 대사가 정해져 있는 구조(유아 채널 기획안)에서는
+ * 클립 경계에 딱 맞춰야 한다.
+ *
+ * 줄이 클립보다 적으면 남는 클립은 자막 없이 지나간다. 많으면 초과분은 버린다.
+ */
+export function clipCaptions(lines: string[], durations: number[]): Caption[] {
+  const out: Caption[] = [];
+  let t = 0;
+  durations.forEach((dur, i) => {
+    const text = lines[i]?.trim();
+    if (text) {
+      out.push({
+        start: Math.round(t * 100) / 100,
+        // 끝을 경계에 딱 맞추면 전환 순간에 한 프레임씩 자막이 사라진다
+        end: Math.round((t + dur) * 100) / 100 + 0.05,
+        text,
+      });
+    }
+    t += dur;
+  });
+  return out;
+}
+
 /** 실제로 얹을 자막. captions 가 없으면 script 를 시간에 나눠 쓴다 */
-export function effectiveCaptions(o: RenderOptions): Caption[] {
+export function effectiveCaptions(o: RenderOptions, clipDurations?: number[]): Caption[] {
   if (o.captions?.length) return o.captions.filter((c) => c.text?.trim());
-  if (o.script?.trim()) return autoCaptions(o.script, clampDuration(o.durationSec));
-  return [];
+  if (!o.script?.trim()) return [];
+  const lines = o.script.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  // 클립 조립이면 장면 경계에 맞춘다. 단일 원본이면 전체 길이를 균등 분할한다
+  if (clipDurations?.length) return clipCaptions(lines, clipDurations);
+  return autoCaptions(o.script, clampDuration(o.durationSec));
 }
 
 function clampDuration(sec: number): number {
   return Math.min(Math.max(sec, 1), 180);
+}
+
+/**
+ * 서로 다른 파일 여러 개를 이어 붙인다.
+ *
+ * `buildArgs` 의 다중 구간 경로와 결정적으로 다른 점: 그쪽은 같은 원본을 여러 번 열어
+ * 해상도가 자동으로 같지만, 여기는 출처가 다른 파일들이라 크기·비율·프레임레이트가
+ * 제각각이다. concat 은 입력 구성이 같아야 붙으므로 **클립마다 같은 크기로 정규화**한 뒤
+ * 잇는다. 비율은 유지하고 남는 자리는 검게 채운다(잘라내면 캐릭터가 프레임 밖으로 나간다).
+ *
+ * 오디오는 내레이션 하나만 쓴다. 클립마다 오디오 유무와 채널 구성이 달라 그대로 concat
+ * 하면 통째로 실패한다. `apad` 로 무한 무음을 이어 붙이고 `-shortest` 로 영상 길이에
+ * 맞춰 끊으면, 내레이션이 짧아도 길어도 영상 길이가 결과를 정한다.
+ */
+export function buildClipArgs(
+  o: RenderOptions,
+  out: string,
+  font: string | null,
+  clipDurations?: number[],
+): string[] {
+  const clips = (o.clips ?? []).filter((c) => c && c.trim());
+  if (!clips.length) throw new Error("이어 붙일 클립이 없습니다.");
+
+  // 출처가 제각각이라 원본 비율을 알 수 없다. 상한 높이를 그대로 영상 영역으로 쓴다
+  const geom = geometry(o, null);
+  const withAudio = Boolean(o.narration?.trim());
+
+  const steps: string[] = [];
+  clips.forEach((_, i) => {
+    steps.push(
+      `[${i}:v]scale=${WIDTH}:${geom.videoH}:force_original_aspect_ratio=decrease,` +
+        `pad=${WIDTH}:${geom.videoH}:(ow-iw)/2:(oh-ih)/2:color=black,` +
+        // setsar 와 fps 를 맞추지 않으면 concat 이 거부한다
+        `setsar=1,fps=30,setpts=PTS-STARTPTS[v${i}]`,
+    );
+  });
+  steps.push(`${clips.map((_, i) => `[v${i}]`).join("")}concat=n=${clips.length}:v=1:a=0[cv]`);
+
+  const text = buildTextChain({ ...o, captions: effectiveCaptions(o, clipDurations) }, font, geom);
+  steps.push(
+    `[cv]pad=${WIDTH}:${HEIGHT}:0:${geom.topH}:color=black` +
+      (text.length ? `,${text.join(",")}` : "") +
+      `[vout]`,
+  );
+
+  if (withAudio) {
+    steps.push(`[${clips.length}:a]apad,asetpts=PTS-STARTPTS[aout]`);
+  }
+
+  return [
+    "-y",
+    ...clips.flatMap((c) => ["-i", c]),
+    ...(withAudio ? ["-i", o.narration!] : []),
+    "-filter_complex", steps.join(";"),
+    "-map", "[vout]",
+    ...(withAudio ? ["-map", "[aout]", "-shortest"] : []),
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "23",
+    "-pix_fmt", "yuv420p",
+    ...(withAudio ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
+    "-movflags", "+faststart",
+    "-r", "30",
+    out,
+  ];
 }
 
 /**
@@ -748,6 +897,10 @@ export function parseRenderOptions(body: any): RenderOptions {
         ? { author: String(body.comment.author ?? ""), text: body.comment.text }
         : undefined,
     videoRatio: body?.videoRatio ? num(body.videoRatio, 0.72) : undefined,
+    clips: Array.isArray(body?.clips)
+      ? body.clips.map((c: unknown) => String(c ?? "").trim()).filter(Boolean)
+      : undefined,
+    narration: str(body?.narration).trim() || undefined,
   };
 }
 
@@ -781,13 +934,47 @@ export async function renderShort(o: RenderOptions): Promise<RenderResult> {
   const check = await checkFfmpeg();
   if (!check.ok) throw new Error(check.error!);
 
-  // 폰트와 원본 정보를 미리 확보한다. 둘 다 실패해도 렌더는 진행된다
-  const [font, source] = await Promise.all([fontPath(), probeMedia(o.input)]);
-  const { segments, sceneDetected } = await resolveSegments(o, source);
-
   await fs.mkdir(OUT_DIR, { recursive: true });
   const name = `${Date.now()}-${crypto.randomBytes(3).toString("hex")}.mp4`;
   const out = path.join(OUT_DIR, name);
+
+  /*
+   * 클립 조립 경로. 별개 파일들을 순서대로 잇는다.
+   * 장면 전환 감지·구간 계산은 한 원본을 전제하므로 여기서는 건너뛴다.
+   */
+  if (o.clips?.length) {
+    const font = await fontPath();
+    // 자막을 장면 경계에 맞추려면 각 클립의 실제 길이가 필요하다.
+    // 기획안의 계획 초와 실제로 받은 파일 길이가 다를 수 있어 파일 쪽을 믿는다
+    const probed = await Promise.all(o.clips.map((c) => probeMedia(c)));
+    const durations = probed.map((p, i) => {
+      const d = p?.durationSec;
+      if (d && d > 0) return d;
+      // 프로브 실패는 자막 타이밍만 어긋나게 한다. 렌더 자체는 진행한다
+      console.warn(`클립 ${i + 1} 길이를 읽지 못했습니다. 5초로 가정합니다.`);
+      return 5;
+    });
+
+    const args = buildClipArgs(o, out, font, durations);
+    await run("ffmpeg", args);
+    const stat = await fs.stat(out);
+    return {
+      name,
+      url: `/api/shorts/file/${encodeURIComponent(name)}`,
+      sizeBytes: stat.size,
+      command: `ffmpeg ${args.join(" ")}`,
+      // 클립 하나가 곧 한 구간이다. 시작은 이어 붙인 뒤 타임라인 기준
+      segments: durations.map((duration, i) => ({
+        start: durations.slice(0, i).reduce((a, b) => a + b, 0),
+        duration,
+      })),
+      sceneDetected: false,
+    };
+  }
+
+  // 폰트와 원본 정보를 미리 확보한다. 둘 다 실패해도 렌더는 진행된다
+  const [font, source] = await Promise.all([fontPath(), probeMedia(o.input)]);
+  const { segments, sceneDetected } = await resolveSegments(o, source);
 
   const args = buildArgs({ ...o, segments }, out, font, source);
   await run("ffmpeg", args);

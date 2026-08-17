@@ -26,12 +26,13 @@ type SettingsState = {
   };
   youtube: { configured: boolean; fromEnv: boolean; apiKeyPreview: string };
   claude: { configured: boolean; fromEnv: boolean; apiKeyPreview: string; model: string };
-  seedance: {
+  veo: { configured: boolean; model: string };
+  fish: {
     configured: boolean;
     fromEnv: boolean;
     apiKeyPreview: string;
-    baseUrl: string;
     model: string;
+    free: boolean;
   };
   ga4: {
     configured: boolean;
@@ -90,9 +91,9 @@ export default function SettingsPage() {
   const [youtubeKey, setYoutubeKey] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
   const [claudeModel, setClaudeModel] = useState("claude-opus-5");
-  const [seedanceKey, setSeedanceKey] = useState("");
-  const [seedanceBaseUrl, setSeedanceBaseUrl] = useState("");
-  const [seedanceModel, setSeedanceModel] = useState("");
+  const [veoModel, setVeoModel] = useState("");
+  const [fishKey, setFishKey] = useState("");
+  const [fishModel, setFishModel] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [tests, setTests] = useState<TestState>({});
@@ -105,11 +106,9 @@ export default function SettingsPage() {
         setModel(s.gemini.model);
         setAdCustomer((prev) => prev || s.searchAd.customerId);
         if (s.claude) setClaudeModel(s.claude.model);
-        if (s.seedance) {
-          // 저장된 값이 곧 화면 기본값이다. 사용자가 입력 중이면 덮어쓰지 않는다
-          setSeedanceBaseUrl((prev) => prev || s.seedance.baseUrl);
-          setSeedanceModel((prev) => prev || s.seedance.model);
-        }
+        // 저장된 값이 곧 화면 기본값이다. 사용자가 입력 중이면 덮어쓰지 않는다
+        if (s.veo) setVeoModel((prev) => prev || s.veo.model);
+        if (s.fish) setFishModel((prev) => prev || s.fish.model);
       });
   }, []);
 
@@ -610,60 +609,92 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          Seedance — 영상 생성{" "}
-          {state?.seedance && (
+          Veo — 영상 생성{" "}
+          {state?.veo && (
+            <span className={`badge ${state.veo.configured ? "on" : ""}`}>
+              {state.veo.configured ? "Gemini 키 사용" : "Gemini 키 필요"}
+            </span>
+          )}
+        </h2>
+        <div className="alert warn" style={{ marginBottom: 12 }}>
+          <strong>구글 플로우(flow.google)는 API 가 없습니다.</strong> 코드에서 부를 수 있는
+          건 같은 Veo 모델의 Gemini API 경로이고, 이쪽은 <strong>유료</strong>입니다
+          (초당 약 $0.15~0.40 → 8초 클립 $1.2~3.2). 무료로 하려면 Flow 웹에서 만들어
+          내려받아 <a href="/shorts">쇼츠</a> 화면의 소재 업로드로 넣으세요.
+        </div>
+        <p className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
+          별도 키가 없습니다 — 위 Gemini 키를 그대로 씁니다. 단 Veo 는 무료 티어에 없어서
+          <strong> 결제가 설정된 프로젝트의 키</strong>여야 합니다. 프리뷰 모델이라 이름이
+          자주 바뀌니 404 가 나면 다른 모델을 골라보세요.
+        </p>
+        <div className="row">
+          <div className="field" style={{ minWidth: 300 }}>
+            <label>모델</label>
+            <select value={veoModel} onChange={(e) => setVeoModel(e.target.value)}>
+              <option value="veo-3.1-lite-generate-preview">veo-3.1-lite (가장 저렴)</option>
+              <option value="veo-3.1-fast-generate-preview">veo-3.1-fast</option>
+              <option value="veo-3.1-generate-preview">veo-3.1 (표준 · 가장 비쌈)</option>
+            </select>
+          </div>
+          <button className="primary" onClick={() => save({ veoModel })}>
+            저장
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          Fish Audio — 내레이션 음성{" "}
+          {state?.fish && (
             <Status
-              configured={state.seedance.configured}
-              fromEnv={state.seedance.fromEnv}
-              preview={state.seedance.apiKeyPreview}
+              configured={state.fish.configured}
+              fromEnv={state.fish.fromEnv}
+              preview={state.fish.apiKeyPreview}
             />
+          )}
+          {state?.fish?.free && (
+            <span className="badge on" style={{ marginLeft: 5 }}>
+              무료 등급
+            </span>
           )}
         </h2>
         <p className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
-          제공자마다 주소와 모델 ID 가 다릅니다. 404 가 나면 base URL 을 쓰는 곳에 맞게
-          바꾸세요 — Volcengine(중국) <span className="mono">ark.cn-beijing.volces.com/api/v3</span>,
-          BytePlus(국제) <span className="mono">ark.ap-southeast.bytepluses.com/api/v3</span>.
+          <a href="https://fish.audio" target="_blank" rel="noreferrer">
+            fish.audio
+          </a>{" "}
+          에서 발급합니다. <span className="mono">s2.1-pro-free</span> 는 유료와 같은 모델을
+          무료로 쓰고 하드 캡이 없습니다(Fair Use 정책 적용). 다만 무료 등급은{" "}
+          <strong>일부 상용 시나리오에 제약이 있을 수 있다</strong>고 공지돼 있어, 수익화
+          채널에 쓸 거라면 유료 모델로 바꾸는 편이 안전합니다.
         </p>
         <div className="row">
-          <div className="field" style={{ flex: 1, minWidth: 240 }}>
+          <div className="field" style={{ flex: 1, minWidth: 260 }}>
             <label>API 키</label>
             <input
               type="password"
               className="mono"
-              value={seedanceKey}
-              onChange={(e) => setSeedanceKey(e.target.value)}
+              value={fishKey}
+              onChange={(e) => setFishKey(e.target.value)}
             />
           </div>
-          <div className="field" style={{ flex: 1, minWidth: 240 }}>
-            <label>Base URL</label>
-            <input
-              className="mono"
-              value={seedanceBaseUrl}
-              onChange={(e) => setSeedanceBaseUrl(e.target.value)}
-            />
-          </div>
-          <div className="field" style={{ minWidth: 200 }}>
-            <label>모델 ID</label>
-            <input
-              className="mono"
-              value={seedanceModel}
-              onChange={(e) => setSeedanceModel(e.target.value)}
-            />
+          <div className="field" style={{ minWidth: 220 }}>
+            <label>모델</label>
+            <select value={fishModel} onChange={(e) => setFishModel(e.target.value)}>
+              <option value="s2.1-pro-free">s2.1-pro-free (무료)</option>
+              <option value="s2.1-pro">s2.1-pro (유료 · 상용 안전)</option>
+            </select>
           </div>
           <button
             className="primary"
             onClick={() =>
-              save({
-                seedanceApiKey: seedanceKey,
-                seedanceBaseUrl,
-                seedanceModel,
-              }).then(() => setSeedanceKey(""))
+              save({ fishApiKey: fishKey, fishModel }).then(() => setFishKey(""))
             }
           >
             저장
           </button>
         </div>
       </div>
+
     </>
   );
 }

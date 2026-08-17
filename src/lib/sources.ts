@@ -24,6 +24,11 @@ const ALLOWED = new Map<string, string>([
   [".webm", "video/webm"],
   [".mkv", "video/x-matroska"],
   [".avi", "video/x-msvideo"],
+  // 내레이션 오디오. 영상 클립을 이어 붙일 때 오디오 트랙으로 들어간다
+  [".mp3", "audio/mpeg"],
+  [".wav", "audio/wav"],
+  [".m4a", "audio/mp4"],
+  [".opus", "audio/opus"],
 ]);
 
 /** 쇼츠 소재라 원본이 아주 클 이유가 없다 */
