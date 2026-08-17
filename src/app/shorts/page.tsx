@@ -23,6 +23,9 @@ type YtVideo = {
   durationSec: number | null;
   thumbnail: string;
   license: string | null;
+  embeddable: boolean | null;
+  blockedInKR: boolean;
+  commentsEnabled: boolean;
   url: string;
 };
 
@@ -47,6 +50,17 @@ type ArchiveFile = {
 };
 
 type Comment = { id: string; author: string; text: string; likes: number };
+
+/** 댓글이 몰린 지점. peakAt 은 언급 위치, cutStart 는 리드인을 뺀 실제 컷 시작 */
+type Highlight = {
+  peakAt: number;
+  cutStart: number;
+  cutDuration: number;
+  mentions: number;
+  score: number;
+  samples: { at: number; likes: number; text: string; author: string }[];
+};
+type HistBin = { start: number; mentions: number; score: number };
 type SourceFile = {
   name: string; originalName: string; origin: string; license: string;
   sizeBytes: number; path: string;
@@ -105,13 +119,30 @@ function mmss(sec: number | null): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-/** 재사용 가능 여부를 한눈에. 이 구분이 이 화면의 핵심이다 */
-function LicenseBadge({ license }: { license: string | null }) {
-  const reusable = license === "creativeCommon";
+/**
+ * 재사용 가능 여부를 한눈에. 이 구분이 이 화면의 핵심이다.
+ *
+ * 가공(라이선스)과 재공유(임베드)는 다른 권한이라 배지를 따로 낸다. 하나로 합치면
+ * "퍼가기 되니까 잘라 써도 되겠지"로 읽힌다.
+ */
+function LicenseBadge({ video }: { video: YtVideo }) {
+  const reusable = video.license === "creativeCommon";
+  const notes: string[] = [];
+  if (video.embeddable === false) notes.push("퍼가기 금지");
+  if (video.blockedInKR) notes.push("국내 차단");
+  if (!video.commentsEnabled) notes.push("댓글 잠김");
+
   return (
-    <span className={`badge ${reusable ? "on" : "off"}`}>
-      {reusable ? "CC · 가공 가능" : "표준 · 가공 불가"}
-    </span>
+    <>
+      <span className={`badge ${reusable ? "on" : "off"}`}>
+        {reusable ? "CC · 가공 가능" : "표준 · 가공 불가"}
+      </span>
+      {notes.map((n) => (
+        <span key={n} className="badge off" style={{ marginLeft: 4 }}>
+          {n}
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -135,6 +166,16 @@ export default function ShortsPage() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentsFor, setCommentsFor] = useState("");
   const [loadingComments, setLoadingComments] = useState(false);
+
+  // 댓글 타임스탬프 하이라이트
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
+  const [histogram, setHistogram] = useState<HistBin[]>([]);
+  const [highlightsFor, setHighlightsFor] = useState("");
+  const [highlightNote, setHighlightNote] = useState("");
+  const [loadingHighlights, setLoadingHighlights] = useState(false);
+  /* 피크보다 몇 초 앞에서 컷을 시작할지. 사람은 반응한 뒤에 댓글을 쓴다 */
+  const [leadInSec, setLeadInSec] = useState(4);
+  const [cutLenSec, setCutLenSec] = useState(15);
 
   // 렌더 입력
   const [input, setInput] = useState("");
@@ -286,6 +327,46 @@ export default function ShortsPage() {
     }
   }
 
+  /**
+   * 댓글 타임스탬프로 하이라이트 구간을 찾는다.
+   *
+   * 분석이라 어느 영상에든 돌린다. 나오는 건 "몇 초가 반응이 좋았나"이지 그 영상을
+   * 쓸 권리가 아니다 — 컷 실행은 소재 탭에서 고른 파일에만 붙는다.
+   */
+  async function loadHighlights(videoId: string, videoTitle: string) {
+    setLoadingHighlights(true);
+    setHighlightsFor(videoTitle);
+    setHighlights([]);
+    setHistogram([]);
+    setError("");
+    try {
+      const params = new URLSearchParams({
+        mode: "highlights",
+        videoId,
+        leadIn: String(leadInSec),
+        cut: String(cutLenSec),
+      });
+      const d = await (await fetch(`/api/shorts/discover?${params}`)).json();
+      setHighlights(d.highlights ?? []);
+      setHistogram(d.histogram ?? []);
+      setHighlightNote(
+        d.ok
+          ? `댓글 ${d.commentCount ?? 0}개 중 타임스탬프 ${d.mentionCount ?? 0}건`
+          : "",
+      );
+      if (d.error) setError(d.error);
+      else if (d.ok && !(d.highlights ?? []).length) {
+        setError(
+          "타임스탬프가 달린 댓글이 없어 하이라이트를 찾지 못했습니다. 게임·음악·스포츠 영상에서 잘 나옵니다.",
+        );
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoadingHighlights(false);
+    }
+  }
+
   async function render() {
     if (!input.trim()) {
       setError("원본 영상 주소를 넣으세요. 소재 목록에서 고르면 자동으로 채워집니다.");
@@ -405,11 +486,10 @@ export default function ShortsPage() {
                       </td>
                       <td className="num">{num(v.views)}</td>
                       <td className="num dim">{mmss(v.durationSec)}</td>
-                      <td><LicenseBadge license={v.license} /></td>
+                      <td><LicenseBadge video={v} /></td>
                       <td>
-                        <button className="small" onClick={() => loadComments(v.id, v.title)}>
-                          댓글
-                        </button>
+                        <button className="small" onClick={() => loadComments(v.id, v.title)}>댓글
+                        </button>{" "}<button className="small" onClick={() => loadHighlights(v.id, v.title)}>하이라이트</button>
                       </td>
                     </tr>
                   ))}
@@ -481,11 +561,10 @@ export default function ShortsPage() {
                               {v.channel} · {mmss(v.durationSec)}
                             </div>
                           </td>
-                          <td style={{ width: 130 }}><LicenseBadge license={v.license} /></td>
+                          <td style={{ width: 130 }}><LicenseBadge video={v} /></td>
                           <td style={{ width: 90 }}>
-                            <button className="small" onClick={() => loadComments(v.id, v.title)}>
-                              댓글
-                            </button>
+                            <button className="small" onClick={() => loadComments(v.id, v.title)}>댓글
+                            </button>{" "}<button className="small" onClick={() => loadHighlights(v.id, v.title)}>하이라이트</button>
                           </td>
                         </tr>
                       ))}
@@ -685,6 +764,123 @@ export default function ShortsPage() {
           <p className="hint">
             누르면 아래 렌더에 얹힙니다. 다시 누르면 해제됩니다.
           </p>
+        </div>
+      )}
+
+      {(loadingHighlights || highlights.length > 0) && (
+        <div className="card">
+          <h2>
+            하이라이트 {loadingHighlights && <span className="spinner" />}
+            <span className="dim" style={{ fontSize: 12 }}> {highlightsFor}</span>
+          </h2>
+          <p className="hint" style={{ marginTop: 0 }}>
+            {highlightNote} · 댓글이 몰린 지점입니다. <strong>구간을 어디에 쓸지는 소재
+            라이선스가 정합니다</strong> — 남의 영상은 기획 참고용이고, 컷은 CC·아카이브·
+            직접 올린 파일에만 적용하세요.
+          </p>
+
+          <div className="row" style={{ marginBottom: 14 }}>
+            <div className="field">
+              <label>리드인 (초)</label>
+              <input
+                type="number"
+                min={0}
+                max={20}
+                value={leadInSec}
+                style={{ width: 80 }}
+                onChange={(e) => setLeadInSec(Number(e.target.value))}
+              />
+            </div>
+            <div className="field">
+              <label>컷 길이 (초)</label>
+              <input
+                type="number"
+                min={3}
+                max={60}
+                value={cutLenSec}
+                style={{ width: 80 }}
+                onChange={(e) => setCutLenSec(Number(e.target.value))}
+              />
+            </div>
+            <p className="hint" style={{ margin: 0, alignSelf: "center", maxWidth: 320 }}>
+              사람은 좋은 장면이 시작될 때가 아니라 반응한 뒤에 댓글을 씁니다. 그래서 몇 초
+              앞에서 시작해야 클라이맥스를 놓치지 않습니다.
+            </p>
+          </div>
+
+          {histogram.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-end",
+                gap: 1,
+                height: 70,
+                marginBottom: 14,
+                overflowX: "auto",
+              }}
+            >
+              {(() => {
+                const max = Math.max(...histogram.map((b) => b.score), 1);
+                return histogram.map((b) => (
+                  <div
+                    key={b.start}
+                    title={`${mmss(b.start)} · 언급 ${b.mentions}건`}
+                    style={{
+                      flex: "1 0 3px",
+                      height: `${Math.max((b.score / max) * 100, b.score > 0 ? 6 : 1)}%`,
+                      background: b.score > 0 ? "var(--accent)" : "var(--border)",
+                      opacity: b.score > 0 ? 0.35 + (b.score / max) * 0.65 : 1,
+                      borderRadius: 1,
+                    }}
+                  />
+                ));
+              })()}
+            </div>
+          )}
+
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: 70 }}>지점</th>
+                <th style={{ width: 90 }}>컷 구간</th>
+                <th style={{ width: 60 }} className="num">언급</th>
+                <th>대표 반응</th>
+                <th style={{ width: 90 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {highlights.map((h) => (
+                <tr key={h.peakAt}>
+                  <td className="mono">{mmss(h.peakAt)}</td>
+                  <td className="mono dim">
+                    {mmss(h.cutStart)} +{h.cutDuration}s
+                  </td>
+                  <td className="num">{h.mentions}</td>
+                  <td style={{ fontSize: 12 }}>
+                    {h.samples[0] ? (
+                      <>
+                        <span className="dim">♥ {num(h.samples[0].likes)} </span>
+                        {h.samples[0].text.slice(0, 60)}
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td>
+                    <button
+                      className="small"
+                      onClick={() => {
+                        setStartSec(h.cutStart);
+                        setDurationSec(h.cutDuration);
+                      }}
+                    >
+                      구간 적용
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

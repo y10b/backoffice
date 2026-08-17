@@ -24,6 +24,15 @@ type SettingsState = {
     keyCount: number;
     model: string;
   };
+  youtube: { configured: boolean; fromEnv: boolean; apiKeyPreview: string };
+  claude: { configured: boolean; fromEnv: boolean; apiKeyPreview: string; model: string };
+  seedance: {
+    configured: boolean;
+    fromEnv: boolean;
+    apiKeyPreview: string;
+    baseUrl: string;
+    model: string;
+  };
   ga4: {
     configured: boolean;
     fromEnv: boolean;
@@ -78,6 +87,12 @@ export default function SettingsPage() {
   const [ga4Property, setGa4Property] = useState("");
   const [adsenseId, setAdsenseId] = useState("");
   const [adsenseSecret, setAdsenseSecret] = useState("");
+  const [youtubeKey, setYoutubeKey] = useState("");
+  const [anthropicKey, setAnthropicKey] = useState("");
+  const [claudeModel, setClaudeModel] = useState("claude-opus-5");
+  const [seedanceKey, setSeedanceKey] = useState("");
+  const [seedanceBaseUrl, setSeedanceBaseUrl] = useState("");
+  const [seedanceModel, setSeedanceModel] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [tests, setTests] = useState<TestState>({});
@@ -89,6 +104,12 @@ export default function SettingsPage() {
         setState(s);
         setModel(s.gemini.model);
         setAdCustomer((prev) => prev || s.searchAd.customerId);
+        if (s.claude) setClaudeModel(s.claude.model);
+        if (s.seedance) {
+          // 저장된 값이 곧 화면 기본값이다. 사용자가 입력 중이면 덮어쓰지 않는다
+          setSeedanceBaseUrl((prev) => prev || s.seedance.baseUrl);
+          setSeedanceModel((prev) => prev || s.seedance.model);
+        }
       });
   }, []);
 
@@ -498,6 +519,145 @@ export default function SettingsPage() {
             className="primary"
             onClick={() =>
               save({ geminiApiKey: apiKey, geminiModel: model }).then(() => setApiKey(""))
+            }
+          >
+            저장
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          YouTube Data API{" "}
+          {state?.youtube && (
+            <Status
+              configured={state.youtube.configured}
+              fromEnv={state.youtube.fromEnv}
+              preview={state.youtube.apiKeyPreview}
+            />
+          )}
+        </h2>
+        <div className="row">
+          <div className="field" style={{ flex: 1, minWidth: 260 }}>
+            <label>API 키 (GCP → YouTube Data API v3 사용 설정 후 발급)</label>
+            <input
+              type="password"
+              className="mono"
+              placeholder="AIza..."
+              value={youtubeKey}
+              onChange={(e) => setYoutubeKey(e.target.value)}
+            />
+            <p className="hint" style={{ marginTop: 6 }}>
+              쇼츠·유아 채널의 영상 조회에 씁니다. 일일 할당량 10,000 단위이고 검색은 1회당
+              100 단위라 금세 닳습니다.
+            </p>
+          </div>
+          <button
+            className="primary"
+            onClick={() => save({ youtubeApiKey: youtubeKey }).then(() => setYoutubeKey(""))}
+            disabled={!youtubeKey.trim()}
+          >
+            저장
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          Claude API — 영상 기획{" "}
+          {state?.claude && (
+            <Status
+              configured={state.claude.configured}
+              fromEnv={state.claude.fromEnv}
+              preview={state.claude.apiKeyPreview}
+            />
+          )}
+        </h2>
+        <p className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
+          블로그 본문은 Gemini 가 그대로 담당합니다. Claude 는 유아 채널의 영상 기획·대본·장면
+          프롬프트에만 씁니다.
+        </p>
+        <div className="row">
+          <div className="field" style={{ flex: 1, minWidth: 260 }}>
+            <label>API 키 (console.anthropic.com)</label>
+            <input
+              type="password"
+              className="mono"
+              placeholder="sk-ant-..."
+              value={anthropicKey}
+              onChange={(e) => setAnthropicKey(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>모델</label>
+            <select value={claudeModel} onChange={(e) => setClaudeModel(e.target.value)}>
+              <option value="claude-opus-5">claude-opus-5 (권장)</option>
+              <option value="claude-sonnet-5">claude-sonnet-5 (저렴)</option>
+            </select>
+          </div>
+          <button
+            className="primary"
+            onClick={() =>
+              save({ anthropicApiKey: anthropicKey, claudeModel }).then(() =>
+                setAnthropicKey(""),
+              )
+            }
+          >
+            저장
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          Seedance — 영상 생성{" "}
+          {state?.seedance && (
+            <Status
+              configured={state.seedance.configured}
+              fromEnv={state.seedance.fromEnv}
+              preview={state.seedance.apiKeyPreview}
+            />
+          )}
+        </h2>
+        <p className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
+          제공자마다 주소와 모델 ID 가 다릅니다. 404 가 나면 base URL 을 쓰는 곳에 맞게
+          바꾸세요 — Volcengine(중국) <span className="mono">ark.cn-beijing.volces.com/api/v3</span>,
+          BytePlus(국제) <span className="mono">ark.ap-southeast.bytepluses.com/api/v3</span>.
+        </p>
+        <div className="row">
+          <div className="field" style={{ flex: 1, minWidth: 240 }}>
+            <label>API 키</label>
+            <input
+              type="password"
+              className="mono"
+              value={seedanceKey}
+              onChange={(e) => setSeedanceKey(e.target.value)}
+            />
+          </div>
+          <div className="field" style={{ flex: 1, minWidth: 240 }}>
+            <label>Base URL</label>
+            <input
+              className="mono"
+              value={seedanceBaseUrl}
+              onChange={(e) => setSeedanceBaseUrl(e.target.value)}
+            />
+          </div>
+          <div className="field" style={{ minWidth: 200 }}>
+            <label>모델 ID</label>
+            <input
+              className="mono"
+              value={seedanceModel}
+              onChange={(e) => setSeedanceModel(e.target.value)}
+            />
+          </div>
+          <button
+            className="primary"
+            onClick={() =>
+              save({
+                seedanceApiKey: seedanceKey,
+                seedanceBaseUrl,
+                seedanceModel,
+              }).then(() => setSeedanceKey(""))
             }
           >
             저장

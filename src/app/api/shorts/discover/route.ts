@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
-import { searchCreativeCommons, topComments, trendingVideos } from "@/lib/youtube";
+import {
+  allComments,
+  searchCreativeCommons,
+  topComments,
+  trendingVideos,
+  videoDetails,
+} from "@/lib/youtube";
 import { archiveFiles, licenseLabel, searchArchive } from "@/lib/archive";
+import { buildHistogram, collectMentions, pickHighlights } from "@/lib/highlights";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -107,6 +114,68 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: true, mode, videoId, comments });
     } catch (e) {
       return NextResponse.json({ ok: false, mode, comments: [], error: (e as Error).message });
+    }
+  }
+
+  /*
+   * 댓글 타임스탬프 하이라이트.
+   *
+   * 분석 전용이다. 어느 영상에든 돌려도 되지만, 나오는 건 "몇 초 지점이 반응이 좋았나"
+   * 라는 정보이지 그 영상을 쓸 권리가 아니다. 컷 실행은 소재 탭의 CC·아카이브·업로드
+   * 파일에만 붙는다.
+   */
+  if (mode === "highlights") {
+    if (!videoId) {
+      return NextResponse.json(
+        { ok: false, error: "videoId 가 필요합니다.", highlights: [] },
+        { status: 400 },
+      );
+    }
+    const binSec = Number(url.searchParams.get("bin") ?? 10) || 10;
+    const leadInSec = Number(url.searchParams.get("leadIn") ?? 4) || 4;
+    const cutDuration = Number(url.searchParams.get("cut") ?? 15) || 15;
+
+    try {
+      const [detail, comments] = await Promise.all([
+        videoDetails(videoId).catch(() => null),
+        allComments(videoId, 5),
+      ]);
+      const videoDuration = detail?.durationSec ?? undefined;
+
+      const mentions = collectMentions(comments, videoDuration);
+      const highlights = pickHighlights(mentions, {
+        binSec,
+        leadInSec,
+        cutDuration,
+        videoDuration,
+      });
+
+      return NextResponse.json({
+        ok: true,
+        mode,
+        videoId,
+        video: detail,
+        commentCount: comments.length,
+        mentionCount: mentions.length,
+        histogram: buildHistogram(mentions, binSec, videoDuration),
+        highlights,
+        sources: [
+          {
+            id: "youtube-comments",
+            label: "댓글 타임스탬프",
+            ok: true,
+            message: `댓글 ${comments.length}개 중 타임스탬프 ${mentions.length}건 · 하이라이트 ${highlights.length}구간`,
+          },
+        ],
+      });
+    } catch (e) {
+      return NextResponse.json({
+        ok: false,
+        mode,
+        highlights: [],
+        histogram: [],
+        error: (e as Error).message,
+      });
     }
   }
 
