@@ -4,19 +4,20 @@ import { useCallback, useEffect, useState } from "react";
 import Help from "@/components/Help";
 
 /**
- * 쇼츠 만들기 — 게임 채널.
+ * 쇼츠 만들기 — 롱폼을 잘라 쇼츠로.
  *
  * 흐름은 세 단계다.
- *   1. 게임 영상을 검색한다 (키워드 탐색 화면과 같은 표 형태)
+ *   1. CC 라이선스 롱폼을 찾는다 (가공해도 되는 것만)
  *   2. 행을 누르면 그 영상의 댓글 타임스탬프를 집계해 하이라이트 구간을 찾는다
- *   3. 그 구간을 참고해 **내가 녹화한 파일**로 렌더한다
+ *   3. 그 구간을 잘라 쇼츠로 렌더한다
  *
- * 2단계는 분석이라 어느 영상에든 돌려도 되지만, 나오는 건 "몇 초 지점이 먹혔나"라는
- * 정보이지 그 영상을 쓸 권리가 아니다. 게임은 직접 플레이해 녹화하면 온전히 내 소재가
- * 되므로, 어느 장면을 노릴지만 여기서 정한다.
+ * 목록에 표준 라이선스를 섞지 않는다. 잘라 쓰는 게 목적인데 쓸 수 없는 줄이 섞여
+ * 있으면 목록을 매번 눈으로 걸러야 한다. CC 로 좁히면 목록이 곧 후보가 된다.
  *
- * 역사 소재(공공누리 업로드·Internet Archive)를 쓰던 시절의 화면은 걷어냈다.
- * API 쪽 `mode=sources` / `mode=files` 는 남겨뒀으니 되돌릴 수 있다.
+ * 길이는 20분 초과가 기본이다. 한 편에서 여러 컷을 뽑을 수 있어 소재 하나로 여러
+ * 편이 나온다. 댓글 타임스탬프가 어디에 몰렸는지를 보고 어느 구간을 뜰지 정한다.
+ *
+ * CC 라도 출처 표기는 필요하다 — 발행할 때 원작자와 채널을 설명란에 적어야 한다.
  */
 
 type YtVideo = {
@@ -74,13 +75,24 @@ type Job = {
  * 게임으로 방향을 잡았다. 댓글 타임스탬프는 "그 장면"이 뚜렷한 장르에서 많이 달리고,
  * 게임이 그중 제일 많다. 롱폼 하이라이트 영상에 특히 잘 붙는다.
  */
-const GAME_PRESETS = [
-  "롤 하드캐리",
-  "배그 클러치",
-  "발로란트 에이스",
-  "오버워치 팀킬",
-  "스타 역전",
-  "피파 골모음",
+/**
+ * 자주 쓰는 검색어.
+ *
+ * 예전 목록은 "배그 클러치"·"오버워치 팀킬"처럼 장면을 콕 집는 말이었다. 표준
+ * 라이선스까지 뒤지던 시절에는 그게 맞았는데, CC 롱폼으로 좁히니 절반이 0건이었다
+ * (배그 클러치·오버워치 팀킬·피파 골모음 전부 0건). CC 로 영상을 통째로 푸는 쪽은
+ * 장면 편집본이 아니라 실황·풀 플레이라, 게임 이름이나 갈래로 찾아야 걸린다.
+ *
+ * 아래는 전부 눌러 보고 20분 초과 CC 가 열 건씩 나오는 것만 남긴 목록이다.
+ */
+const SEED_PRESETS = [
+  "리그오브레전드",
+  "배틀그라운드",
+  "마인크래프트",
+  "로블록스",
+  "공포게임",
+  "레트로 게임",
+  "게임 실황",
 ];
 
 function num(n: number | null | undefined): string {
@@ -134,7 +146,8 @@ export default function ShortsPage() {
   const [videos, setVideos] = useState<YtVideo[]>([]);
   const [listNote, setListNote] = useState("");
   const [query, setQuery] = useState("");
-  const [months, setMonths] = useState(6);
+  /* 잘라 쓸 소재는 길수록 뽑을 구간이 많다. 기본은 20분 초과 */
+  const [duration, setDuration] = useState<"long" | "medium" | "any">("long");
   const [srcSources, setSrcSources] = useState<Source[]>([]);
   const [searching, setSearching] = useState(false);
   const [loadingTrend, setLoadingTrend] = useState(false);
@@ -181,7 +194,7 @@ export default function ShortsPage() {
 
   useEffect(() => {
     loadJobs();
-    loadTrending();
+    loadDefault();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -204,27 +217,35 @@ export default function ShortsPage() {
     (j) => j.status === "queued" && Date.now() - new Date(j.created_at).getTime() > 30_000,
   );
 
-  async function loadTrending() {
+  /**
+   * 첫 화면 목록.
+   *
+   * 예전에는 인기 급상승을 띄웠는데, 그건 사실상 전부 표준 라이선스라(실측 10/10)
+   * 손댈 수 없는 줄만 스물다섯 개 나왔다. 화면을 열자마자 보이는 목록은 바로
+   * 쓸 수 있는 것이어야 한다. 프리셋 첫 항목으로 CC 롱폼을 채운다.
+   */
+  const loadDefault = useCallback(async () => {
     setLoadingTrend(true);
     setError("");
     try {
-      const d = await (await fetch("/api/shorts/discover?mode=trending")).json();
+      const params = new URLSearchParams({ mode: "sources", q: SEED_PRESETS[0], duration: "long" });
+      const d = await (await fetch(`/api/shorts/discover?${params}`)).json();
       setVideos(d.videos ?? []);
       setSrcSources(d.sources ?? []);
-      setListNote("인기 급상승 (국내)");
+      setListNote(d.note ?? "");
       if (d.error) setError(d.error);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoadingTrend(false);
     }
-  }
+  }, []);
 
   /**
-   * 게임 영상 검색.
+   * 가공 가능한 소재 검색.
    *
-   * 라이선스로 걸러내지 않는다. 여기서 하는 건 댓글 분석이라 영상 파일에 손대지 않고,
-   * CC 로 좁히면 정작 댓글이 많이 달린 인기 영상이 전부 빠진다.
+   * CC 라이선스로 좁힌다. 롱폼을 잘라 쇼츠로 만드는 흐름이라, 가공해도 되는 것만
+   * 보여야 목록이 곧 후보가 된다. 표준 라이선스를 섞으면 쓸 수 없는 줄만 늘어난다.
    */
   async function searchSources() {
     if (!query.trim()) return;
@@ -232,9 +253,9 @@ export default function ShortsPage() {
     setError("");
     try {
       const params = new URLSearchParams({
-        mode: "search",
+        mode: "sources",
         q: query.trim(),
-        months: String(months),
+        duration,
       });
       const d = await (await fetch(`/api/shorts/discover?${params}`)).json();
       setVideos(d.videos ?? []);
@@ -350,16 +371,17 @@ export default function ShortsPage() {
     <>
       <h1 className="page-title">쇼츠</h1>
       <p className="page-desc">
-        게임 영상을 검색해 <strong>댓글이 몰린 지점</strong>을 찾습니다. 어느 순간이 반응이
-        좋았는지 보고, 그 장면을 내 플레이로 만드는 흐름입니다.
+        <strong>CC 라이선스 롱폼</strong>을 찾아 댓글이 몰린 지점을 보고, 그 구간을 잘라
+        쇼츠로 만듭니다. 한 편에서 여러 컷이 나옵니다.
       </p>
 
       {error && <div className="alert warn">{error}</div>}
 
       <div className="alert ok">
-        <strong>남의 영상 파일은 건드리지 않습니다.</strong> 여기서 얻는 건 &ldquo;몇 초 지점이
-        먹혔나&rdquo;라는 정보이고, 그 구간을 쓸 권리가 아닙니다. 게임은 내가 직접 플레이해
-        녹화하면 온전히 내 소재가 되므로, 어느 장면을 노릴지만 여기서 정하세요.
+        <strong>목록은 CC 라이선스만 보여줍니다.</strong> 표준 라이선스는 잘라 쓸 수 없어
+        아예 빼두었으니, 여기 나오는 건 전부 가공해도 되는 것입니다. 다만{" "}
+        <strong>출처 표기는 여전히 필요합니다</strong> — 발행할 때 원작자와 채널을 설명란에
+        적으세요. CC BY 는 표기가 이용 조건입니다.
       </div>
 
       <div className="card">
@@ -371,7 +393,7 @@ export default function ShortsPage() {
           <div className="field" style={{ flex: 1, minWidth: 240 }}>
             <label>검색어</label>
             <input
-              placeholder="롤 하드캐리, 배그 클러치, 발로란트 에이스 …"
+              placeholder="리그오브레전드, 마인크래프트, 공포게임 …"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && searchSources()}
@@ -379,23 +401,25 @@ export default function ShortsPage() {
           </div>
           <div className="field">
             <label>
-              기간
-              <Help text="최근 것만 볼지. 게임은 패치와 메타가 자주 바뀌어 오래된 영상은 참고가 덜 됩니다." />
+              길이
+              <Help text="롱폼 한 편에서 여러 컷을 뽑아 쇼츠 여러 편을 만드는 흐름입니다.&#10;20분 초과가 소재 효율이 가장 좋고, 4분 미만은 뽑을 구간이 몇 개 안 나옵니다." />
             </label>
-            <select value={months} onChange={(e) => setMonths(Number(e.target.value))}>
-              <option value={3}>최근 3개월</option>
-              <option value={6}>최근 6개월</option>
-              <option value={12}>최근 1년</option>
-              <option value={60}>전체</option>
+            <select
+              value={duration}
+              onChange={(e) => setDuration(e.target.value as "long" | "medium" | "any")}
+            >
+              <option value="long">20분 초과 (권장)</option>
+              <option value="medium">4~20분</option>
+              <option value="any">길이 무관</option>
             </select>
           </div>
           <button className="primary" onClick={searchSources} disabled={searching || !query.trim()}>
             {searching && <span className="spinner" />}
             검색
           </button>
-          <button className="ghost" onClick={loadTrending} disabled={loadingTrend}>
+          <button className="ghost" onClick={loadDefault} disabled={loadingTrend}>
             {loadingTrend && <span className="spinner" />}
-            지금 뜨는 것
+            처음 목록
           </button>
           {srcSources.map((s) => (
             <span key={s.id} className={`badge ${s.ok ? "on" : "off"}`}>
@@ -408,7 +432,7 @@ export default function ShortsPage() {
           <span className="hint" style={{ margin: 0, alignSelf: "center" }}>
             자주 쓰는 검색어:
           </span>
-          {GAME_PRESETS.map((p) => (
+          {SEED_PRESETS.map((p) => (
             <button
               key={p}
               className="small ghost"

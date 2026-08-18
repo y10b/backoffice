@@ -104,28 +104,57 @@ export async function GET(req: Request) {
     }
   }
 
-  /* 가공 가능한 소재 — 두 소스를 나란히. 지금 화면에서는 쓰지 않지만 남겨둔다 */
+  /*
+   * 가공 가능한 소재.
+   *
+   * 롱폼을 잘라 쇼츠로 만드는 흐름이라 **가공해도 되는 것만** 보여준다. 인기 급상승은
+   * 사실상 전부 표준 라이선스라(실측 10/10) 목록에 섞어봐야 쓸 수 없는 줄만 늘어난다.
+   *
+   * 길이는 `long`(20분 초과)이 기본이다. 한 편에서 여러 컷을 뽑을 수 있어 소재 하나로
+   * 여러 편이 나오고, 4분짜리에서는 쓸 만한 구간이 몇 개 안 나온다.
+   */
   if (mode === "sources") {
     if (!query) {
       return NextResponse.json(
-        { ok: false, error: "검색어를 입력하세요.", youtube: [], archive: [], sources: [] },
+        { ok: false, error: "검색어를 입력하세요.", videos: [], archive: [], sources: [] },
         { status: 400 },
       );
     }
 
+    const durationParam = url.searchParams.get("duration") ?? "long";
+    const duration = (["any", "long", "medium", "short"] as const).includes(
+      durationParam as any,
+    )
+      ? (durationParam as "any" | "long" | "medium" | "short")
+      : "long";
+
     const [yt, ar] = await Promise.allSettled([
-      searchCreativeCommons(query, 12),
+      searchCreativeCommons(query, 25, { duration }),
       searchArchive(query, 12),
     ]);
 
-    const youtube = yt.status === "fulfilled" ? yt.value : [];
+    let videos = yt.status === "fulfilled" ? yt.value : [];
+    /*
+     * 긴 것부터 보여준다. 잘라 쓸 소재는 길수록 뽑을 구간이 많다.
+     * 길이를 모르는 항목(파싱 실패)은 판단할 수 없으니 뒤로 보낸다.
+     */
+    videos = [...videos].sort((a, b) => (b.durationSec ?? -1) - (a.durationSec ?? -1));
+
+    const label =
+      duration === "long"
+        ? "20분 초과"
+        : duration === "medium"
+          ? "4~20분"
+          : duration === "short"
+            ? "4분 미만"
+            : "길이 무관";
     sources.push({
       id: "youtube-cc",
       label: "유튜브 CC 라이선스",
       ok: yt.status === "fulfilled",
       message:
         yt.status === "fulfilled"
-          ? `${youtube.length}건`
+          ? `${videos.length}건 · ${label} · 전부 가공 가능`
           : (yt.reason as Error).message,
     });
 
@@ -144,7 +173,15 @@ export async function GET(req: Request) {
         ar.status === "fulfilled" ? `${archive.length}건` : (ar.reason as Error).message,
     });
 
-    return NextResponse.json({ ok: true, mode, query, youtube, archive, sources });
+    return NextResponse.json({
+      ok: true,
+      mode,
+      query,
+      videos,
+      archive,
+      sources,
+      note: `CC 라이선스 · ${label} · 긴 순 ${videos.length}건`,
+    });
   }
 
   /* 인기 댓글 */

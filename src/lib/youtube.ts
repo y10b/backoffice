@@ -202,14 +202,24 @@ export async function trendingVideos(
 export async function searchCreativeCommons(
   query: string,
   maxResults = 20,
-  /** 임베드·외부재생 가능한 것만 남길지. 후보가 너무 적으면 끄고 넓힌다 */
-  shareableOnly = true,
+  opts: {
+    /** 임베드·외부재생 가능한 것만 남길지. 후보가 너무 적으면 끄고 넓힌다 */
+    shareableOnly?: boolean;
+    /**
+     * 길이 조건. 쇼츠로 잘라 쓸 거라면 `long`(20분 초과)이 유리하다 —
+     * 한 편에서 여러 컷을 뽑을 수 있어 소재 하나로 여러 편이 나온다.
+     * `medium` 은 4~20분, `short` 는 4분 미만이라 뽑을 게 별로 없다.
+     */
+    duration?: "any" | "long" | "medium" | "short";
+  } = {},
 ): Promise<YtVideo[]> {
+  const { shareableOnly = true, duration = "any" } = opts;
   const found: any = await call("search", {
     part: "id",
     q: query,
     type: "video",
     videoLicense: "creativeCommon",
+    ...(duration !== "any" ? { videoDuration: duration } : {}),
     ...(shareableOnly ? { videoEmbeddable: "true", videoSyndicated: "true" } : {}),
     order: "viewCount",
     maxResults: String(Math.min(Math.max(maxResults, 1), 50)),
