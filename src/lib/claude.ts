@@ -10,7 +10,18 @@ import { getSettings } from "./db";
  * 이 모듈은 **기획만** 한다. 실제 영상 생성은 seedance.ts 가 맡는다.
  */
 
-export const DEFAULT_MODEL = "claude-opus-5";
+/**
+ * 기본 모델.
+ *
+ * 이 모듈이 하는 일은 대본 한 편이다 — 스키마가 정해진 JSON 을 한 번 받아오는
+ * 유계 작업이지, 도구를 물고 길게 도는 에이전트 작업이 아니다. 출력이 비싼 쪽인데
+ * (Sonnet 5 는 100만 토큰당 입력 $3 / 출력 $15, Opus 5 는 $5 / $25) 기획안은
+ * 장면 수만큼 길어져서 출력이 늘어난다. 여기서 Opus 를 쓰면 값의 대부분을
+ * 출력에 낸다.
+ *
+ * 품질이 아쉬우면 설정 화면에서 claude-opus-5 로 올리면 된다.
+ */
+export const DEFAULT_MODEL = "claude-sonnet-5";
 
 export async function anthropicKey(): Promise<string | null> {
   const s = await getSettings(["anthropic_api_key"]);
@@ -63,7 +74,34 @@ export type KidsVideoPlan = {
   tags: string[];
   /** 기획자가 확인해야 할 안전·저작권 체크 포인트 */
   safetyNotes: string[];
+  /**
+   * 이번 호출이 쓴 토큰과 그 값.
+   *
+   * 대본은 장면 수를 올릴수록 출력이 길어지고, 값은 출력 쪽이 다섯 배 비싸다.
+   * 숫자를 화면에 띄워야 "장면을 몇 개까지 둘까"를 감이 아니라 값으로 정한다.
+   */
+  usage: PlanUsage;
 };
+
+export type PlanUsage = {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  /** 달러. 공개 정가 기준이라 실제 청구액과는 다를 수 있다 */
+  costUsd: number;
+};
+
+/** 100만 토큰당 정가(입력, 출력). 목록에 없는 모델은 값을 0 으로 둔다 */
+const PRICING: Record<string, [number, number]> = {
+  "claude-opus-5": [5, 25],
+  "claude-sonnet-5": [3, 15],
+  "claude-haiku-4-5": [1, 5],
+};
+
+export function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
+  const [inRate, outRate] = PRICING[model] ?? [0, 0];
+  return (inputTokens * inRate + outputTokens * outRate) / 1_000_000;
+}
 
 const PLAN_SCHEMA = {
   type: "object",
@@ -245,7 +283,12 @@ export async function planKidsVideo(o: PlanOptions): Promise<KidsVideoPlan> {
     system: SYSTEM,
     thinking: { type: "adaptive" },
     output_config: {
-      effort: "high",
+      /*
+       * 대본은 형식이 스키마로 고정돼 있어 모델이 구성을 헤맬 여지가 적다.
+       * high 는 그만큼을 생각에 더 쓰는데, 여기서는 값에 비해 남는 게 적었다.
+       * 결과가 얕으면 설정에서 모델을 올리는 편이 이 값을 올리는 것보다 낫다.
+       */
+      effort: "medium",
       format: { type: "json_schema", schema: PLAN_SCHEMA },
     },
     messages: [{ role: "user", content: buildPrompt(o) }],
@@ -288,7 +331,16 @@ export async function planKidsVideo(o: PlanOptions): Promise<KidsVideoPlan> {
 
   if (!scenes.length) throw new Error("기획안에 장면이 없습니다.");
 
+  const inputTokens = message.usage?.input_tokens ?? 0;
+  const outputTokens = message.usage?.output_tokens ?? 0;
+
   return {
+    usage: {
+      model,
+      inputTokens,
+      outputTokens,
+      costUsd: estimateCost(model, inputTokens, outputTokens),
+    },
     analysis: String(parsed.analysis ?? "").trim(),
     theme: String(parsed.theme ?? o.theme ?? "").trim(),
     title: String(parsed.title ?? "").trim(),

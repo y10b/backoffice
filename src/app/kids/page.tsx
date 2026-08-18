@@ -48,6 +48,8 @@ type Plan = {
   scenes: Scene[];
   tags: string[];
   safetyNotes: string[];
+  /** 이번 기획에 쓴 토큰과 정가 기준 값. 예전 기획안에는 없어 선택 필드다 */
+  usage?: { model: string; inputTokens: number; outputTokens: number; costUsd: number };
 };
 
 type SourceFile = { name: string; originalName: string; sizeBytes: number; path: string };
@@ -617,7 +619,16 @@ export default function KidsPage() {
       {plan && (
         <>
           <div className="card">
-            <h2>기획안</h2>
+            <h2>
+              기획안
+              {plan.usage && (
+                <span className="badge" style={{ marginLeft: 8, fontWeight: 400 }}>
+                  {plan.usage.model} · 입력 {plan.usage.inputTokens.toLocaleString()} · 출력{" "}
+                  {plan.usage.outputTokens.toLocaleString()} · $
+                  {plan.usage.costUsd.toFixed(3)}
+                </span>
+              )}
+            </h2>
             <div className="field">
               <label>제목</label>
               <input value={plan.title} readOnly />

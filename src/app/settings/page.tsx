@@ -91,7 +91,7 @@ export default function SettingsPage() {
   const [adsenseSecret, setAdsenseSecret] = useState("");
   const [youtubeKey, setYoutubeKey] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
-  const [claudeModel, setClaudeModel] = useState("claude-opus-5");
+  const [claudeModel, setClaudeModel] = useState("claude-sonnet-5");
   const [veoModel, setVeoModel] = useState("");
   const [fishKey, setFishKey] = useState("");
   const [fishModel, setFishModel] = useState("");
@@ -635,8 +635,10 @@ export default function SettingsPage() {
           <div className="field">
             <label>모델</label>
             <select value={claudeModel} onChange={(e) => setClaudeModel(e.target.value)}>
-              <option value="claude-opus-5">claude-opus-5 (권장)</option>
-              <option value="claude-sonnet-5">claude-sonnet-5 (저렴)</option>
+              {/* 대본은 스키마가 고정된 유계 작업이라 Sonnet 으로 충분하다 */}
+              <option value="claude-sonnet-5">claude-sonnet-5 (권장 · 출력 $15/1M)</option>
+              <option value="claude-opus-5">claude-opus-5 (품질 · 출력 $25/1M)</option>
+              <option value="claude-haiku-4-5">claude-haiku-4-5 (최저가 · 출력 $5/1M)</option>
             </select>
           </div>
           <button
