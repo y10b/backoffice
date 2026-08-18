@@ -248,7 +248,7 @@ export async function POST(req: Request) {
   }
 
   /*
-   * 조립. 장면 클립들을 순서대로 이어 붙이고 자막·내레이션을 얹는다.
+   * 조립. 장면 클립들을 순서대로 이어 붙이고 자막·내레이션·댓글을 얹는다.
    *
    * ffmpeg 는 배포본(서버리스)에서 못 돌기 때문에 직접 렌더하지 않고 큐에 넣는다.
    * 로컬 워커(`npm run worker`)가 가져가 처리한다.
@@ -268,6 +268,18 @@ export async function POST(req: Request) {
       const id = await enqueueRenderJob({
         clips,
         narration: body.narration ? String(body.narration) : undefined,
+        /*
+         * 댓글은 아래 여백에 얹힌다. 렌더러는 이미 그릴 수 있었는데 이 경로가
+         * 값을 안 넘겨서 유아 채널에서만 빠져 있었다.
+         * 본문이 비면 작성자만 남아 이름표가 떠 있는 꼴이 되므로 함께 확인한다.
+         */
+        comment:
+          body.comment && String(body.comment.text ?? "").trim()
+            ? {
+                author: String(body.comment.author ?? "").trim(),
+                text: String(body.comment.text).trim(),
+              }
+            : undefined,
         // 장면 대사를 줄바꿈으로 넘기면 클립 경계에 맞춰 자막이 배분된다
         script: plan?.scenes?.map((s) => s.korean.trim()).join("\n"),
         title: body.withTitle && plan?.title ? plan.title : undefined,

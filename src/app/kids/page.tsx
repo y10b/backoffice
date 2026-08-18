@@ -113,6 +113,9 @@ export default function KidsPage() {
 
   /* 조립: Flow 에서 만들어 받은 클립들 */
   const [clips, setClips] = useState<SourceFile[]>([]);
+  /* 아래 여백에 얹을 댓글. 본문이 비면 보내지 않는다 */
+  const [commentAuthor, setCommentAuthor] = useState("");
+  const [commentText, setCommentText] = useState("");
   const [uploading, setUploading] = useState(false);
   const [narration, setNarration] = useState<SourceFile | null>(null);
   const [makingNarration, setMakingNarration] = useState(false);
@@ -342,6 +345,9 @@ export default function KidsPage() {
             mode: "assemble",
             plan,
             clips: clips.map((c) => c.path),
+            comment: commentText.trim()
+              ? { author: commentAuthor.trim() || "시청자", text: commentText.trim() }
+              : undefined,
             narration: narration?.path,
             withTitle,
           }),
@@ -946,6 +952,28 @@ export default function KidsPage() {
                 {assembling && <span className="spinner" />}
                 한 편으로 조립
               </button>
+            </div>
+
+            <div className="row" style={{ marginTop: 10 }}>
+              <div className="field" style={{ width: 150 }}>
+                <label>댓글 작성자</label>
+                <input
+                  value={commentAuthor}
+                  placeholder="시청자"
+                  onChange={(e) => setCommentAuthor(e.target.value)}
+                />
+              </div>
+              <div className="field" style={{ flex: 1, minWidth: 240 }}>
+                <label>
+                  댓글 (아래 여백)
+                  <Help text="영상 아래 여백에 @작성자와 함께 얹습니다. 본문을 비우면 아무것도 안 들어갑니다.&#10;네 줄까지 들어가고 넘치는 만큼은 잘립니다." />
+                </label>
+                <input
+                  value={commentText}
+                  placeholder="아이가 계속 돌려봐요"
+                  onChange={(e) => setCommentText(e.target.value)}
+                />
+              </div>
             </div>
 
             {assembleJob !== null && (

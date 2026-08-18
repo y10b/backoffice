@@ -95,22 +95,30 @@ function mmss(sec: number | null): string {
 }
 
 /**
- * 재사용 가능 여부를 한눈에. 이 구분이 이 화면의 핵심이다.
+ * 라이선스와 접근 제약을 한눈에.
  *
- * 가공(라이선스)과 재공유(임베드)는 다른 권한이라 배지를 따로 낸다. 하나로 합치면
- * "퍼가기 되니까 잘라 써도 되겠지"로 읽힌다.
+ * 표준 라이선스를 빨간 배지로 "가공 불가"라고 띄우고 있었다. 그런데 이 화면은
+ * 영상을 가공하는 곳이 아니다 — 댓글이 몰린 지점을 찾는 곳이고, 화면 위에 이미
+ * "남의 영상 파일은 건드리지 않습니다"라고 적혀 있다.
+ *
+ * 인기 급상승은 사실상 전부 표준 라이선스라(실측 10/10) 모든 줄이 빨갛게 뜨고,
+ * 그러면 기능이 고장난 것처럼 보인다. 게다가 100% 에 붙는 표시는 아무것도 알려주지
+ * 않는다. 그래서 표준은 담담한 기본 배지로 두고, 드물게 나오는 CC 만 강조한다.
+ *
+ * 진짜 경고는 따로다 — 댓글이 잠겨 있으면 이 화면의 목적 자체가 불가능하고,
+ * 국내 차단이면 확인조차 못 한다. 빨간색은 그쪽에 남긴다.
  */
 function LicenseBadge({ video }: { video: YtVideo }) {
   const reusable = video.license === "creativeCommon";
   const notes: string[] = [];
-  if (video.embeddable === false) notes.push("퍼가기 금지");
-  if (video.blockedInKR) notes.push("국내 차단");
+  // 이 화면은 댓글을 읽는 곳이라 댓글 잠김이 가장 치명적이다. 먼저 보이게 둔다
   if (!video.commentsEnabled) notes.push("댓글 잠김");
+  if (video.blockedInKR) notes.push("국내 차단");
 
   return (
     <>
-      <span className={`badge ${reusable ? "on" : "off"}`}>
-        {reusable ? "CC · 가공 가능" : "표준 · 가공 불가"}
+      <span className={`badge${reusable ? " on" : ""}`}>
+        {reusable ? "CC · 가공 가능" : "표준 라이선스"}
       </span>
       {notes.map((n) => (
         <span key={n} className="badge off" style={{ marginLeft: 4 }}>
