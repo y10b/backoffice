@@ -61,23 +61,70 @@ function shouldTryNextKey(status: number, body: string): boolean {
    * 모델 접근 가능 여부는 키가 속한 프로젝트마다 다르다. 오래된 모델은 나중에 만든
    * 프로젝트에서만 404 가 나므로, 다른 키로 넘기면 실제로 풀린다.
    */
-  return status === 404 && /no longer available|not found|not supported/i.test(body);
+  return (
+    status === 404 && /no longer available|not found|not supported/i.test(body)
+  );
 }
 
 /**
- * Gemini 호출. 쿼터에 걸리면 다음 키로 넘어간다.
+ * 잠깐 기다렸다 같은 키로 다시 걸면 풀릴 오류인가.
+ *
+ * 503 "This model is currently experiencing high demand" 이 매일 새벽 크론을
+ * 죽이고 있었다. 최근 실패 다섯 건이 전부 이것 하나였다. 모델 쪽 혼잡이라 키를
+ * 바꿔도 소용없고 — 그래서 지금까지 한 번 받고 그대로 포기했다 — 필요한 건 시간이다.
+ *
+ * 사람이 앉아 있는 화면이면 그냥 실패시키고 다시 누르게 하면 된다. 그런데 크론은
+ * 새벽 여섯 시에 혼자 돌고 다음 기회가 24시간 뒤다. 몇십 초를 기다리는 값이
+ * 하루를 버리는 값보다 훨씬 싸다.
+ */
+function shouldRetryLater(status: number): boolean {
+  return status === 503 || status === 500 || status === 529;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Gemini 호출. 쿼터에 걸리면 다음 키로, 과부하면 잠시 기다렸다 다시 건다.
+ *
+ * 두 실패는 대처가 정반대다. 쿼터는 이 키가 마른 것이라 즉시 다른 키로 넘겨야 하고,
+ * 과부하는 모델이 붐비는 것이라 키를 바꿔봐야 같은 답이 온다 — 기다려야 한다.
  *
  * 키를 다 써도 안 되면 마지막 오류를 그대로 올린다. 몇 개를 시도했는지 문구에
  * 넣어야 "키를 더 넣어야 하는 상황"인지 "키가 다 틀린 상황"인지 구분된다.
  */
-export async function geminiCall(model: string, body: unknown): Promise<any> {
-  const keys = await geminiKeys();
+export type CallOptions = {
+  /**
+   * 과부하일 때 몇 번까지 더 기다려 볼지. 화면에서 부르는 경로는 사람이 기다리므로
+   * 짧게 두고, 크론처럼 다음 기회가 하루 뒤인 곳에서만 늘린다.
+   */
+  retries?: number;
+  /**
+   * 이 키 하나만 쓴다.
+   *
+   * 여러 키를 예비용으로 두면 첫 키가 다 마를 때까지 나머지 무료 할당이 논다.
+   * 그리고 429 로 넘어가는 건 이미 그 키를 한 번 쓴 뒤라 순수한 낭비다.
+   * 키마다 따로 결과물을 만들면 할당을 남김없이 쓴다 — 그때는 이 값을 준다.
+   *
+   * 지정하면 쿼터에 걸려도 다른 키로 넘어가지 않는다. 넘어가면 "키마다 하나씩"이
+   * 깨져서 한 키가 두 편을 만들고 다른 키는 놀게 된다.
+   */
+  apiKey?: string;
+};
+
+export async function geminiCall(
+  model: string,
+  body: unknown,
+  o: CallOptions = {},
+): Promise<any> {
+  const maxRetries = o.retries ?? 2;
+  const keys = o.apiKey ? [o.apiKey] : await geminiKeys();
   if (!keys.length) {
     throw new Error("Gemini API 키가 없습니다. 설정 화면에서 등록하세요.");
   }
 
   const url = `${API_BASE}/models/${encodeURIComponent(model)}:generateContent`;
   let last: { status: number; body: string } | null = null;
+  let retries = 0;
 
   for (let i = 0; i < keys.length; i++) {
     const idx = (keyCursor + i) % keys.length;
@@ -92,7 +139,8 @@ export async function geminiCall(model: string, body: unknown): Promise<any> {
 
     const text = await res.text();
     if (res.ok) {
-      keyCursor = (idx + 1) % keys.length;
+      // 키를 지정받았으면 커서를 건드리지 않는다. 이 호출은 풀을 쓰는 게 아니다
+      if (!o.apiKey) keyCursor = (idx + 1) % keys.length;
       try {
         return JSON.parse(text);
       } catch {
@@ -101,6 +149,19 @@ export async function geminiCall(model: string, body: unknown): Promise<any> {
     }
 
     last = { status: res.status, body: text.slice(0, 500) };
+
+    /*
+     * 과부하면 같은 키로 다시 건다. 4초 → 8초 → 16초로 늘려 잡는다 — 혼잡이
+     * 가라앉을 시간을 주면서도, 크론 타임아웃(10분) 안에 충분히 들어간다.
+     * i 를 되돌려 이번 키를 다시 쓰게 한다. 키 순서를 건너뛸 이유가 없다.
+     */
+    if (shouldRetryLater(res.status) && retries < maxRetries) {
+      retries += 1;
+      await sleep(4000 * 2 ** (retries - 1));
+      i -= 1;
+      continue;
+    }
+
     // 쿼터 문제가 아니면 다른 키로 바꿔도 같은 답이 온다. 남은 키를 낭비하지 않는다
     if (!shouldTryNextKey(res.status, text)) break;
   }
@@ -146,6 +207,15 @@ export type GenerateOptions = {
    * 재테크·보험·정부지원금처럼 매년 수치가 바뀌는 주제가 주력이라 기본값은 켬이다.
    */
   grounded?: boolean;
+  /**
+   * 과부하(503)일 때 몇 번까지 더 기다려 볼지.
+   *
+   * 화면에서 부르면 사람이 기다리고 있으니 기본값으로 짧게 끝내고, 크론처럼
+   * 실패하면 다음 기회가 24시간 뒤인 곳에서만 올린다.
+   */
+  retries?: number;
+  /** 이 키 하나만 쓴다. 크론이 키마다 한 편씩 만들 때 준다 */
+  apiKey?: string;
 };
 
 /** 1패스(검색 그라운딩) 결과 */
@@ -178,6 +248,12 @@ function geminiError(status: number, body: string, triedKeys = 1): Error {
       `등록된 키 ${triedKeys}개 모두 이 모델을 쓸 수 없습니다 (HTTP 404). ` +
         `구글이 오래된 모델을 새 프로젝트에 막았습니다. 설정 화면에서 모델을 ` +
         `${DEFAULT_MODEL} 로 바꾸세요. 원문: ${detail}`,
+    );
+  }
+  if (status === 503 || status === 500 || status === 529) {
+    return new Error(
+      `Gemini 가 일시적으로 붐빕니다 (HTTP ${status}). 키 문제가 아니라 모델 쪽 혼잡이라 ` +
+        `잠시 뒤 다시 시도하면 대개 풀립니다. 원문: ${detail}`,
     );
   }
   if (status === 429 || status === 403) {
@@ -314,11 +390,17 @@ async function researchLatest(
 ): Promise<ResearchResult | null> {
   try {
     const research = parseGrounding(
-      await geminiCall(RESEARCH_MODEL, {
-        contents: [{ role: "user", parts: [{ text: buildResearchPrompt(o) }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: { temperature: 0.2 },
-      }),
+      await geminiCall(
+        RESEARCH_MODEL,
+        {
+          contents: [
+            { role: "user", parts: [{ text: buildResearchPrompt(o) }] },
+          ],
+          tools: [{ google_search: {} }],
+          generationConfig: { temperature: 0.2 },
+        },
+        { retries: o.retries, apiKey: o.apiKey },
+      ),
     );
     // 텍스트가 비면 주입할 게 없으니 조사 자체를 없던 일로 취급한다.
     return research.text ? research : null;
@@ -422,14 +504,18 @@ export async function generateDraft(
   const research = o.grounded === false ? null : await researchLatest(o);
 
   // 2패스: 구조화 출력으로 본문 생성. 그라운딩과 responseSchema 는 같이 못 쓰므로 호출을 나눈다.
-  const payload = await geminiCall(model, {
-    contents: [{ role: "user", parts: [{ text: buildPrompt(o, research) }] }],
-    generationConfig: {
-      temperature: 0.8,
-      responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
+  const payload = await geminiCall(
+    model,
+    {
+      contents: [{ role: "user", parts: [{ text: buildPrompt(o, research) }] }],
+      generationConfig: {
+        temperature: 0.8,
+        responseMimeType: "application/json",
+        responseSchema: RESPONSE_SCHEMA,
+      },
     },
-  });
+    { retries: o.retries, apiKey: o.apiKey },
+  );
 
   const parts = payload?.candidates?.[0]?.content?.parts;
   const jsonText = Array.isArray(parts)
@@ -486,6 +572,7 @@ export async function generateDraft(
 export async function suggestSubKeywords(
   mainKeyword: string,
   context: string[],
+  o: CallOptions = {},
 ): Promise<{ subKeyword: string; title: string; reason: string }[]> {
   const prompt = [
     "당신은 네이버 블로그 키워드 전략가입니다.",
@@ -502,31 +589,35 @@ export async function suggestSubKeywords(
     .filter(Boolean)
     .join("\n");
 
-  const payload = await geminiCall(await geminiModel(), {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.9,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: "object",
-        properties: {
-          suggestions: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                subKeyword: { type: "string" },
-                title: { type: "string" },
-                reason: { type: "string" },
+  const payload = await geminiCall(
+    await geminiModel(),
+    {
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.9,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "object",
+          properties: {
+            suggestions: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  subKeyword: { type: "string" },
+                  title: { type: "string" },
+                  reason: { type: "string" },
+                },
+                required: ["subKeyword", "title", "reason"],
               },
-              required: ["subKeyword", "title", "reason"],
             },
           },
+          required: ["suggestions"],
         },
-        required: ["suggestions"],
       },
     },
-  });
+    { retries: o.retries, apiKey: o.apiKey },
+  );
 
   const parts = payload?.candidates?.[0]?.content?.parts ?? [];
   const jsonText = parts.map((p: any) => p?.text ?? "").join("");

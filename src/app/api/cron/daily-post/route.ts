@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { researchKeywords } from "@/lib/research";
-import { generateDraft, suggestSubKeywords } from "@/lib/gemini";
+import { geminiKeys, generateDraft, suggestSubKeywords } from "@/lib/gemini";
 import { insertDraft, listPosts } from "@/lib/db";
 import { seedForDate } from "@/lib/seeds";
 
@@ -67,39 +67,97 @@ export async function POST(req: Request) {
     const recent = new Set(
       (await listPosts(60)).map((p) => String(p.main_keyword ?? "").trim()),
     );
-    const candidate =
-      research.keywords.find((k) => !recent.has(k.keyword)) ?? research.keywords[0];
-    const mainKeyword = candidate.keyword;
 
-    /* 2. 서브 키워드 */
-    const context = research.keywords
-      .map((k) => k.keyword)
-      .filter((k) => k !== mainKeyword)
-      .slice(0, 30);
-    let subKeyword = "";
-    try {
-      const suggestions = await suggestSubKeywords(mainKeyword, context);
-      subKeyword = suggestions[0]?.subKeyword ?? "";
-    } catch {
-      // 제안이 실패해도 메인 키워드만으로 쓴다. 하루 한 편을 거르는 것보다 낫다
+    /*
+     * 키 하나당 글 하나.
+     *
+     * 예전에는 키를 예비용으로 뒀다 — 첫 키가 429 를 뱉으면 다음 키로 넘겼다.
+     * 그러면 첫 키가 다 마를 때까지 나머지 키의 무료 할당이 놀고, 넘어가는 순간은
+     * 이미 그 키를 한 번 쓴 뒤라 순수한 낭비다.
+     *
+     * 키마다 다른 키워드로 따로 만들면 할당을 남김없이 쓰고 하루 결과물도 키 수만큼
+     * 늘어난다. 한 키가 막혀도 나머지는 그대로 나온다 — 예전에는 한 번 실패하면
+     * 그날 치가 통째로 없었다.
+     */
+    const keys = await geminiKeys();
+    if (!keys.length) {
+      return NextResponse.json({ ok: false, seed, error: "Gemini API 키가 없습니다." });
     }
 
-    /* 3. 본문 (그라운딩 포함) */
-    const draft = await generateDraft({ mainKeyword, subKeyword, targetChars: 2000 });
+    const picked: typeof research.keywords = [];
+    for (const k of research.keywords) {
+      if (picked.length >= keys.length) break;
+      // 최근에 쓴 주제와, 이번 회차에서 이미 고른 주제를 함께 피한다
+      if (recent.has(k.keyword) || picked.some((p) => p.keyword === k.keyword)) continue;
+      picked.push(k);
+    }
+    // 후보가 모자라면 있는 만큼만 만든다. 같은 키워드로 두 편 쓰면 자기끼리 경쟁한다
+    if (!picked.length) picked.push(research.keywords[0]);
 
-    const postId = await insertDraft({ mainKeyword, subKeyword, draft, auto: true });
+    const results = await Promise.all(
+      picked.map(async (candidate, i) => {
+        const apiKey = keys[i];
+        const mainKeyword = candidate.keyword;
+
+        /* 서브 키워드 — 같은 키로 뽑아야 키별 사용량이 섞이지 않는다 */
+        const context = research.keywords
+          .map((k) => k.keyword)
+          .filter((k) => k !== mainKeyword)
+          .slice(0, 30);
+        let subKeyword = "";
+        try {
+          const suggestions = await suggestSubKeywords(mainKeyword, context, { apiKey });
+          subKeyword = suggestions[0]?.subKeyword ?? "";
+        } catch {
+          // 제안이 실패해도 메인 키워드만으로 쓴다. 한 편을 거르는 것보다 낫다
+        }
+
+        try {
+          /*
+           * 재시도를 넉넉히 준다. 이 경로는 새벽에 혼자 돌고 실패하면 다음 기회가
+           * 24시간 뒤라, 몇십 초 기다리는 값이 하루를 버리는 값보다 훨씬 싸다.
+           * 실제로 최근 실패가 전부 Gemini 503(일시 과부하) 하나였다.
+           */
+          const draft = await generateDraft({
+            mainKeyword,
+            subKeyword,
+            targetChars: 2000,
+            retries: 4,
+            apiKey,
+          });
+          const postId = await insertDraft({ mainKeyword, subKeyword, draft, auto: true });
+          return {
+            ok: true as const,
+            postId,
+            mainKeyword,
+            subKeyword,
+            title: draft.title,
+            bid: candidate.bid,
+            searches: candidate.totalSearches,
+            sources: draft.sources?.length ?? 0,
+            grounded: (draft.sources?.length ?? 0) > 0,
+          };
+        } catch (e) {
+          // 한 키가 막혀도 나머지 결과는 살린다
+          return { ok: false as const, mainKeyword, error: (e as Error).message };
+        }
+      }),
+    );
+
+    const made = results.filter((r) => r.ok);
+    const first = made[0];
 
     return NextResponse.json({
-      ok: true,
+      // 워크플로 요약이 읽는 필드들. 첫 결과를 대표로 펼친다
+      ...(first ?? {}),
+      // 한 편이라도 나왔으면 성공이다. 전멸일 때만 액션을 빨갛게 만든다.
+      // 펼친 뒤에 둬야 first.ok 에 덮이지 않는다
+      ok: made.length > 0,
       seed,
-      postId,
-      mainKeyword,
-      subKeyword,
-      title: draft.title,
-      bid: candidate.bid,
-      searches: candidate.totalSearches,
-      sources: draft.sources?.length ?? 0,
-      grounded: (draft.sources?.length ?? 0) > 0,
+      keys: keys.length,
+      created: made.length,
+      results,
+      error: made.length ? undefined : results[0]?.error,
     });
   } catch (e) {
     return NextResponse.json({ ok: false, seed, error: (e as Error).message });
