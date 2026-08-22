@@ -930,9 +930,108 @@ async function resolveSegments(
   return { segments: even, sceneDetected: false };
 }
 
+/** 유튜브 주소인가. 짧은 주소(youtu.be)와 쇼츠 경로까지 본다 */
+export function isYouTubeUrl(input: string): boolean {
+  return /^https?:\/\/(www\.|m\.)?(youtube\.com\/(watch|shorts|live)|youtu\.be\/)/i.test(
+    input.trim(),
+  );
+}
+
+/** 받아둔 원본을 모아두는 곳. 같은 영상으로 여러 편을 만들 때 다시 받지 않는다 */
+export const CACHE_DIR = path.join(process.cwd(), "data", "youtube");
+
+export async function checkYtDlp(): Promise<{ ok: boolean; version?: string; error?: string }> {
+  try {
+    const out = await run("yt-dlp", ["--version"], 15000);
+    return { ok: true, version: out.trim().split("\n")[0] };
+  } catch {
+    return {
+      ok: false,
+      error:
+        "yt-dlp 를 찾지 못했습니다. Windows 는 `winget install yt-dlp.yt-dlp` 로 설치한 뒤 새 터미널에서 다시 시도하세요.",
+    };
+  }
+}
+
+/**
+ * 유튜브 영상을 내려받아 로컬 경로를 준다.
+ *
+ * ffmpeg 는 유튜브 주소를 열지 못한다. 유튜브가 미디어 파일을 직접 주지 않고
+ * 재생 페이지만 주기 때문이다. 그래서 주소를 그대로 렌더 입력에 넣으면
+ * "Illegal byte sequence" 로 죽는다 — 링크를 자동으로 채워봐야 소용이 없다.
+ *
+ * 같은 영상에서 하이라이트를 여러 개 뜨는 게 이 화면의 전제라, 받은 파일은
+ * 영상 ID 로 캐시한다. 20분짜리를 컷마다 다시 받으면 값이 감당이 안 된다.
+ *
+ * 화질은 720p 로 묶는다. 세로 쇼츠는 1080 폭으로 잘라 쓰므로 그 이상은 받는
+ * 시간만 늘고 결과가 달라지지 않는다.
+ */
+export async function fetchYouTube(url: string): Promise<string> {
+  const tool = await checkYtDlp();
+  if (!tool.ok) throw new Error(tool.error!);
+
+  const id = crypto.createHash("sha1").update(url.trim()).digest("hex").slice(0, 16);
+  await fs.mkdir(CACHE_DIR, { recursive: true });
+  const target = path.join(CACHE_DIR, `${id}.mp4`);
+
+  try {
+    const stat = await fs.stat(target);
+    if (stat.size > 0) return target;
+  } catch {
+    /* 아직 안 받았다 */
+  }
+
+  try {
+    await run(
+      "yt-dlp",
+      [
+        // 유튜브 추출에 JS 런타임이 필요해졌다. deno 가 기본인데 우리는 node 가 있다
+        "--js-runtimes", "node",
+        "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best",
+        "--merge-output-format", "mp4",
+        // 재생목록 주소가 섞여 들어와도 한 편만 받는다
+        "--no-playlist",
+        "-o", target,
+        url.trim(),
+      ],
+      30 * 60 * 1000,
+    );
+  } catch (e) {
+    const msg = String((e as Error).message);
+    /*
+     * 유튜브가 프로그램 다운로드를 막는다. 포맷 목록까지는 주고 실제 미디어에서
+     * 403 을 낸다 — 받다가 4% 쯤에서 끊기기도 한다. 라이선스와는 무관한 접근 통제라
+     * CC 영상이어도 똑같이 걸린다.
+     *
+     * 뚫는 방법이 돌아다니지만 접근 통제를 우회하는 일이라 하지 않는다. 대신 무엇이
+     * 막혔고 무엇을 하면 되는지 분명히 말한다.
+     */
+    if (/403|Forbidden/i.test(msg)) {
+      throw new Error(
+        "유튜브가 이 영상의 다운로드를 막았습니다 (HTTP 403). 라이선스 문제가 아니라 " +
+          "유튜브 쪽 접근 통제라 CC 영상도 동일하게 걸립니다. 영상을 직접 내려받아 " +
+          "소재로 올린 뒤 그 파일 경로로 렌더하세요.",
+      );
+    }
+    throw e;
+  }
+
+  const stat = await fs.stat(target).catch(() => null);
+  if (!stat?.size) throw new Error("영상을 내려받지 못했습니다.");
+  return target;
+}
+
 export async function renderShort(o: RenderOptions): Promise<RenderResult> {
   const check = await checkFfmpeg();
   if (!check.ok) throw new Error(check.error!);
+
+  /*
+   * 유튜브 주소가 들어오면 먼저 파일로 바꾼다. 이 아래 모든 단계(길이 재기,
+   * 장면 전환 감지, ffmpeg 입력)가 로컬 경로를 전제한다.
+   */
+  if (o.input && isYouTubeUrl(o.input)) {
+    o = { ...o, input: await fetchYouTube(o.input) };
+  }
 
   await fs.mkdir(OUT_DIR, { recursive: true });
   const name = `${Date.now()}-${crypto.randomBytes(3).toString("hex")}.mp4`;

@@ -419,6 +419,58 @@ export default function KidsPage() {
         닮게 만들면 침해입니다. 기획안의 안전 확인 항목을 반드시 읽어보세요.
       </div>
 
+      <details className="card" style={{ marginBottom: 14 }}>
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+          쓰는 순서 — 처음이면 열어보세요
+        </summary>
+        <ol style={{ marginTop: 12, paddingLeft: 20, lineHeight: 1.9 }}>
+          <li>
+            <strong>참고 영상 찾기</strong> — 검색어를 넣고 인기 영상을 봅니다. 여기서
+            가져가는 건 <em>구성</em>(길이, 반복 패턴, 어떤 소재가 먹히는지)뿐입니다.
+            행을 누르면 그 영상의 구성을 분석해 다음 단계로 넘어갑니다. 건너뛰고
+            주제만 직접 넣어도 됩니다.
+          </li>
+          <li>
+            <strong>기획안 생성</strong> — Claude 가 제목·설명·캐릭터 시트·장면별 대사와
+            영어 프롬프트를 만듭니다. 캐릭터 시트가 핵심입니다. 장면마다 이 문장을 앞에
+            붙여야 캐릭터 외형이 흔들리지 않습니다. 제목 옆에 이번 호출이 쓴 토큰과 값이
+            표시되니, 장면 수를 늘릴지 여기서 판단하세요.
+          </li>
+          <li>
+            <strong>영상 만들기 — 둘 중 하나</strong>
+            <ul style={{ marginTop: 6 }}>
+              <li>
+                <strong>구글 Flow (무료)</strong> — flow.google 에 장면별 영어 프롬프트를
+                하나씩 붙여넣어 만들고 내려받습니다. Flow 는 API 가 없어 이 단계만
+                수동입니다. 받은 파일은 아래 <strong>클립 업로드</strong>로 넣으세요.
+              </li>
+              <li>
+                <strong>Veo (유료)</strong> — 장면마다 [렌더] 버튼을 누르면 자동으로
+                만듭니다. 결제가 설정된 GCP 프로젝트의 Gemini 키가 필요합니다. 무료
+                티어에는 Veo 가 없습니다.
+              </li>
+            </ul>
+          </li>
+          <li>
+            <strong>내레이션 (선택)</strong> — [내레이션 만들기]를 누르면 장면 대사를
+            이어 한 번에 읽습니다. 장면별로 따로 만들어 붙이면 문장 사이가 끊겨 들려서
+            한 번에 읽습니다. 목소리를 고르려면 먼저 [목소리 찾기]로 골라두세요.
+            안 만들면 무성으로 나옵니다 — 클립 자체의 소리는 쓰지 않습니다.
+          </li>
+          <li>
+            <strong>조립</strong> — 클립을 올린 순서대로 잇고 자막·내레이션·댓글을
+            얹습니다. 댓글은 비워두면 안 들어갑니다. ffmpeg 는 배포본에서 못 돌아서
+            작업은 큐에 쌓이고, 로컬에서 <span className="mono">npm run worker</span> 가
+            떠 있어야 처리됩니다. 결과는 <a href="/shorts">쇼츠</a> 화면의 작업 목록에서
+            받습니다.
+          </li>
+        </ol>
+        <p className="hint" style={{ marginTop: 4 }}>
+          클립 수와 장면 수가 다르면 자막이 어긋납니다. 장면 하나에 클립 하나가
+          기본이고, 다르면 화면이 경고를 띄웁니다.
+        </p>
+      </details>
+
       {error && <div className="alert error">{error}</div>}
       {notice && <div className="alert ok">{notice}</div>}
 
@@ -601,7 +653,8 @@ export default function KidsPage() {
         </div>
 
         <p className="hint">
-          Seedance 는 장면당 4~15초입니다. 장면당 초를 그 범위로 맞추세요. 총 길이는{" "}
+          Veo 는 장면당 4·6·8초만 받습니다(가장 가까운 값으로 맞춰 보냅니다). Flow 로
+          만드실 거면 이 값은 자막 배분 기준으로만 쓰입니다. 총 길이는{" "}
           {sceneCount * secondsPerScene}초.
         </p>
 

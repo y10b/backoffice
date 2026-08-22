@@ -160,6 +160,8 @@ export default function ShortsPage() {
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [histogram, setHistogram] = useState<HistBin[]>([]);
   const [highlightsFor, setHighlightsFor] = useState("");
+  /* 구간을 적용할 때 링크까지 채우려면 어느 영상이었는지 알아야 한다 */
+  const [highlightVideoId, setHighlightVideoId] = useState("");
   const [highlightNote, setHighlightNote] = useState("");
   const [loadingHighlights, setLoadingHighlights] = useState(false);
   /* 피크보다 몇 초 앞에서 컷을 시작할지. 사람은 반응한 뒤에 댓글을 쓴다 */
@@ -294,6 +296,7 @@ export default function ShortsPage() {
   async function loadHighlights(videoId: string, videoTitle: string) {
     setLoadingHighlights(true);
     setHighlightsFor(videoTitle);
+    setHighlightVideoId(videoId);
     setHighlights([]);
     setHistogram([]);
     setError("");
@@ -669,8 +672,31 @@ export default function ShortsPage() {
                     <button
                       className="small"
                       onClick={() => {
+                        /*
+                         * 한 번에 다 채운다. 예전에는 구간만 넣어줘서 링크는 손으로
+                         * 찾아 붙이고, 그 구간을 왜 골랐는지 알려주는 댓글도 따로
+                         * 골라야 했다. 다 같은 클릭에서 나오는 정보다.
+                         */
                         setStartSec(h.cutStart);
                         setDurationSec(h.cutDuration);
+                        if (highlightVideoId) {
+                          setInput(`https://www.youtube.com/watch?v=${highlightVideoId}`);
+                        }
+                        if (highlightsFor && !title.trim()) setTitle(highlightsFor);
+                        /*
+                         * 이 구간을 고르게 만든 바로 그 댓글을 얹는다.
+                         * 하이라이트의 sample 에는 id 가 없다 — 렌더에는 작성자와
+                         * 본문만 쓰이므로 지점을 id 로 삼아 형태만 맞춘다.
+                         */
+                        const sample = h.samples[0];
+                        if (sample) {
+                          setPicked({
+                            id: `hl-${h.peakAt}`,
+                            author: sample.author,
+                            text: sample.text,
+                            likes: sample.likes,
+                          });
+                        }
                       }}
                     >
                       구간 적용
@@ -688,12 +714,12 @@ export default function ShortsPage() {
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 300 }}>
             <label>
-              내 녹화 파일 경로
-              <Help text="**내가 직접 플레이해 녹화한 파일**을 넣습니다. 남의 영상 주소를 넣는 자리가 아닙니다.&#10;위에서 찾은 하이라이트 구간을 참고해 그 장면을 직접 플레이·녹화하면 온전히 내 소재가 됩니다.&#10;파일 탐색기에서 파일을 끌어다 놓거나, 경로를 복사해 붙여넣으세요." />
+              원본 (파일 경로 또는 유튜브 주소)
+              <Help text="위에서 [구간 적용]을 누르면 유튜브 주소가 자동으로 채워집니다.&#10;유튜브 주소를 넣으면 워커가 yt-dlp 로 내려받아 자릅니다 — 다만 유튜브가 다운로드를 막는 경우가 많습니다(HTTP 403). 라이선스가 아니라 유튜브 쪽 접근 통제라 CC 영상도 걸립니다.&#10;막히면 영상을 직접 내려받아 소재로 올린 뒤 그 파일 경로를 넣으세요." />
             </label>
             <input
               className="mono"
-              placeholder="/Users/mac/Movies/게임녹화.mp4"
+              placeholder="https://www.youtube.com/watch?v=… 또는 D:/영상/원본.mp4"
               value={input}
               onChange={(e) => setInput(e.target.value)}
             />
