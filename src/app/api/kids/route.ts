@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { searchPopular, videoDetails } from "@/lib/youtube";
-import { composeScenePrompt, planKidsVideo, type KidsVideoPlan } from "@/lib/claude";
+import {
+  composeScenePrompt,
+  explainClaudeError,
+  planKidsVideo,
+  type KidsVideoPlan,
+} from "@/lib/claude";
 import { fetchVideo, pollVideo, submitVideo } from "@/lib/veo";
 import { searchVoices, synthesize } from "@/lib/fishaudio";
 import { saveSource } from "@/lib/sources";
@@ -153,7 +158,7 @@ export async function POST(req: Request) {
       });
       return NextResponse.json({ ok: true, mode, plan });
     } catch (e) {
-      return NextResponse.json({ ok: false, mode, error: (e as Error).message }, { status: 500 });
+      return NextResponse.json({ ok: false, mode, error: explainClaudeError(e) }, { status: 500 });
     }
   }
 

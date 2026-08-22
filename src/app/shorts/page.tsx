@@ -181,6 +181,7 @@ export default function ShortsPage() {
   /* 줄바꿈으로 나눈 자막 대본. 전체 길이에 고르게 배분된다 */
   const [script, setScript] = useState("");
   const [picked, setPicked] = useState<Comment | null>(null);
+  const [writingCaptions, setWritingCaptions] = useState(false);
 
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState("");
@@ -242,6 +243,42 @@ export default function ShortsPage() {
       setLoadingTrend(false);
     }
   }, []);
+
+  /**
+   * 자막을 Claude 에게 맡긴다.
+   *
+   * 손으로 넣는 칸이었는데, 쓸 재료는 이 화면이 이미 쥐고 있다 — 영상 제목과
+   * 그 구간에 달린 시청자 반응. 댓글은 특히 좋은 재료다. 그 구간이 왜 재미있는지를
+   * 본 사람이 이미 적어놓은 것이라 자막이 짚어야 할 지점을 그대로 알려준다.
+   *
+   * 줄 수는 컷 수에 맞춘다. 컷이 바뀔 때 자막도 같이 바뀌어야 눈이 따라온다.
+   */
+  async function writeCaptions() {
+    setWritingCaptions(true);
+    setError("");
+    try {
+      const lineCount = cutSec > 0 ? Math.max(1, Math.round(durationSec / cutSec)) : 4;
+      const res = await fetch("/api/shorts/captions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          videoTitle: title || highlightsFor,
+          durationSec,
+          startSec,
+          lineCount,
+          // 고른 댓글을 앞에 세운다. 그 구간을 고르게 만든 바로 그 반응이다
+          comments: [picked?.text, ...comments.slice(0, 10).map((c) => c.text)].filter(Boolean),
+        }),
+      });
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error);
+      setScript((d.lines ?? []).join("\n"));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setWritingCaptions(false);
+    }
+  }
 
   /**
    * 가공 가능한 소재 검색.
@@ -791,11 +828,17 @@ export default function ShortsPage() {
           </div>
         </div>
         <div className="field" style={{ marginTop: 10 }}>
-          <label>자막 대본 (한 줄이 자막 하나)</label>
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
+            <label style={{ margin: 0 }}>자막 대본 (한 줄이 자막 하나)</label>
+            <button className="small" onClick={writeCaptions} disabled={writingCaptions}>
+              {writingCaptions && <span className="spinner" />}
+              {writingCaptions ? "쓰는 중" : "Claude 로 자막 쓰기"}
+            </button>
+          </div>
           <textarea
             rows={5}
             value={script}
-            placeholder={"1951년 겨울, 전선은 멈춰 있었다\n미군 촬영반이 남긴 기록\n이 땅에서 실제로 있었던 일"}
+            placeholder={"[Claude 로 자막 쓰기] 를 누르면 제목과 시청자 반응으로 채웁니다.\n마음에 안 들면 직접 고치면 됩니다."}
             onChange={(e) => setScript(e.target.value)}
           />
           <p className="hint" style={{ marginTop: 6 }}>

@@ -34,6 +34,29 @@ export async function claudeModel(): Promise<string> {
   return s.claude_model || process.env.CLAUDE_MODEL || DEFAULT_MODEL;
 }
 
+/**
+ * SDK 오류를 사람이 읽는 말로.
+ *
+ * 잔액 부족이 특히 헷갈린다. 400 invalid_request_error 로 오는데 요청이 잘못된 게
+ * 아니라 결제 문제라, 그대로 띄우면 프롬프트를 고치러 간다.
+ */
+export function explainClaudeError(e: unknown): string {
+  const msg = String((e as Error)?.message ?? e);
+  if (/credit balance is too low/i.test(msg)) {
+    return "Anthropic 잔액이 부족합니다. console.anthropic.com 의 Plans & Billing 에서 크레딧을 충전하세요. (무료 티어가 없습니다)";
+  }
+  if (/authentication_error|invalid x-api-key/i.test(msg)) {
+    return "Anthropic API 키가 잘못됐습니다. 설정 화면에서 다시 등록하세요.";
+  }
+  if (/rate_limit/i.test(msg)) {
+    return "Anthropic 요청 한도에 걸렸습니다. 잠시 뒤 다시 시도하세요.";
+  }
+  if (/overloaded/i.test(msg)) {
+    return "Anthropic 이 일시적으로 붐빕니다. 잠시 뒤 다시 시도하세요.";
+  }
+  return msg;
+}
+
 async function client(): Promise<Anthropic> {
   const key = await anthropicKey();
   if (!key) {
@@ -370,4 +393,101 @@ export function composeScenePrompt(plan: KidsVideoPlan, scene: Scene): string {
     .map((s) => s.trim())
     .filter(Boolean)
     .join(" ");
+}
+
+/**
+ * 쇼츠 자막을 쓴다.
+ *
+ * 지금까지 자막 대본은 사람이 손으로 넣는 칸이었다. 그런데 이 화면이 이미 쥐고 있는
+ * 것만으로 쓸 수 있다 — 어느 영상의 몇 초 지점인지, 시청자가 그 순간 뭐라고
+ * 반응했는지. 댓글은 특히 좋은 재료다. 그 구간이 왜 재미있는지를 본 사람이 이미
+ * 적어놓은 것이라, 자막이 짚어야 할 지점을 그대로 알려준다.
+ */
+export type CaptionRequest = {
+  /** 원본 영상 제목 */
+  videoTitle: string;
+  /** 컷 전체 길이(초) */
+  durationSec: number;
+  /** 자막 줄 수. 컷 수에 맞추면 컷이 바뀔 때 자막도 바뀐다 */
+  lineCount: number;
+  /** 이 구간에 달린 시청자 반응 */
+  comments?: string[];
+  /** 원본에서 이 컷이 시작하는 지점(초) */
+  startSec?: number;
+};
+
+const CAPTION_SYSTEM = [
+  "당신은 한국어 쇼츠 자막을 쓰는 사람입니다.",
+  "",
+  "자막은 소리를 끄고 보는 사람을 붙잡는 장치입니다. 다음을 지키세요.",
+  "- 한 줄은 공백 포함 22자 이내. 화면이 세로라 길면 두 줄로 접히고 읽히지 않습니다.",
+  "- 첫 줄은 후킹입니다. 무슨 일이 벌어지는지 궁금하게 만들되, 낚시성 과장은 쓰지 마세요.",
+  "- 마지막 줄은 마무리입니다. 다음 영상을 예고하거나 반응을 유도하세요.",
+  "- 시청자 반응이 주어지면 그 온도를 자막에 옮기세요. 댓글을 그대로 베끼지는 마세요.",
+  "- 영상 안에서 무슨 일이 일어나는지 단정하지 마세요. 실제 화면을 보지 못했습니다.",
+  "  대신 제목과 반응이 가리키는 것만 말하세요.",
+  "- 이모지·해시태그·따옴표를 쓰지 마세요. 자막에 그대로 찍힙니다.",
+].join("\n");
+
+const CAPTION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    lines: { type: "array", items: { type: "string" } },
+  },
+  required: ["lines"],
+} as const;
+
+export async function writeShortCaptions(o: CaptionRequest): Promise<string[]> {
+  const anthropic = await client();
+  const model = await claudeModel();
+
+  const lineCount = Math.min(Math.max(o.lineCount, 1), 12);
+  const prompt = [
+    `원본 영상 제목: ${o.videoTitle || "(없음)"}`,
+    o.startSec ? `컷 시작 지점: 원본 ${Math.floor(o.startSec / 60)}분 ${o.startSec % 60}초` : "",
+    `컷 길이: ${o.durationSec}초`,
+    o.comments?.length
+      ? `이 구간에 달린 시청자 반응:\n${o.comments.slice(0, 12).map((c) => `- ${c}`).join("\n")}`
+      : "시청자 반응 정보 없음.",
+    "",
+    `자막 ${lineCount}줄을 쓰세요. 앞에서부터 순서대로 화면에 뜹니다.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const message = await anthropic.messages.create({
+    model,
+    max_tokens: 2000,
+    system: CAPTION_SYSTEM,
+    output_config: {
+      // 자막은 짧고 형식이 정해져 있어 깊게 생각할 여지가 적다
+      effort: "low",
+      format: { type: "json_schema", schema: CAPTION_SCHEMA },
+    },
+    messages: [{ role: "user", content: prompt }],
+  } as Anthropic.MessageCreateParamsNonStreaming);
+
+  if (message.stop_reason === "refusal") {
+    throw new Error("Claude 가 이 요청을 거절했습니다. 제목이나 댓글을 바꿔 다시 시도하세요.");
+  }
+
+  const text = message.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+  if (!text.trim()) throw new Error("Claude 가 자막을 반환하지 않았습니다.");
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Claude 가 반환한 자막 JSON 을 파싱하지 못했습니다.");
+  }
+
+  const lines = Array.isArray(parsed.lines)
+    ? parsed.lines.map((l: unknown) => String(l ?? "").trim()).filter(Boolean)
+    : [];
+  if (!lines.length) throw new Error("자막이 비어 있습니다.");
+  return lines.slice(0, lineCount);
 }
