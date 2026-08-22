@@ -94,6 +94,17 @@ export async function POST(req: Request) {
     // 후보가 모자라면 있는 만큼만 만든다. 같은 키워드로 두 편 쓰면 자기끼리 경쟁한다
     if (!picked.length) picked.push(research.keywords[0]);
 
+    /*
+     * 부제는 병렬 루프에 들어가기 전에 정한다. 안에서 각자 고르면 모두가 검색량
+     * 최댓값을 집어 같은 부제를 달게 된다 — 실측으로 두 편 다 '아파트'였다.
+     */
+    const usedSubs = new Set<string>();
+    const subs = picked.map((c) => {
+      const s = pickSubKeyword(c.keyword, research.keywords, { exclude: usedSubs });
+      if (s) usedSubs.add(s.keyword);
+      return s;
+    });
+
     const results = await Promise.all(
       picked.map(async (candidate, i) => {
         const apiKey = keys[i];
@@ -109,7 +120,7 @@ export async function POST(req: Request) {
          * 모델에게 물어보는 건 데이터가 안 나올 때만이다. 그 답은 그럴듯한 조합이지
          * 검색된다는 근거가 없고, 실패하면 빈 값이 된다.
          */
-        const bySearches = pickSubKeyword(mainKeyword, research.keywords);
+        const bySearches = subs[i];
         let subKeyword = bySearches?.keyword ?? "";
         let subSearches = bySearches?.searches ?? null;
 

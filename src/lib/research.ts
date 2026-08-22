@@ -292,10 +292,21 @@ export async function researchKeywords(
 export function pickSubKeyword(
   mainKeyword: string,
   candidates: Pick<Keyword, "keyword" | "totalSearches">[],
-  /** 부제로 허용할 최대 글자 수 */
-  maxChars = 14,
+  o: {
+    /** 부제로 허용할 최대 글자 수 */
+    maxChars?: number;
+    /**
+     * 이미 다른 편이 가져간 부제.
+     *
+     * 검색량 최댓값을 그대로 고르면 같은 시드에서 나온 글이 전부 같은 부제를 단다
+     * (실측: 두 편 다 '아파트'였다). 한 회차 안에서는 겹치지 않게 넘겨준다.
+     */
+    exclude?: Iterable<string>;
+  } = {},
 ): { keyword: string; searches: number } | null {
+  const maxChars = o.maxChars ?? 14;
   const main = mainKeyword.replace(/\s+/g, "");
+  const taken = new Set([...(o.exclude ?? [])].map((k) => k.replace(/\s+/g, "")));
 
   const usable = candidates
     .map((k) => ({ keyword: k.keyword.trim(), searches: k.totalSearches ?? 0 }))
@@ -305,6 +316,7 @@ export function pickSubKeyword(
       if (bare === main) return false;
       // 서로 품는 관계면 제목에서 겹쳐 읽힌다
       if (bare.includes(main) || main.includes(bare)) return false;
+      if (taken.has(bare)) return false;
       return k.keyword.length <= maxChars;
     })
     .sort((a, b) => b.searches - a.searches);
