@@ -111,6 +111,17 @@ export type CallOptions = {
   apiKey?: string;
 };
 
+/**
+ * 과부하가 이어질 때 갈아탈 모델.
+ *
+ * 503 은 그 모델이 붐빈다는 뜻이라 기다리는 것만으로는 부족할 때가 있다 — 실측으로
+ * 네 번(4·8·16·32초) 기다렸는데도 두 키 모두 뚫지 못했다. 다른 flash 모델은 별개
+ * 혼잡이라 그때 넘기면 대개 통한다.
+ *
+ * 두 키 모두에서 실제로 200 이 오는 것만 적어둔다. 앞의 것부터 시도한다.
+ */
+const FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"];
+
 export async function geminiCall(
   model: string,
   body: unknown,
@@ -122,48 +133,60 @@ export async function geminiCall(
     throw new Error("Gemini API 키가 없습니다. 설정 화면에서 등록하세요.");
   }
 
-  const url = `${API_BASE}/models/${encodeURIComponent(model)}:generateContent`;
+  /*
+   * 모델을 갈아타는 건 과부하가 재시도로도 안 풀릴 때만이다. 지정한 모델을 먼저
+   * 끝까지 시도하고, 그래도 붐비면 다음 모델로 넘어간다. 요청한 모델을 조용히
+   * 바꿔치기하지 않으려면 이 순서여야 한다.
+   */
+  const models = [model, ...FALLBACK_MODELS.filter((m) => m !== model)];
   let last: { status: number; body: string } | null = null;
-  let retries = 0;
 
-  for (let i = 0; i < keys.length; i++) {
-    const idx = (keyCursor + i) % keys.length;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": keys[idx],
-      },
-      body: JSON.stringify(body),
-    });
+  for (const current of models) {
+    const url = `${API_BASE}/models/${encodeURIComponent(current)}:generateContent`;
+    let retries = 0;
 
-    const text = await res.text();
-    if (res.ok) {
-      // 키를 지정받았으면 커서를 건드리지 않는다. 이 호출은 풀을 쓰는 게 아니다
-      if (!o.apiKey) keyCursor = (idx + 1) % keys.length;
-      try {
-        return JSON.parse(text);
-      } catch {
-        throw new Error("Gemini 응답을 JSON 으로 해석하지 못했습니다.");
+    for (let i = 0; i < keys.length; i++) {
+      const idx = (keyCursor + i) % keys.length;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": keys[idx],
+        },
+        body: JSON.stringify(body),
+      });
+
+      const text = await res.text();
+      if (res.ok) {
+        // 키를 지정받았으면 커서를 건드리지 않는다. 이 호출은 풀을 쓰는 게 아니다
+        if (!o.apiKey) keyCursor = (idx + 1) % keys.length;
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new Error("Gemini 응답을 JSON 으로 해석하지 못했습니다.");
+        }
       }
+
+      last = { status: res.status, body: text.slice(0, 500) };
+
+      /*
+       * 과부하면 같은 키로 다시 건다. 4초 → 8초 → 16초로 늘려 잡는다 — 혼잡이
+       * 가라앉을 시간을 주면서도, 크론 타임아웃(10분) 안에 충분히 들어간다.
+       * i 를 되돌려 이번 키를 다시 쓰게 한다. 키 순서를 건너뛸 이유가 없다.
+       */
+      if (shouldRetryLater(res.status) && retries < maxRetries) {
+        retries += 1;
+        await sleep(4000 * 2 ** (retries - 1));
+        i -= 1;
+        continue;
+      }
+
+      // 쿼터 문제가 아니면 다른 키로 바꿔도 같은 답이 온다. 남은 키를 낭비하지 않는다
+      if (!shouldTryNextKey(res.status, text)) break;
     }
 
-    last = { status: res.status, body: text.slice(0, 500) };
-
-    /*
-     * 과부하면 같은 키로 다시 건다. 4초 → 8초 → 16초로 늘려 잡는다 — 혼잡이
-     * 가라앉을 시간을 주면서도, 크론 타임아웃(10분) 안에 충분히 들어간다.
-     * i 를 되돌려 이번 키를 다시 쓰게 한다. 키 순서를 건너뛸 이유가 없다.
-     */
-    if (shouldRetryLater(res.status) && retries < maxRetries) {
-      retries += 1;
-      await sleep(4000 * 2 ** (retries - 1));
-      i -= 1;
-      continue;
-    }
-
-    // 쿼터 문제가 아니면 다른 키로 바꿔도 같은 답이 온다. 남은 키를 낭비하지 않는다
-    if (!shouldTryNextKey(res.status, text)) break;
+    // 과부하가 아니면 모델을 바꿔도 같은 답이 온다. 쿼터·잘못된 키는 여기서 끝낸다
+    if (!last || !shouldRetryLater(last.status)) break;
   }
 
   throw geminiError(last!.status, last!.body, keys.length);
