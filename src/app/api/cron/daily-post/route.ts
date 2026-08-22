@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { researchKeywords } from "@/lib/research";
+import { pickSubKeyword, researchKeywords } from "@/lib/research";
 import { geminiKeys, generateDraft, suggestSubKeywords } from "@/lib/gemini";
 import { insertDraft, listPosts } from "@/lib/db";
 import { seedForDate } from "@/lib/seeds";
@@ -99,17 +99,31 @@ export async function POST(req: Request) {
         const apiKey = keys[i];
         const mainKeyword = candidate.keyword;
 
-        /* 서브 키워드 — 같은 키로 뽑아야 키별 사용량이 섞이지 않는다 */
-        const context = research.keywords
-          .map((k) => k.keyword)
-          .filter((k) => k !== mainKeyword)
-          .slice(0, 30);
-        let subKeyword = "";
-        try {
-          const suggestions = await suggestSubKeywords(mainKeyword, context, { apiKey });
-          subKeyword = suggestions[0]?.subKeyword ?? "";
-        } catch {
-          // 제안이 실패해도 메인 키워드만으로 쓴다. 한 편을 거르는 것보다 낫다
+        /*
+         * 부제로 쓸 서브 키워드.
+         *
+         * 검색광고 키워드도구가 준 연관 키워드에서 검색량이 가장 많은 것을 고른다.
+         * 같은 시드에서 나왔으니 주제는 이미 비슷하고, 실제로 그만큼 검색된다는
+         * 근거가 숫자로 남는다.
+         *
+         * 모델에게 물어보는 건 데이터가 안 나올 때만이다. 그 답은 그럴듯한 조합이지
+         * 검색된다는 근거가 없고, 실패하면 빈 값이 된다.
+         */
+        const bySearches = pickSubKeyword(mainKeyword, research.keywords);
+        let subKeyword = bySearches?.keyword ?? "";
+        let subSearches = bySearches?.searches ?? null;
+
+        if (!subKeyword) {
+          const context = research.keywords
+            .map((k) => k.keyword)
+            .filter((k) => k !== mainKeyword)
+            .slice(0, 30);
+          try {
+            const suggestions = await suggestSubKeywords(mainKeyword, context, { apiKey });
+            subKeyword = suggestions[0]?.subKeyword ?? "";
+          } catch {
+            // 제안이 실패해도 메인 키워드만으로 쓴다. 한 편을 거르는 것보다 낫다
+          }
         }
 
         try {
@@ -131,6 +145,7 @@ export async function POST(req: Request) {
             postId,
             mainKeyword,
             subKeyword,
+            subSearches,
             title: draft.title,
             bid: candidate.bid,
             searches: candidate.totalSearches,

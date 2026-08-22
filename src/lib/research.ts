@@ -272,3 +272,42 @@ export async function researchKeywords(
       : "조건에 맞는 키워드가 없습니다. 최소 검색수를 낮춰보세요.",
   };
 }
+
+/**
+ * 부제로 쓸 키워드를 검색량으로 고른다.
+ *
+ * 지금까지는 Gemini 에게 서브 키워드를 물어봤다. 그 답은 "그럴듯한" 조합이지
+ * 사람들이 실제로 그렇게 검색한다는 근거가 없고, 실패하면 아예 빈 값이 됐다
+ * (실측: 두 편 중 한 편이 서브 없이 나갔다).
+ *
+ * 후보는 이미 손에 있다 — 검색광고 키워드도구가 시드로 뽑아준 연관 키워드에
+ * 월간 검색수가 붙어 온다. 같은 시드에서 나왔으니 주제는 이미 비슷하고, 남은
+ * 일은 그중 가장 많이 검색되는 것을 고르는 것뿐이다.
+ *
+ * 걸러내는 것 두 가지:
+ *  - 한쪽이 다른 쪽을 통째로 품는 조합("실비보험"과 "실비")은 제목에 나란히 두면
+ *    같은 말을 두 번 하는 꼴이라 뺀다.
+ *  - 너무 긴 것은 제목이 감당하지 못한다. 부제는 짧아야 읽힌다.
+ */
+export function pickSubKeyword(
+  mainKeyword: string,
+  candidates: Pick<Keyword, "keyword" | "totalSearches">[],
+  /** 부제로 허용할 최대 글자 수 */
+  maxChars = 14,
+): { keyword: string; searches: number } | null {
+  const main = mainKeyword.replace(/\s+/g, "");
+
+  const usable = candidates
+    .map((k) => ({ keyword: k.keyword.trim(), searches: k.totalSearches ?? 0 }))
+    .filter((k) => {
+      if (!k.keyword || k.searches <= 0) return false;
+      const bare = k.keyword.replace(/\s+/g, "");
+      if (bare === main) return false;
+      // 서로 품는 관계면 제목에서 겹쳐 읽힌다
+      if (bare.includes(main) || main.includes(bare)) return false;
+      return k.keyword.length <= maxChars;
+    })
+    .sort((a, b) => b.searches - a.searches);
+
+  return usable[0] ?? null;
+}
