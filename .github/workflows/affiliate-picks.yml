@@ -40,6 +40,10 @@ jobs:
           NAVER_SEARCHAD_CUSTOMER_ID: ${{ secrets.NAVER_SEARCHAD_CUSTOMER_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          # 결과를 백오피스 쓰레드 탭에서 손질하려면 DB 에 넣어야 한다.
+          # 없으면 스크립트가 조용히 건너뛰고 첨부파일만 남긴다.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SEEDS: ${{ inputs.seeds }}
         run: |
           set -euo pipefail

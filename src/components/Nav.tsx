@@ -10,6 +10,8 @@ const ITEMS = [
   // 같은 트렌드를 글이 아니라 영상으로 푸는 갈래. ffmpeg 가 필요해 로컬에서만 돈다
   { href: "/shorts", label: "쇼츠" },
   { href: "/kids", label: "유아 채널" },
+  // 제휴 수익 갈래. 블로그 글과 수명·손질 방식이 달라 글 목록과 따로 둔다
+  { href: "/threads", label: "쓰레드" },
   // 키워드 선정 → 작성 → 발행 다음 고리. 발행 뒤 성과를 보고 다시 키워드로 돌아간다
   { href: "/analytics", label: "성과" },
   { href: "/settings", label: "설정" },

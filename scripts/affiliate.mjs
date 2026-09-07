@@ -14,6 +14,7 @@
 import fs from "node:fs/promises";
 import { fetchRelatedKeywords, fetchBids } from "../src/lib/searchad.ts";
 import { geminiCall, geminiModel } from "../src/lib/gemini.ts";
+import { hasSupabase, insertThreadsPosts } from "../src/lib/db.ts";
 
 /** 한 번에 뽑을 상품 후보 수. 너무 많으면 읽지 않게 된다 */
 const PICK_COUNT = 5;

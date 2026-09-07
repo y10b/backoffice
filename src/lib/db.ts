@@ -289,3 +289,108 @@ export async function finishRenderJob(
     .eq("id", id);
   if (error) throw new Error(`작업 상태 갱신 실패: ${error.message}`);
 }
+
+/* ------------------------------------------------------------------ *
+ * threads_posts — 쓰레드 제휴 게시물 후보
+ *
+ * 블로그 글과 섞지 않는다. 2,000자짜리 한 편을 오래 다듬는 일과 500자짜리를 여러 개
+ * 만들어 그날 올릴 것만 고르는 일은 손질 방식이 다르다.
+ * ------------------------------------------------------------------ */
+
+export type ThreadsPost = {
+  id: number;
+  keyword: string;
+  searches: number | null;
+  bid: number | null;
+  angle: string;
+  hooks: string[];
+  draft: string;
+  checklist: string[];
+  affiliate_url: string;
+  status: string;
+  posted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ThreadsPostInput = {
+  keyword: string;
+  searches?: number | null;
+  bid?: number | null;
+  angle?: string;
+  hooks?: string[];
+  draft?: string;
+  checklist?: string[];
+};
+
+/**
+ * 후보를 넣는다. 같은 키워드가 이미 열려 있으면(draft·ready) 건너뛴다.
+ *
+ * 검색량 상위 키워드는 며칠씩 그대로라, 막지 않으면 같은 '로봇청소기'가 일주일 내내
+ * 다시 들어온다. 유니크 인덱스가 막아주므로 충돌은 오류가 아니라 정상 흐름이다.
+ */
+export async function insertThreadsPosts(
+  items: ThreadsPostInput[],
+): Promise<{ inserted: number; skipped: number }> {
+  if (!items.length) return { inserted: 0, skipped: 0 };
+
+  let inserted = 0;
+  let skipped = 0;
+  for (const it of items) {
+    const { error } = await supabase()
+      .from("threads_posts")
+      .insert({
+        keyword: it.keyword,
+        searches: it.searches ?? null,
+        bid: it.bid ?? null,
+        angle: it.angle ?? "",
+        hooks: it.hooks ?? [],
+        draft: it.draft ?? "",
+        checklist: it.checklist ?? [],
+      });
+    if (!error) {
+      inserted += 1;
+      continue;
+    }
+    // 23505 = unique_violation. 이미 열려 있는 키워드라 건너뛴 것이다
+    if ((error as { code?: string }).code === "23505") {
+      skipped += 1;
+      continue;
+    }
+    throw new Error(`쓰레드 후보 저장 실패: ${error.message}`);
+  }
+  return { inserted, skipped };
+}
+
+export async function listThreadsPosts(limit = 100): Promise<ThreadsPost[]> {
+  const { data, error } = await supabase()
+    .from("threads_posts")
+    .select("*")
+    .order("id", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`쓰레드 후보 조회 실패: ${error.message}`);
+  return (data ?? []) as ThreadsPost[];
+}
+
+export async function updateThreadsPost(
+  id: number,
+  patch: Record<string, unknown>,
+): Promise<ThreadsPost | null> {
+  const next: Record<string, unknown> = { ...patch, updated_at: nowIso() };
+  // 올림 표시를 하는 순간을 기록해 둔다. 나중에 성과를 되짚을 때 기준이 된다
+  if (patch.status === "posted" && !("posted_at" in patch)) next.posted_at = nowIso();
+
+  const { data, error } = await supabase()
+    .from("threads_posts")
+    .update(next)
+    .eq("id", id)
+    .select()
+    .maybeSingle();
+  if (error) throw new Error(`쓰레드 후보 수정 실패: ${error.message}`);
+  return (data as ThreadsPost) ?? null;
+}
+
+export async function deleteThreadsPost(id: number): Promise<void> {
+  const { error } = await supabase().from("threads_posts").delete().eq("id", id);
+  if (error) throw new Error(`쓰레드 후보 삭제 실패: ${error.message}`);
+}
