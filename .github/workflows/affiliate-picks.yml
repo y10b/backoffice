@@ -1,0 +1,48 @@
+name: 제휴 상품 후보 뽑기
+
+# 블로그 초안 워크플로와 달리 배포본 API 를 부르지 않는다.
+# 서버를 거칠 이유가 없는 작업이라 러너 안에서 끝낸다 — 네이버 검색광고와 Gemini 를
+# 직접 부르고, 결과는 실행 요약과 첨부파일로 남긴다.
+on:
+  schedule:
+    # UTC 22:00 = KST 07:00. 아침에 훑고 낮에 올리는 흐름.
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: "시드 키워드 (쉼표로 구분. 비우면 무선청소기)"
+        required: false
+        type: string
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # src/lib 의 .ts 를 그대로 읽어야 해서 타입 스트리핑이 되는 버전이 필요하다
+          node-version: "24"
+
+      - name: 후보 뽑기
+        env:
+          NAVER_SEARCHAD_API_KEY: ${{ secrets.NAVER_SEARCHAD_API_KEY }}
+          NAVER_SEARCHAD_SECRET_KEY: ${{ secrets.NAVER_SEARCHAD_SECRET_KEY }}
+          NAVER_SEARCHAD_CUSTOMER_ID: ${{ secrets.NAVER_SEARCHAD_CUSTOMER_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          SEEDS: ${{ inputs.seeds }}
+        run: |
+          set -euo pipefail
+          node --import ./scripts/ts-register.mjs scripts/affiliate.mjs "${SEEDS:-}"
+
+      - name: 결과 첨부
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: affiliate-picks
+          path: affiliate-picks.md
+          if-no-files-found: ignore

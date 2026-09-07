@@ -17,3 +17,4 @@ supabase/.temp/
 
 # 렌더 확인용으로 뽑는 프레임. 저장소에 남을 이유가 없다
 .frame*.png
+affiliate-picks.md

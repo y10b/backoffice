@@ -64,8 +64,21 @@ export async function setSetting(key: string, value: string): Promise<void> {
  * 자격증명은 보통 2~3개를 같이 본다(`searchAdCreds` 는 3개). 하나씩 await 하면
  * 왕복이 그만큼 늘어 화면이 눈에 띄게 느려진다.
  */
+/** Supabase 자격증명이 환경에 있는가. 없으면 DB 를 건드리는 경로를 건너뛴다 */
+export function hasSupabase(): boolean {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
 export async function getSettings(keys: string[]): Promise<Record<string, string>> {
   if (!keys.length) return {};
+  /*
+   * DB 가 없는 환경(깃액션 러너)에서는 빈 값을 준다.
+   *
+   * 이 함수를 쓰는 곳은 전부 `설정값 || process.env.X` 꼴이라, 빈 값을 주면
+   * 환경변수로 자연스럽게 떨어진다. 여기서 던지면 러너에서 아무것도 못 돌린다 —
+   * 키를 시크릿으로 넣어줬는데도 DB 가 없다는 이유로 죽는 건 이상하다.
+   */
+  if (!hasSupabase()) return {};
   const { data, error } = await supabase()
     .from("settings")
     .select("key, value")
