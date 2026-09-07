@@ -161,6 +161,38 @@ async function main() {
     "`[여기에 직접 써본 소감 한 줄]` 자리는 실제로 써본 뒤 채우세요. 안 써본 제품의 후기를 지어내면 표시광고법 위반입니다.",
   );
 
+  /*
+   * 백오피스 쓰레드 탭이 읽도록 DB 에 넣는다.
+   *
+   * 요약과 첨부파일은 실행 기록으로 남을 뿐 손질할 수가 없다. 초안은 소감을 채우고
+   * 링크를 붙이고 올림 표시를 해야 하는 물건이라, 읽고 고칠 수 있는 곳에 있어야 한다.
+   * Supabase 자격증명이 없으면 조용히 건너뛴다 — 파일 출력만으로도 쓸모는 있다.
+   */
+  let saved = "";
+  if (hasSupabase()) {
+    try {
+      const { inserted, skipped } = await insertThreadsPosts(
+        picks.map((p, i) => ({
+          keyword: p.keyword,
+          searches: candidates[i]?.totalSearches ?? null,
+          bid: candidates[i]?.bid ?? null,
+          angle: p.angle ?? "",
+          hooks: p.hooks ?? [],
+          draft: p.draft ?? "",
+          checklist: p.checkBeforePosting ?? [],
+        })),
+      );
+      saved =
+        `백오피스 **쓰레드** 탭에 ${inserted}건 저장` +
+        (skipped ? ` (이미 열려 있는 키워드 ${skipped}건은 건너뜀)` : "");
+    } catch (e) {
+      saved = `DB 저장 실패: ${e.message}`;
+    }
+  } else {
+    saved = "SUPABASE 자격증명이 없어 DB 저장을 건너뛰었습니다.";
+  }
+  out.push("", "---", "", saved);
+
   const md = out.join("\n");
   await fs.writeFile("affiliate-picks.md", md, "utf8");
   if (process.env.GITHUB_STEP_SUMMARY) {
