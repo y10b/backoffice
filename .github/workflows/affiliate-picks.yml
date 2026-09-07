@@ -26,6 +26,12 @@ jobs:
         with:
           # src/lib 의 .ts 를 그대로 읽어야 해서 타입 스트리핑이 되는 버전이 필요하다
           node-version: "24"
+          cache: npm
+
+      # src/lib/db.ts 가 @supabase/supabase-js 를 정적으로 불러온다. DB 를 쓰지
+      # 않더라도 모듈 해석 단계에서 필요해서 설치해야 한다.
+      - name: 의존성 설치
+        run: npm ci --omit=dev
 
       - name: 후보 뽑기
         env:
