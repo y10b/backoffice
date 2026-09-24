@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSettings, setSetting } from "@/lib/db";
 import { splitKeys } from "@/lib/gemini";
-import { DEFAULT_MODEL as CLAUDE_DEFAULT_MODEL } from "@/lib/claude";
-import { DEFAULT_MODEL as VEO_DEFAULT_MODEL } from "@/lib/veo";
-import { FREE_MODEL as FISH_FREE_MODEL } from "@/lib/fishaudio";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,11 +29,8 @@ export async function GET() {
     "ga4_service_account", "ga4_property_id",
     "adsense_client_id", "adsense_client_secret",
     "adsense_refresh_token", "adsense_account",
-    "youtube_api_key",
     "kakao_rest_api_key",
-    "anthropic_api_key", "claude_model",
-    "veo_model",
-    "fish_api_key", "fish_model",
+    "github_pat", "github_user", "velog_token", "devlog_blocked_owners",
   ]);
 
   const adKey = resolve(s.searchad_api_key, "NAVER_SEARCHAD_API_KEY");
@@ -50,10 +44,9 @@ export async function GET() {
   const adsenseId = resolve(s.adsense_client_id, "ADSENSE_CLIENT_ID");
   const adsenseSecret = resolve(s.adsense_client_secret, "ADSENSE_CLIENT_SECRET");
   const adsenseToken = s.adsense_refresh_token ?? "";
-  const youtube = resolve(s.youtube_api_key, "YOUTUBE_API_KEY");
   const kakao = resolve(s.kakao_rest_api_key, "KAKAO_REST_API_KEY");
-  const anthropic = resolve(s.anthropic_api_key, "ANTHROPIC_API_KEY");
-  const fish = resolve(s.fish_api_key, "FISH_API_KEY");
+  const ghPat = resolve(s.github_pat, "GH_PAT");
+  const velog = resolve(s.velog_token, "VELOG_TOKEN");
 
   // 서비스 계정 JSON 은 통째로 저장되므로, 화면에는 어느 계정인지만 보여준다
   let gaEmail = "";
@@ -99,33 +92,19 @@ export async function GET() {
       keyCount: splitKeys(`${gemini.value}\n${process.env.GEMINI_API_KEY ?? ""}`).length,
       model: s.gemini_model || process.env.GEMINI_MODEL || "gemini-2.5-flash",
     },
-    youtube: {
-      configured: Boolean(youtube.value),
-      fromEnv: youtube.fromEnv,
-      apiKeyPreview: mask(youtube.value),
-    },
     kakao: {
       configured: Boolean(kakao.value),
       fromEnv: kakao.fromEnv,
       apiKeyPreview: mask(kakao.value),
     },
-    claude: {
-      configured: Boolean(anthropic.value),
-      fromEnv: anthropic.fromEnv,
-      apiKeyPreview: mask(anthropic.value),
-      model: s.claude_model || process.env.CLAUDE_MODEL || CLAUDE_DEFAULT_MODEL,
-    },
-    veo: {
-      // Veo 는 Gemini 키를 그대로 쓴다. 별도 키가 없으니 설정 여부도 Gemini 를 따른다
-      configured: Boolean(gemini.value),
-      model: s.veo_model || process.env.VEO_MODEL || VEO_DEFAULT_MODEL,
-    },
-    fish: {
-      configured: Boolean(fish.value),
-      fromEnv: fish.fromEnv,
-      apiKeyPreview: mask(fish.value),
-      model: s.fish_model || process.env.FISH_MODEL || FISH_FREE_MODEL,
-      free: (s.fish_model || process.env.FISH_MODEL || FISH_FREE_MODEL) === FISH_FREE_MODEL,
+    devlog: {
+      githubConfigured: Boolean(ghPat.value),
+      githubFromEnv: ghPat.fromEnv,
+      githubPreview: mask(ghPat.value),
+      githubUser: s.github_user || process.env.GH_USER || "y10b",
+      velogConfigured: Boolean(velog.value),
+      velogFromEnv: velog.fromEnv,
+      blockedOwners: s.devlog_blocked_owners || process.env.DEVLOG_BLOCKED_OWNERS || "bambitcorporation",
     },
   });
 }
@@ -142,13 +121,11 @@ const TEXT_FIELDS: Record<string, string> = {
   ga4PropertyId: "ga4_property_id",
   adsenseClientId: "adsense_client_id",
   adsenseClientSecret: "adsense_client_secret",
-  youtubeApiKey: "youtube_api_key",
   kakaoRestApiKey: "kakao_rest_api_key",
-  anthropicApiKey: "anthropic_api_key",
-  claudeModel: "claude_model",
-  veoModel: "veo_model",
-  fishApiKey: "fish_api_key",
-  fishModel: "fish_model",
+  githubPat: "github_pat",
+  githubUser: "github_user",
+  velogToken: "velog_token",
+  devlogBlockedOwners: "devlog_blocked_owners",
 };
 
 export async function POST(req: Request) {
@@ -176,6 +153,10 @@ export async function POST(req: Request) {
   if (body.clearOpenApi) {
     await setSetting("naver_client_id", "");
     await setSetting("naver_client_secret", "");
+  }
+  if (body.clearDevlog) {
+    await setSetting("github_pat", "");
+    await setSetting("velog_token", "");
   }
   if (body.clearGa4) {
     await setSetting("ga4_service_account", "");

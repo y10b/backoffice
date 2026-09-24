@@ -216,81 +216,6 @@ export async function latestSnapshot() {
 }
 
 /* ------------------------------------------------------------------ *
- * render_jobs — 쇼츠 렌더 작업 큐
- *
- * 웹(배포본)에서 등록하고 로컬 워커가 가져가 처리한다. ffmpeg 가 서버리스에서 못 도는
- * 문제를, 로컬이 밖으로 나가 폴링하는 방향으로 뒤집어 푼다.
- * ------------------------------------------------------------------ */
-
-export type RenderJob = {
-  id: number;
-  status: "queued" | "running" | "done" | "failed";
-  options: Record<string, unknown>;
-  result_url: string;
-  result_name: string;
-  size_bytes: number | null;
-  error: string;
-  attempts: number;
-  created_at: string;
-  updated_at: string;
-};
-
-export async function enqueueRenderJob(options: Record<string, unknown>): Promise<number> {
-  const { data, error } = await supabase()
-    .from("render_jobs")
-    .insert({ options })
-    .select("id")
-    .single();
-  if (error) throw new Error(`렌더 작업 등록 실패: ${error.message}`);
-  return Number(data.id);
-}
-
-export async function listRenderJobs(limit = 30): Promise<RenderJob[]> {
-  const { data, error } = await supabase()
-    .from("render_jobs")
-    .select("*")
-    .order("id", { ascending: false })
-    .limit(limit);
-  if (error) throw new Error(`렌더 작업 조회 실패: ${error.message}`);
-  return (data ?? []) as RenderJob[];
-}
-
-/**
- * 대기 중인 작업 하나를 원자적으로 가져온다.
- * 여러 워커가 떠 있어도 같은 작업을 두 번 처리하지 않도록 DB 함수에 맡긴다.
- */
-export async function claimRenderJob(worker: string): Promise<RenderJob | null> {
-  const { data, error } = await supabase().rpc("claim_render_job", { worker });
-  if (error) throw new Error(`작업 가져오기 실패: ${error.message}`);
-  const rows = (data ?? []) as RenderJob[];
-  return rows[0] ?? null;
-}
-
-export async function finishRenderJob(
-  id: number,
-  patch: {
-    status: "done" | "failed";
-    resultUrl?: string;
-    resultName?: string;
-    sizeBytes?: number;
-    error?: string;
-  },
-): Promise<void> {
-  const { error } = await supabase()
-    .from("render_jobs")
-    .update({
-      status: patch.status,
-      result_url: patch.resultUrl ?? "",
-      result_name: patch.resultName ?? "",
-      size_bytes: patch.sizeBytes ?? null,
-      error: patch.error ?? "",
-      updated_at: nowIso(),
-    })
-    .eq("id", id);
-  if (error) throw new Error(`작업 상태 갱신 실패: ${error.message}`);
-}
-
-/* ------------------------------------------------------------------ *
  * threads_posts — 쓰레드 제휴 게시물 후보
  *
  * 블로그 글과 섞지 않는다. 2,000자짜리 한 편을 오래 다듬는 일과 500자짜리를 여러 개
@@ -486,4 +411,177 @@ export async function updateVisitPost(
 export async function deleteVisitPost(id: number): Promise<void> {
   const { error } = await supabase().from("visit_posts").delete().eq("id", id);
   if (error) throw new Error(`방문 후기 삭제 실패: ${error.message}`);
+}
+
+/* ------------------------------------------------------------------ *
+ * dev_logs · velog_posts — 개발 로그 갈래
+ *
+ * 원래 별도 레포가 노션을 저장소로 썼다. 승인 화면만 다른 곳에 있으면 검토가 갈리므로
+ * 여기로 옮겼다. dev_logs 는 재료(하루·레포 단위 커밋 묶음), velog_posts 는 글이다.
+ * ------------------------------------------------------------------ */
+
+export type DevLog = {
+  id: number;
+  date: string;
+  repo: string;
+  private: boolean;
+  commit_count: number;
+  messages: string[];
+  topics: string[];
+  score: number;
+  consumed: boolean;
+  created_at: string;
+};
+
+export type DevLogInput = Omit<DevLog, "id" | "created_at" | "consumed">;
+
+/** 같은 날·같은 레포가 이미 있으면 건너뛴다. 수집을 다시 돌려도 중복이 안 생긴다 */
+export async function insertDevLogs(
+  rows: DevLogInput[],
+): Promise<{ inserted: number; skipped: number }> {
+  let inserted = 0;
+  let skipped = 0;
+  for (const r of rows) {
+    const { error } = await supabase().from("dev_logs").insert(r);
+    if (!error) {
+      inserted += 1;
+      continue;
+    }
+    if ((error as { code?: string }).code === "23505") {
+      skipped += 1;
+      continue;
+    }
+    throw new Error(`개발 로그 저장 실패: ${error.message}`);
+  }
+  return { inserted, skipped };
+}
+
+export async function listDevLogs(limit = 60): Promise<DevLog[]> {
+  const { data, error } = await supabase()
+    .from("dev_logs")
+    .select("*")
+    .order("date", { ascending: false })
+    .order("score", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`개발 로그 조회 실패: ${error.message}`);
+  return (data ?? []) as DevLog[];
+}
+
+/** 아직 초안에 쓰이지 않은, 기준일 이후의 로그 */
+export async function listUnconsumedDevLogs(fromDate: string): Promise<DevLog[]> {
+  const { data, error } = await supabase()
+    .from("dev_logs")
+    .select("*")
+    .gte("date", fromDate)
+    .eq("consumed", false)
+    .order("score", { ascending: false });
+  if (error) throw new Error(`개발 로그 조회 실패: ${error.message}`);
+  return (data ?? []) as DevLog[];
+}
+
+export async function markDevLogsConsumed(ids: number[]): Promise<void> {
+  if (!ids.length) return;
+  const { error } = await supabase().from("dev_logs").update({ consumed: true }).in("id", ids);
+  if (error) throw new Error(`개발 로그 갱신 실패: ${error.message}`);
+}
+
+export type VelogPost = {
+  id: number;
+  title: string;
+  body_markdown: string;
+  tags: string[];
+  source: string;
+  from_private: boolean;
+  auto_generated: boolean;
+  status: string;
+  url: string;
+  velog_id: string;
+  error: string;
+  likes: number;
+  comments: number;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function insertVelogPost(row: Partial<VelogPost>): Promise<number> {
+  const { data, error } = await supabase()
+    .from("velog_posts")
+    .insert(row)
+    .select("id")
+    .single();
+  if (error) throw new Error(`velog 글 저장 실패: ${error.message}`);
+  return Number(data.id);
+}
+
+/** 목록. 본문은 빼서 응답이 무거워지지 않게 한다 */
+export async function listVelogPosts(limit = 100) {
+  const { data, error } = await supabase()
+    .from("velog_posts")
+    .select(
+      "id, title, tags, source, from_private, auto_generated, status, url, error, likes, comments, published_at, created_at, updated_at",
+    )
+    .order("id", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`velog 글 목록 조회 실패: ${error.message}`);
+  return (data ?? []) as Omit<VelogPost, "body_markdown" | "velog_id">[];
+}
+
+export async function listVelogPostsByStatus(status: string): Promise<VelogPost[]> {
+  const { data, error } = await supabase()
+    .from("velog_posts")
+    .select("*")
+    .eq("status", status)
+    .order("id", { ascending: true });
+  if (error) throw new Error(`velog 글 조회 실패: ${error.message}`);
+  return (data ?? []) as VelogPost[];
+}
+
+export async function getVelogPost(id: number): Promise<VelogPost | null> {
+  const { data, error } = await supabase()
+    .from("velog_posts")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`velog 글 조회 실패: ${error.message}`);
+  return (data as VelogPost) ?? null;
+}
+
+/** 역동기화의 매칭 키. url 이 먼저고, 없으면 제목으로 잇는다 */
+export async function findVelogPost(url: string, title: string): Promise<VelogPost | null> {
+  const byUrl = await supabase()
+    .from("velog_posts")
+    .select("*")
+    .eq("url", url)
+    .maybeSingle();
+  if (byUrl.error) throw new Error(`velog 글 조회 실패: ${byUrl.error.message}`);
+  if (byUrl.data) return byUrl.data as VelogPost;
+  const byTitle = await supabase()
+    .from("velog_posts")
+    .select("*")
+    .eq("title", title)
+    .eq("url", "")
+    .limit(1)
+    .maybeSingle();
+  if (byTitle.error) throw new Error(`velog 글 조회 실패: ${byTitle.error.message}`);
+  return (byTitle.data as VelogPost) ?? null;
+}
+
+export async function updateVelogPost(
+  id: number,
+  patch: Record<string, unknown>,
+): Promise<VelogPost | null> {
+  const { data, error } = await supabase()
+    .from("velog_posts")
+    .update({ ...patch, updated_at: nowIso() })
+    .eq("id", id)
+    .select()
+    .maybeSingle();
+  if (error) throw new Error(`velog 글 수정 실패: ${error.message}`);
+  return (data as VelogPost) ?? null;
+}
+
+export async function deleteVelogPost(id: number): Promise<void> {
+  const { error } = await supabase().from("velog_posts").delete().eq("id", id);
+  if (error) throw new Error(`velog 글 삭제 실패: ${error.message}`);
 }
