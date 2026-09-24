@@ -34,6 +34,7 @@ type SettingsState = {
     velogUser: string;
     velogConfigured: boolean;
     velogFromEnv: boolean;
+    velogRefreshSet: boolean;
     blockedOwners: string;
   };
   ga4: {
@@ -95,6 +96,7 @@ export default function SettingsPage() {
   const [ghUser, setGhUser] = useState("");
   const [velogToken, setVelogToken] = useState("");
   const [velogUser, setVelogUser] = useState("");
+  const [velogRefresh, setVelogRefresh] = useState("");
   const [blocked, setBlocked] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -611,16 +613,21 @@ export default function SettingsPage() {
               />{" "}
               <span className={`badge ${state.devlog.velogConfigured ? "on" : ""}`}>
                 {state.devlog.velogConfigured ? "velog 토큰 있음" : "velog 토큰 없음"}
-              </span>
+              </span>{" "}
+              {state.devlog.velogConfigured && !state.devlog.velogRefreshSet && (
+                <span className="badge off">refresh 없음 — 24시간 뒤 끊김</span>
+              )}
             </>
           )}
         </h2>
         <p className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
           <strong>GitHub</strong> — Settings → Developer settings → Personal access token (classic),{" "}
           <span className="mono">repo</span> 스코프. <strong>velog</strong> — 크롬에서 velog.io 로그인 →
-          F12 → Application → Cookies → <span className="mono">access_token</span> 값. 이 쿠키는
-          만료되므로 발행이 실패하기 시작하면 다시 꺼내 넣으세요. velog 는 공식 쓰기 API 가 없어
-          이 방식은 비공식입니다.
+          F12 → Application → Cookies → <span className="mono">access_token</span> 과{" "}
+          <span className="mono">refresh_token</span> 값 둘 다. access 는 24시간, refresh 는 30일짜리라
+          둘을 같이 보내면 velog 가 새 토큰을 돌려주고 여기 설정이 자동으로 갱신됩니다. 30일 안에
+          한 번도 발행이 없으면 다시 꺼내 넣어야 합니다. velog 는 공식 쓰기 API 가 없어 이 방식은
+          비공식입니다.
         </p>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
@@ -664,6 +671,15 @@ export default function SettingsPage() {
               onChange={(e) => setVelogToken(e.target.value)}
             />
           </div>
+          <div className="field" style={{ flex: 1, minWidth: 260 }}>
+            <label>velog refresh_token</label>
+            <input
+              type="password"
+              className="mono"
+              value={velogRefresh}
+              onChange={(e) => setVelogRefresh(e.target.value)}
+            />
+          </div>
         </div>
         <div className="row" style={{ marginTop: 10 }}>
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
@@ -688,13 +704,17 @@ export default function SettingsPage() {
                 githubUser: ghUser,
                 velogUser,
                 velogToken,
+                velogRefreshToken: velogRefresh,
                 devlogBlockedOwners: blocked,
               }).then(() => {
                 setGhPat("");
                 setVelogToken("");
+                setVelogRefresh("");
               })
             }
-            disabled={!ghPat.trim() && !ghUser.trim() && !velogUser.trim() && !velogToken.trim() && !blocked.trim()}
+            disabled={
+              !ghPat.trim() && !ghUser.trim() && !velogUser.trim() && !velogToken.trim() && !velogRefresh.trim() && !blocked.trim()
+            }
           >
             저장
           </button>

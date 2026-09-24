@@ -51,13 +51,18 @@ export async function POST(req: Request) {
   }
 
   if (target === "velog") {
-    const { velogToken } = await devlogCreds();
-    if (!velogToken) return NextResponse.json({ ok: false, message: "velog 토큰이 등록되지 않았습니다." });
+    const { velogToken, velogRefresh, velogUser } = await devlogCreds();
+    if (!velogToken && !velogRefresh) {
+      return NextResponse.json({ ok: false, message: "velog 토큰이 등록되지 않았습니다." });
+    }
     try {
-      const name = await velogWhoAmI(velogToken);
+      const name = await velogWhoAmI({ access: velogToken, refresh: velogRefresh });
+      const mismatch = name && name !== velogUser ? ` — 설정의 velog 사용자(${velogUser})와 다릅니다` : "";
       return NextResponse.json({
         ok: Boolean(name),
-        message: name ? `정상 — @${name} 로 로그인됨` : "쿠키가 만료됐습니다. velog 에서 access_token 을 다시 꺼내 넣으세요.",
+        message: name
+          ? `정상 — @${name} 로 로그인됨${mismatch}${velogRefresh ? "" : " · refresh_token 이 없어 24시간 뒤 끊깁니다"}`
+          : "쿠키가 만료됐습니다. velog 에서 access_token 과 refresh_token 을 다시 꺼내 넣으세요.",
       });
     } catch (e) {
       return NextResponse.json({ ok: false, message: (e as Error).message });

@@ -30,7 +30,7 @@ export async function GET() {
     "adsense_client_id", "adsense_client_secret",
     "adsense_refresh_token", "adsense_account",
     "kakao_rest_api_key",
-    "github_pat", "github_user", "velog_user", "velog_token", "devlog_blocked_owners",
+    "github_pat", "github_user", "velog_user", "velog_token", "velog_refresh_token", "devlog_blocked_owners",
   ]);
 
   const adKey = resolve(s.searchad_api_key, "NAVER_SEARCHAD_API_KEY");
@@ -106,6 +106,7 @@ export async function GET() {
       velogUser: s.velog_user || process.env.VELOG_USER || "",
       velogConfigured: Boolean(velog.value),
       velogFromEnv: velog.fromEnv,
+      velogRefreshSet: Boolean(s.velog_refresh_token || process.env.VELOG_REFRESH_TOKEN),
       blockedOwners: s.devlog_blocked_owners || process.env.DEVLOG_BLOCKED_OWNERS || "bambitcorporation",
     },
   });
@@ -128,6 +129,7 @@ const TEXT_FIELDS: Record<string, string> = {
   githubUser: "github_user",
   velogUser: "velog_user",
   velogToken: "velog_token",
+  velogRefreshToken: "velog_refresh_token",
   devlogBlockedOwners: "devlog_blocked_owners",
 };
 
@@ -160,6 +162,7 @@ export async function POST(req: Request) {
   if (body.clearDevlog) {
     await setSetting("github_pat", "");
     await setSetting("velog_token", "");
+    await setSetting("velog_refresh_token", "");
   }
   if (body.clearGa4) {
     await setSetting("ga4_service_account", "");

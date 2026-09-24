@@ -74,12 +74,14 @@ DB 에 저장돼 재시작 없이 바꿀 수 있고, 항목마다 `연결 테스
 | | 무엇에 | 비고 |
 |---|---|---|
 | **GitHub PAT** | 비공개 레포 포함 커밋 수집 | classic, `repo` 스코프 |
-| **velog access_token** | 발행 | 읽기(역동기화)는 토큰 없이 됩니다 |
+| **velog access_token · refresh_token** | 발행 | 읽기(역동기화)는 토큰 없이 됩니다 |
 
 velog 는 공식 쓰기 API 가 없어 로그인 쿠키로 올립니다. 크롬에서 velog.io 로그인 → F12 →
-Application → Cookies → `velog.io` → `access_token` 값을 설정 화면에 붙여넣으세요. 만료되면
+Application → Cookies → `velog.io` → `access_token` 과 `refresh_token` 값을 둘 다 설정 화면에
+붙여넣으세요. access 는 24시간, refresh 는 30일짜리입니다. 둘을 같이 보내면 velog 가 새 토큰을
+돌려주고 설정이 자동으로 갱신되므로, 30일 안에 발행이 한 번이라도 있으면 계속 삽니다. 만료되면
 발행이 조용히 멈추지 않고 글에 오류로 남으니(아래 개발 로그 절 참고), 그때 다시 꺼내 넣으면
-됩니다.
+됩니다. 엔드포인트는 v3(`v3.velog.io/graphql`)입니다 — v2 에는 쓰기가 남아 있지 않습니다.
 
 **수집하지 않을 소유자 목록**(기본값 `bambitcorporation`)도 같은 카드에 있습니다 — 회사
 레포 코드가 공개 블로그로 새는 걸 막는 마지막 방어선입니다.

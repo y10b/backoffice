@@ -24,7 +24,9 @@ import {
   claimVelogPost,
   findVelogPost,
   getSettings,
+  hasSupabase,
   insertVelogPost,
+  setSetting,
   listUnconsumedDevLogs,
   listVelogPostsByStatus,
   markDevLogsConsumed,
@@ -47,10 +49,13 @@ export async function devlogCreds(): Promise<{
   /** velog 핸들. GitHub 과 다를 수 있어 따로 둔다 — 비우면 GitHub 사용자를 쓴다 */
   velogUser: string;
   velogToken: string;
+  /** access_token 은 24시간짜리다. refresh_token(30일)을 같이 보내야 매일 발행이 산다 */
+  velogRefresh: string;
   blocked: string[];
 }> {
   const s = await getSettings([
-    "github_pat", "github_user", "velog_user", "velog_token", "devlog_blocked_owners",
+    "github_pat", "github_user", "velog_user", "velog_token", "velog_refresh_token",
+    "devlog_blocked_owners",
   ]);
   const user = s.github_user || process.env.GH_USER || "y10b";
   // 설정에서 목록을 바꿔도 기본 차단 대상은 늘 남는다. 지워지는 순간이 새는 순간이다
@@ -60,6 +65,7 @@ export async function devlogCreds(): Promise<{
     user,
     velogUser: s.velog_user || process.env.VELOG_USER || user,
     velogToken: s.velog_token || process.env.VELOG_TOKEN || "",
+    velogRefresh: s.velog_refresh_token || process.env.VELOG_REFRESH_TOKEN || "",
     blocked: [...new Set(blockedRaw.split(/[\s,]+/).map((o) => o.trim().toLowerCase()).filter(Boolean))],
   };
 }
@@ -339,34 +345,73 @@ export async function draft(): Promise<DraftResult> {
  * velog GraphQL — 공식 API 가 아니다
  * ------------------------------------------------------------------ */
 
-const VELOG = "https://v2.velog.io/graphql";
+/*
+ * v3 다. v2 는 읽기 쿼리만 남아 있고 mutation 이 하나도 없다 — 원본 devlog 의 발행은
+ * 이미 죽어 있었다. v3 는 인자를 전부 input 객체로 받고, refresh_token 쿠키만 있어도
+ * 새 access_token 을 Set-Cookie 로 돌려준다(실측).
+ */
+const VELOG = "https://v3.velog.io/graphql";
 
-async function velogGql(query: string, variables: unknown, token?: string): Promise<any> {
+export type VelogAuth = { access: string; refresh: string };
+
+/**
+ * velog 는 access_token 이 24시간, refresh_token 이 30일이다. access 가 죽어도 refresh 가
+ * 쿠키에 같이 있으면 서버가 새 쌍을 Set-Cookie 로 돌려준다. 그걸 받아 설정에 다시 넣어야
+ * 다음 날에도 발행이 된다 — 안 그러면 매일 브라우저에서 쿠키를 꺼내 와야 한다.
+ */
+async function velogGql(query: string, variables: unknown, auth?: VelogAuth): Promise<any> {
+  const cookie = auth
+    ? [auth.access && `access_token=${auth.access}`, auth.refresh && `refresh_token=${auth.refresh}`]
+        .filter(Boolean)
+        .join("; ")
+    : "";
   const r = await fetch(VELOG, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(token ? { cookie: `access_token=${token}` } : {}),
-    },
+    headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
     body: JSON.stringify({ query, variables }),
   });
+  if (auth) await rotateVelogCookies(r, auth);
   if (!r.ok) throw new Error(`velog HTTP ${r.status}`);
   const j = await r.json();
   if (j.errors) throw new Error(`velog: ${JSON.stringify(j.errors).slice(0, 300)}`);
   return j.data;
 }
 
+/** 응답의 Set-Cookie 에 새 토큰이 있으면 설정에 저장한다. 값이 같으면 건드리지 않는다 */
+async function rotateVelogCookies(r: Response, auth: VelogAuth): Promise<void> {
+  const cookies: string[] =
+    typeof (r.headers as { getSetCookie?: () => string[] }).getSetCookie === "function"
+      ? (r.headers as unknown as { getSetCookie: () => string[] }).getSetCookie()
+      : [];
+  const pick = (name: string) => {
+    for (const c of cookies) {
+      const m = c.match(new RegExp(`^${name}=([^;]*)`));
+      if (m && m[1]) return m[1];
+    }
+    return "";
+  };
+  const access = pick("access_token");
+  const refresh = pick("refresh_token");
+  if (!hasSupabase()) return;
+  if (access && access !== auth.access) {
+    await setSetting("velog_token", access).catch(() => {});
+    auth.access = access;
+  }
+  if (refresh && refresh !== auth.refresh) {
+    await setSetting("velog_refresh_token", refresh).catch(() => {});
+    auth.refresh = refresh;
+  }
+}
+
 /** 토큰이 살아 있는지. 만료된 쿠키는 currentUser 가 null 로 온다 */
-export async function velogWhoAmI(token: string): Promise<string | null> {
-  const d = await velogGql(`query { currentUser { username } }`, {}, token);
+export async function velogWhoAmI(auth: VelogAuth): Promise<string | null> {
+  const d = await velogGql(`query { currentUser { username } }`, {}, auth);
   return d?.currentUser?.username ?? null;
 }
 
 const WRITE = `
-mutation W($title:String,$body:String,$tags:[String],$is_markdown:Boolean,$is_temp:Boolean,$is_private:Boolean,$url_slug:String,$thumbnail:String,$meta:JSON,$series_id:ID){
-  writePost(title:$title,body:$body,tags:$tags,is_markdown:$is_markdown,is_temp:$is_temp,is_private:$is_private,url_slug:$url_slug,thumbnail:$thumbnail,meta:$meta,series_id:$series_id){
-    id url_slug title released_at
-  }
+mutation W($input: WritePostInput!) {
+  writePost(input: $input) { id url_slug title released_at }
 }`;
 
 /* ------------------------------------------------------------------ *
@@ -379,13 +424,14 @@ export type PublishResult = {
 };
 
 export async function publish(): Promise<PublishResult> {
-  const { velogToken, velogUser } = await devlogCreds();
+  const { velogToken, velogRefresh, velogUser } = await devlogCreds();
   const rows = await listVelogPostsByStatus("approved");
   const out: PublishResult = { published: [], failed: [] };
   if (!rows.length) return out;
-  if (!velogToken) {
-    throw new Error("velog 토큰이 없습니다. 설정 화면에서 로그인 쿠키(access_token)를 등록하세요.");
+  if (!velogToken && !velogRefresh) {
+    throw new Error("velog 토큰이 없습니다. 설정 화면에서 로그인 쿠키(access_token · refresh_token)를 등록하세요.");
   }
+  const auth: VelogAuth = { access: velogToken, refresh: velogRefresh };
 
   for (const row of rows) {
     /*
@@ -403,18 +449,20 @@ export async function publish(): Promise<PublishResult> {
       const data = await velogGql(
         WRITE,
         {
-          title: row.title,
-          body,
-          tags: row.tags,
-          is_markdown: true,
-          is_temp: false,
-          is_private: false,
-          url_slug: slug,
-          thumbnail: null,
-          meta: {},
-          series_id: null,
+          input: {
+            title: row.title,
+            body,
+            tags: row.tags,
+            is_markdown: true,
+            is_temp: false,
+            is_private: false,
+            url_slug: slug,
+            thumbnail: null,
+            meta: {},
+            series_id: null,
+          },
         },
-        velogToken,
+        auth,
       );
       const post = data?.writePost;
       if (!post?.id) throw new Error("writePost 가 null 을 반환했습니다. 쿠키가 만료됐을 가능성이 높습니다.");
@@ -462,22 +510,22 @@ type VelogListed = {
 };
 
 const POSTS = `
-query P($username:String,$cursor:ID,$limit:Int){
-  posts(username:$username, cursor:$cursor, limit:$limit){
+query P($input: GetPostsInput!) {
+  posts(input: $input) {
     id title short_description url_slug released_at tags likes comments_count is_private
   }
 }`;
 
 const POST_BODY = `
-query B($username:String,$url_slug:String){
-  post(username:$username, url_slug:$url_slug){ body }
+query B($input: ReadPostInput!) {
+  post(input: $input) { body }
 }`;
 
 async function allVelogPosts(user: string): Promise<VelogListed[]> {
   const out: VelogListed[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < 20; page++) {
-    const d = await velogGql(POSTS, { username: user, cursor, limit: 20 });
+    const d = await velogGql(POSTS, { input: { username: user, cursor, limit: 20 } });
     const batch: VelogListed[] = d?.posts ?? [];
     if (!batch.length) break;
     out.push(...batch);
@@ -517,7 +565,7 @@ export async function sync(): Promise<SyncResult> {
     // 본문은 목록 응답에 없다. 따로 읽되, 스키마가 다르면 요약으로 대신한다
     let body = p.short_description ?? "";
     try {
-      const d = await velogGql(POST_BODY, { username: user, url_slug: p.url_slug });
+      const d = await velogGql(POST_BODY, { input: { username: user, url_slug: p.url_slug } });
       if (typeof d?.post?.body === "string" && d.post.body.trim()) body = d.post.body;
     } catch {
       /* 요약으로 충분하다 */
