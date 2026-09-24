@@ -46,7 +46,9 @@ export function toNaverHtml(html: string, title?: string): string {
     .replace(/<em>/gi, "<i>")
     .replace(/<\/em>/gi, "</i>")
     // 문단 사이 빈 줄. 네이버는 <p> 간격이 없어 붙여 보인다
-    .replace(/<\/p>\s*<p>/gi, "</p><p><br></p><p>");
+    .replace(/<\/p>\s*<p>/gi, "</p><p><br></p><p>")
+    // 위 규칙들이 겹치면 빈 줄이 여러 개 쌓인다. 하나만 남긴다
+    .replace(/(<p><br><\/p>){2,}/gi, "<p><br></p>");
   if (title) out = `<p><b><span style="font-size:24px">${title}</span></b></p><p><br></p>${out}`;
   return out;
 }
