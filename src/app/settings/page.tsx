@@ -26,6 +26,7 @@ type SettingsState = {
     model: string;
   };
   youtube: { configured: boolean; fromEnv: boolean; apiKeyPreview: string };
+  kakao: { configured: boolean; fromEnv: boolean; apiKeyPreview: string };
   claude: { configured: boolean; fromEnv: boolean; apiKeyPreview: string; model: string };
   veo: { configured: boolean; model: string };
   fish: {
@@ -90,6 +91,7 @@ export default function SettingsPage() {
   const [adsenseId, setAdsenseId] = useState("");
   const [adsenseSecret, setAdsenseSecret] = useState("");
   const [youtubeKey, setYoutubeKey] = useState("");
+  const [kakaoKey, setKakaoKey] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
   const [claudeModel, setClaudeModel] = useState("claude-sonnet-5");
   const [veoModel, setVeoModel] = useState("");
@@ -599,6 +601,43 @@ export default function SettingsPage() {
             className="primary"
             onClick={() => save({ youtubeApiKey: youtubeKey }).then(() => setYoutubeKey(""))}
             disabled={!youtubeKey.trim()}
+          >
+            저장
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          카카오 로컬 API — 방문 후기
+          <Help text="방문 후기의 상호·주소·업종 보강에 씁니다.&#10;네이버 지역검색을 쓰려 했으나 그 스코프는 신규 발급이 막혀 있어(401 Scope Status Invalid) 카카오로 대체했습니다." />{" "}
+          {state?.kakao && (
+            <Status
+              configured={state.kakao.configured}
+              fromEnv={state.kakao.fromEnv}
+              preview={state.kakao.apiKeyPreview}
+            />
+          )}
+        </h2>
+        <div className="row">
+          <div className="field" style={{ flex: 1, minWidth: 260 }}>
+            <label>REST API 키 (developers.kakao.com → 내 애플리케이션 → 앱 키)</label>
+            <input
+              type="password"
+              className="mono"
+              placeholder="32자리 키"
+              value={kakaoKey}
+              onChange={(e) => setKakaoKey(e.target.value)}
+            />
+            <p className="hint" style={{ marginTop: 6 }}>
+              <strong>JavaScript 키가 아니라 REST API 키</strong>여야 합니다. 앱을 만든 뒤
+              카카오맵을 활성화하세요. 방문 후기에서 가게를 못 찾으면 폐업 의심으로 표시합니다.
+            </p>
+          </div>
+          <button
+            className="primary"
+            onClick={() => save({ kakaoRestApiKey: kakaoKey }).then(() => setKakaoKey(""))}
+            disabled={!kakaoKey.trim()}
           >
             저장
           </button>

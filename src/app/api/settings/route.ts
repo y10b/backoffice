@@ -33,6 +33,7 @@ export async function GET() {
     "adsense_client_id", "adsense_client_secret",
     "adsense_refresh_token", "adsense_account",
     "youtube_api_key",
+    "kakao_rest_api_key",
     "anthropic_api_key", "claude_model",
     "veo_model",
     "fish_api_key", "fish_model",
@@ -50,6 +51,7 @@ export async function GET() {
   const adsenseSecret = resolve(s.adsense_client_secret, "ADSENSE_CLIENT_SECRET");
   const adsenseToken = s.adsense_refresh_token ?? "";
   const youtube = resolve(s.youtube_api_key, "YOUTUBE_API_KEY");
+  const kakao = resolve(s.kakao_rest_api_key, "KAKAO_REST_API_KEY");
   const anthropic = resolve(s.anthropic_api_key, "ANTHROPIC_API_KEY");
   const fish = resolve(s.fish_api_key, "FISH_API_KEY");
 
@@ -102,6 +104,11 @@ export async function GET() {
       fromEnv: youtube.fromEnv,
       apiKeyPreview: mask(youtube.value),
     },
+    kakao: {
+      configured: Boolean(kakao.value),
+      fromEnv: kakao.fromEnv,
+      apiKeyPreview: mask(kakao.value),
+    },
     claude: {
       configured: Boolean(anthropic.value),
       fromEnv: anthropic.fromEnv,
@@ -136,6 +143,7 @@ const TEXT_FIELDS: Record<string, string> = {
   adsenseClientId: "adsense_client_id",
   adsenseClientSecret: "adsense_client_secret",
   youtubeApiKey: "youtube_api_key",
+  kakaoRestApiKey: "kakao_rest_api_key",
   anthropicApiKey: "anthropic_api_key",
   claudeModel: "claude_model",
   veoModel: "veo_model",

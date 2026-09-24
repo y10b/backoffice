@@ -6,6 +6,8 @@ import { usePathname } from "next/navigation";
 const ITEMS = [
   { href: "/", label: "키워드 탐색" },
   { href: "/write", label: "글 작성" },
+  // 키워드가 아니라 사진에서 출발하는 갈래. 방향이 반대라 글 작성과 섞지 않는다
+  { href: "/visit", label: "방문 후기" },
   { href: "/posts", label: "글 목록" },
   // 같은 트렌드를 글이 아니라 영상으로 푸는 갈래. ffmpeg 가 필요해 로컬에서만 돈다
   { href: "/shorts", label: "쇼츠" },

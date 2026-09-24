@@ -394,3 +394,96 @@ export async function deleteThreadsPost(id: number): Promise<void> {
   const { error } = await supabase().from("threads_posts").delete().eq("id", id);
   if (error) throw new Error(`쓰레드 후보 삭제 실패: ${error.message}`);
 }
+
+/* ------------------------------------------------------------------ *
+ * visit_posts — 방문 후기 초안
+ *
+ * posts 와 섞지 않는다. posts 는 키워드에서 출발하고 여기는 사진에서 출발한다.
+ * 한 테이블에 두면 어느 쪽에도 안 맞는 컬럼이 절반씩 빈다.
+ * ------------------------------------------------------------------ */
+
+export type VisitPost = {
+  id: number;
+  place_query: string;
+  visited_on: string;
+  place: Record<string, unknown> | null;
+  analysis: Record<string, unknown>;
+  interview: Record<string, unknown>;
+  situation: string;
+  titles: string[];
+  title: string;
+  body_markdown: string;
+  body_html: string;
+  tags: string[];
+  photo_order: { index: number; note: string }[];
+  warnings: string[];
+  needs_check: string[];
+  status: string;
+  posted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function insertVisitPost(row: Record<string, unknown>): Promise<number> {
+  const { data, error } = await supabase()
+    .from("visit_posts")
+    .insert(row)
+    .select("id")
+    .single();
+  if (error) {
+    // 23505 = unique_violation. 같은 가게·같은 날짜가 이미 열려 있다
+    if ((error as { code?: string }).code === "23505") {
+      throw new Error(
+        "같은 가게·같은 방문일의 초안이 이미 있습니다. 목록에서 기존 것을 이어서 쓰세요.",
+      );
+    }
+    throw new Error(`방문 후기 저장 실패: ${error.message}`);
+  }
+  return Number(data.id);
+}
+
+/** 목록. 본문은 빼서 응답이 무거워지지 않게 한다 */
+export async function listVisitPosts(limit = 100) {
+  const { data, error } = await supabase()
+    .from("visit_posts")
+    .select(
+      "id, place_query, visited_on, place, situation, titles, title, tags, warnings, needs_check, status, posted_at, created_at, updated_at",
+    )
+    .order("id", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`방문 후기 목록 조회 실패: ${error.message}`);
+  return data ?? [];
+}
+
+export async function getVisitPost(id: number): Promise<VisitPost | null> {
+  const { data, error } = await supabase()
+    .from("visit_posts")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`방문 후기 조회 실패: ${error.message}`);
+  return (data as VisitPost) ?? null;
+}
+
+export async function updateVisitPost(
+  id: number,
+  patch: Record<string, unknown>,
+): Promise<VisitPost | null> {
+  const next: Record<string, unknown> = { ...patch, updated_at: nowIso() };
+  // 올림 표시를 하는 순간을 기록해 둔다. 나중에 성과를 되짚을 때 기준이 된다
+  if (patch.status === "posted" && !("posted_at" in patch)) next.posted_at = nowIso();
+
+  const { data, error } = await supabase()
+    .from("visit_posts")
+    .update(next)
+    .eq("id", id)
+    .select()
+    .maybeSingle();
+  if (error) throw new Error(`방문 후기 수정 실패: ${error.message}`);
+  return (data as VisitPost) ?? null;
+}
+
+export async function deleteVisitPost(id: number): Promise<void> {
+  const { error } = await supabase().from("visit_posts").delete().eq("id", id);
+  if (error) throw new Error(`방문 후기 삭제 실패: ${error.message}`);
+}
