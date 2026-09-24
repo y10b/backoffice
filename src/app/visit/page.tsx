@@ -194,6 +194,8 @@ function VisitInner() {
       setId(d.id);
       setAnalysis(d.analysis);
       setPlace(d.place);
+      // 분석 단계에서 이미 행이 생긴다. 목록을 바로 갱신해야 "지난 초안"에 보인다
+      load();
       setWarnings(d.warnings ?? []);
       load();
     } catch (e) {
