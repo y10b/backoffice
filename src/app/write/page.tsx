@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useSearchParams } from "next/navigation";
 import { markdownToHtml, countChars } from "@/lib/markdown";
 import Help from "@/components/Help";
-import { copyRichHtml, copyText } from "@/lib/clipboard";
+import { copyForNaver, copyRichHtml, copyText } from "@/lib/clipboard";
 import type { StoredImage } from "@/lib/images";
 import { applyVisuals, type Visual } from "@/lib/visuals";
 import { downloadHtmlAsPng } from "@/lib/htmlImage";
@@ -654,11 +654,11 @@ function WritePageInner() {
               <button
                 className="naver"
                 onClick={() =>
-                  copyRichHtml(html).then((mode) =>
+                  copyForNaver(html).then((mode) =>
                     flash(
                       mode === "rich"
                         ? "네이버용 서식 복사됨 — 스마트에디터에 그대로 붙여넣으세요"
-                        : "서식 복사를 지원하지 않아 HTML 평문으로 복사했습니다",
+                        : "이 브라우저는 서식 복사를 막아 평문으로 복사했습니다",
                     ),
                   )
                 }

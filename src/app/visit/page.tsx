@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Help from "@/components/Help";
-import { copyRichHtml, copyText } from "@/lib/clipboard";
+import { copyForNaver, copyText } from "@/lib/clipboard";
 
 /**
  * 네이버 방문 후기 — 사진에서 글로.
@@ -515,12 +515,26 @@ function VisitInner() {
             <button
               className="primary"
               onClick={() =>
-                copyRichHtml(draft.body_html ?? "").then((mode) =>
-                  flash(mode === "rich" ? "서식 유지로 복사됨" : "평문으로 복사됨"),
+                copyForNaver(draft.body_html ?? "").then((mode) =>
+                  flash(
+                    mode === "rich"
+                      ? "서식 유지로 복사됨 — 네이버 에디터에 붙여넣으면 소제목·굵게가 살아납니다"
+                      : "이 브라우저는 서식 복사를 막아 평문으로 복사됐습니다. PC 에디터에서 붙여넣으면 서식이 유지됩니다",
+                  ),
                 )
               }
             >
               네이버 본문 (서식 유지)
+            </button>
+            <button
+              onClick={() =>
+                copyForNaver(draft.body_html ?? "", draft.title || draft.titles?.[0] || "").then((mode) =>
+                  flash(mode === "rich" ? "제목 + 본문을 서식 유지로 복사됨" : "제목 + 본문을 평문으로 복사됨"),
+                )
+              }
+              title="제목을 맨 위 줄로 넣어 한 번에 붙여넣습니다. 네이버 제목 칸은 따로 채워야 합니다"
+            >
+              제목 + 본문
             </button>
             <button
               onClick={() =>
