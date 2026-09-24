@@ -9,6 +9,9 @@ name: 개발 로그 (velog)
 #   매일 22:00      sync     velog 에 올라간 글·반응을 되돌려 채움
 #
 # 크론은 UTC 다. GitHub 크론은 부하에 따라 수십 분 늦게 도는 일이 흔하다.
+#
+# 이 레포는 공개라 실행 로그도 공개다. 응답 본문을 그대로 찍으면 비공개 레포 이름과
+# 초안 제목이 새므로, 로그에는 개수만 남긴다. 내용은 백오피스 화면에서 본다.
 on:
   schedule:
     - cron: "0 12 * * *"
@@ -27,6 +30,13 @@ on:
         description: "collect 만: YYYY-MM-DD (비우면 오늘)"
         required: false
         type: string
+
+permissions: {}
+
+# 수동 실행과 크론이 겹치면 발행이 두 번 갈 수 있다. 한 번에 하나만 돈다
+concurrency:
+  group: devlog
+  cancel-in-progress: false
 
 jobs:
   run:
@@ -60,7 +70,8 @@ jobs:
             echo "::error::APP_ORIGIN 과 CRON_SECRET 시크릿을 등록하세요."
             exit 1
           fi
-          payload=$(printf '{"task":"%s","date":"%s"}' "$TASK" "${DATE:-}")
+          # printf 로 JSON 을 조립하면 따옴표에 깨진다. jq 가 이스케이프한다
+          payload=$(jq -cn --arg task "$TASK" --arg date "${DATE:-}" '{task: $task, date: $date}')
           http=$(curl -sS -o response.json -w '%{http_code}' \
             --max-time 600 \
             -X POST "${APP_ORIGIN%/}/api/cron/devlog" \
@@ -68,18 +79,21 @@ jobs:
             -H "content-type: application/json" \
             -d "$payload")
           echo "HTTP $http ($TASK)"
-          cat response.json
-          echo
-          ok=$(node -e "try{process.stdout.write(String(JSON.parse(require('fs').readFileSync('response.json','utf8')).ok))}catch{process.stdout.write('false')}")
-          {
-            echo "## $TASK"
-            echo
-            echo '```json'
-            cat response.json
-            echo
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$ok" != "true" ]; then
-            echo "::error::$TASK 실패 (HTTP $http)"
-            exit 1
-          fi
+
+          # 개수만 찍는다. 레포 이름·제목은 공개 로그에 남기지 않는다
+          HTTP="$http" node -e '
+            let d = {};
+            try { d = JSON.parse(require("fs").readFileSync("response.json", "utf8")); } catch {}
+            const r = d.result ?? {};
+            const task = process.env.TASK;
+            const lines = [];
+            if (task === "collect") lines.push(`레포 ${(r.found ?? []).length}개 · 새로 ${r.inserted ?? 0} · 갱신 ${r.updated ?? 0} · 그대로 ${r.skipped ?? 0}`);
+            if (task === "draft") lines.push(r.made ? `초안 1편 (${r.ai ? "모델 작성" : "뼈대만"}, 커밋 ${r.commits ?? 0}개)` : `초안 없음 — ${r.reason ?? ""}`);
+            if (task === "publish") lines.push(`발행 ${(r.published ?? []).length} · 실패 ${(r.failed ?? []).length}`);
+            if (task === "sync") lines.push(`velog 공개글 ${r.total ?? 0} · 새로 ${r.created ?? 0} · 연결 ${r.linked ?? 0} · 반응 갱신 ${r.refreshed ?? 0}`);
+            if (d.error) lines.push(`오류: ${String(d.error).slice(0, 200)}`);
+            const text = `## ${task} — ${d.ok ? "성공" : "실패"}\n\n${lines.map((l) => `- ${l}`).join("\n")}\n`;
+            console.log(text);
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
+            if (!d.ok) { console.error(`::error::${task} 실패 (HTTP ${process.env.HTTP})`); process.exit(1); }
+          '

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isTask, runTask } from "@/lib/devlog";
+import { cronDenied } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,13 +13,8 @@ export const maxDuration = 300;
  * 이 경로를 CRON_SECRET 으로 부른다. 판단은 전부 서버에 있고 워크플로는 curl 한 줄이다.
  */
 export async function POST(req: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const header = req.headers.get("authorization") ?? "";
-    if (header !== `Bearer ${secret}`) {
-      return NextResponse.json({ ok: false, error: "인증이 필요합니다." }, { status: 401 });
-    }
-  }
+  const denied = cronDenied(req);
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
   if (!isTask(body.task)) {

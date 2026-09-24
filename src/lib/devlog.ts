@@ -21,14 +21,15 @@
  */
 
 import {
+  claimVelogPost,
   findVelogPost,
   getSettings,
-  insertDevLogs,
   insertVelogPost,
   listUnconsumedDevLogs,
   listVelogPostsByStatus,
   markDevLogsConsumed,
   updateVelogPost,
+  upsertDevLogs,
   type DevLog,
   type DevLogInput,
 } from "./db";
@@ -43,16 +44,23 @@ const DEFAULT_BLOCKED = "bambitcorporation";
 export async function devlogCreds(): Promise<{
   token: string;
   user: string;
+  /** velog 핸들. GitHub 과 다를 수 있어 따로 둔다 — 비우면 GitHub 사용자를 쓴다 */
+  velogUser: string;
   velogToken: string;
   blocked: string[];
 }> {
-  const s = await getSettings(["github_pat", "github_user", "velog_token", "devlog_blocked_owners"]);
-  const blockedRaw = s.devlog_blocked_owners || process.env.DEVLOG_BLOCKED_OWNERS || DEFAULT_BLOCKED;
+  const s = await getSettings([
+    "github_pat", "github_user", "velog_user", "velog_token", "devlog_blocked_owners",
+  ]);
+  const user = s.github_user || process.env.GH_USER || "y10b";
+  // 설정에서 목록을 바꿔도 기본 차단 대상은 늘 남는다. 지워지는 순간이 새는 순간이다
+  const blockedRaw = `${DEFAULT_BLOCKED},${s.devlog_blocked_owners || process.env.DEVLOG_BLOCKED_OWNERS || ""}`;
   return {
     token: s.github_pat || process.env.GH_PAT || process.env.GITHUB_TOKEN || "",
-    user: s.github_user || process.env.GH_USER || "y10b",
+    user,
+    velogUser: s.velog_user || process.env.VELOG_USER || user,
     velogToken: s.velog_token || process.env.VELOG_TOKEN || "",
-    blocked: blockedRaw.split(/[\s,]+/).map((o) => o.trim().toLowerCase()).filter(Boolean),
+    blocked: [...new Set(blockedRaw.split(/[\s,]+/).map((o) => o.trim().toLowerCase()).filter(Boolean))],
   };
 }
 
@@ -74,7 +82,7 @@ export function topicsOf(messages: string[]): string[] {
   const joined = messages.join("\n").toLowerCase();
   if (/(^|\n)\s*feat|기능|추가|넣는다/.test(joined)) t.add("기능");
   if (/(^|\n)\s*fix|hotfix|버그|오류|수정|바로잡/.test(joined)) t.add("버그");
-  if (/(^|\n)\s*refactor|리팩|걷어|정리/.test(joined)) t.add("리팩토링");
+  if (/(^|\n)\s*refactor|repactor|리팩|걷어|정리/.test(joined)) t.add("리팩토링");
   if (/(^|\n)\s*(ci|chore|build|deploy)|배포|인프라|docker|ecs|ec2|actions|깃액션|vercel/.test(joined)) t.add("인프라");
   if (/(^|\n)\s*(data|db)|스키마|마이그|수집|스크래|supabase/.test(joined)) t.add("데이터");
   if (/(^|\n)\s*docs?|문서|readme|devlog/.test(joined)) t.add("문서");
@@ -102,7 +110,7 @@ export function scoreOf(messages: string[], topics: string[]): number {
  * 1. collect — GitHub 에서 하루치 커밋
  * ------------------------------------------------------------------ */
 
-type GhRepo = { full_name: string; private: boolean; pushed_at: string };
+type GhRepo = { full_name: string; private: boolean; pushed_at: string; fork?: boolean };
 
 async function gh(path: string, token: string): Promise<unknown> {
   const r = await fetch(`https://api.github.com${path}`, {
@@ -120,13 +128,35 @@ export type CollectResult = {
   date: string;
   found: { repo: string; commits: number; score: number; topics: string[] }[];
   inserted: number;
+  updated: number;
   skipped: number;
 };
+
+/**
+ * 포크는 원본 소유자로 판단한다.
+ *
+ * 회사 레포를 개인 계정으로 포크하면 full_name 이 내 이름으로 시작해 접두사 차단이
+ * 빠져나간다. 포크만 따로 원본을 물어봐서 원본 소유자가 차단 대상이면 같이 막는다.
+ */
+async function forkOfBlocked(r: GhRepo, token: string, blocked: string[]): Promise<boolean> {
+  if (!r.fork) return false;
+  try {
+    const full = (await gh(`/repos/${r.full_name}`, token)) as { parent?: { full_name?: string } };
+    const parent = full.parent?.full_name ?? "";
+    return Boolean(parent) && isBlocked(parent, blocked);
+  } catch {
+    // 원본을 못 읽으면 안전한 쪽으로 — 포크는 건너뛴다
+    return true;
+  }
+}
 
 export async function collect(date = kstToday()): Promise<CollectResult> {
   const { token, user, blocked } = await devlogCreds();
   if (!token) throw new Error("GitHub 토큰이 없습니다. 설정 화면에서 등록하세요 (repo 스코프).");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`날짜 형식이 잘못됐습니다: ${date}`);
+  // 정규식만으로는 "2024-13-01" 같은 값을 못 거른다. Date.parse 로 한 번 더 본다
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00+09:00`))) {
+    throw new Error(`날짜 형식이 잘못됐습니다: ${date}`);
+  }
 
   const since = `${date}T00:00:00+09:00`;
   const until = `${date}T23:59:59+09:00`;
@@ -148,6 +178,7 @@ export async function collect(date = kstToday()): Promise<CollectResult> {
 
   const rows: DevLogInput[] = [];
   for (const r of candidates) {
+    if (await forkOfBlocked(r, token, blocked)) continue;
     try {
       const commits = (await gh(
         `/repos/${r.full_name}/commits?author=${user}&since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&per_page=100`,
@@ -173,11 +204,20 @@ export async function collect(date = kstToday()): Promise<CollectResult> {
     }
   }
 
-  const { inserted, skipped } = rows.length ? await insertDevLogs(rows) : { inserted: 0, skipped: 0 };
+  // 이중 방어 — candidates 필터를 믿지 않고 저장 직전에 한 번 더 막는다
+  const safeRows = rows.filter((r) => !isBlocked(r.repo, blocked));
+  /*
+   * 갱신이다, 삽입이 아니다. 수집은 21시에 돌지만 그 뒤에도 커밋은 생긴다.
+   * 같은 날·같은 레포가 있으면 아직 초안에 안 쓰인 것에 한해 메시지와 점수를 덮어쓴다.
+   */
+  const { inserted, updated, skipped } = safeRows.length
+    ? await upsertDevLogs(safeRows)
+    : { inserted: 0, updated: 0, skipped: 0 };
   return {
     date,
-    found: rows.map((r) => ({ repo: r.repo, commits: r.commit_count, score: r.score, topics: r.topics })),
+    found: safeRows.map((r) => ({ repo: r.repo, commits: r.commit_count, score: r.score, topics: r.topics })),
     inserted,
+    updated,
     skipped,
   };
 }
@@ -261,8 +301,17 @@ export async function draft(): Promise<DraftResult> {
       // 생각에도 토큰을 쓰는 모델이라 짜게 주면 본문이 빈 채로 돌아온다
       generationConfig: { maxOutputTokens: 8192, temperature: 0.7 },
     });
-    const parts = payload?.candidates?.[0]?.content?.parts ?? [];
-    const text = parts.map((p: { text?: string }) => p.text ?? "").join("").trim();
+    const cand = payload?.candidates?.[0];
+    const parts = cand?.content?.parts ?? [];
+    let text = parts.map((p: { text?: string }) => p.text ?? "").join("").trim();
+    // 모델이 ```markdown 펜스로 감싸거나 서두 문장을 붙이면 벗겨낸다. 본문은 첫 `# 제목` 부터다
+    text = text.replace(/^```[a-z]*\s*\n/i, "").replace(/\n```\s*$/, "");
+    const at = text.search(/^#\s+.+$/m);
+    if (at > 0) text = text.slice(at);
+    // 길이 제한으로 잘린 답은 끝이 없다. 승인 전에 눈에 띄도록 TODO 로 남긴다
+    if (text && cand?.finishReason === "MAX_TOKENS") {
+      text += "\n\n> TODO: 모델 응답이 길이 제한으로 잘렸습니다. 끝부분을 확인하세요.";
+    }
     ai = text || null;
   } catch {
     // 모델이 막혀도 뼈대는 만든다. 중요한 건 "그때 뭘 했는지"가 남는 것이다
@@ -330,7 +379,7 @@ export type PublishResult = {
 };
 
 export async function publish(): Promise<PublishResult> {
-  const { velogToken, user } = await devlogCreds();
+  const { velogToken, velogUser } = await devlogCreds();
   const rows = await listVelogPostsByStatus("approved");
   const out: PublishResult = { published: [], failed: [] };
   if (!rows.length) return out;
@@ -339,6 +388,12 @@ export async function publish(): Promise<PublishResult> {
   }
 
   for (const row of rows) {
+    /*
+     * 선점. 크론과 화면 버튼이 겹치면 같은 글이 velog 에 두 번 올라간다.
+     * approved → publishing 조건부 갱신이 한쪽에서만 성공한다.
+     */
+    if (!(await claimVelogPost(row.id))) continue;
+    let written: { id: string; url_slug: string; released_at?: string } | null = null;
     try {
       const body = row.body_markdown.trim();
       if (body.length < 200) throw new Error(`본문이 너무 짧습니다 (${body.length}자). 초안을 채우세요.`);
@@ -363,20 +418,27 @@ export async function publish(): Promise<PublishResult> {
       );
       const post = data?.writePost;
       if (!post?.id) throw new Error("writePost 가 null 을 반환했습니다. 쿠키가 만료됐을 가능성이 높습니다.");
+      written = post;
 
-      const url = `https://velog.io/@${user}/${post.url_slug}`;
-      await updateVelogPost(row.id, {
+      const url = `https://velog.io/@${velogUser}/${post.url_slug}`;
+      const patch = {
         status: "published",
         url,
         velog_id: String(post.id),
         error: "",
         published_at: post.released_at ?? new Date().toISOString(),
-      });
+      };
+      // velog 에는 올라갔는데 여기 기록이 실패하면 다음 시도가 또 올린다. 한 번 더 써본다
+      await updateVelogPost(row.id, patch).catch(() => updateVelogPost(row.id, patch));
       out.published.push({ id: row.id, title: row.title, url });
     } catch (e) {
       const error = (e as Error).message;
-      // 승인 상태는 그대로 둔다. 원인을 고치면 다음 아침에 다시 시도된다
-      await updateVelogPost(row.id, { error }).catch(() => {});
+      /*
+       * 올리기 전에 실패했으면 승인 상태로 되돌린다 — 원인을 고치면 다음 아침에 다시 간다.
+       * 올린 뒤에 실패했으면 되돌리지 않는다. 되돌리면 중복 발행이고, publishing 으로
+       * 남겨두면 화면에서 사유를 보고 사람이 정리한다.
+       */
+      await updateVelogPost(row.id, written ? { error } : { status: "approved", error }).catch(() => {});
       out.failed.push({ id: row.id, title: row.title, error });
     }
   }
@@ -428,7 +490,7 @@ async function allVelogPosts(user: string): Promise<VelogListed[]> {
 export type SyncResult = { total: number; created: number; linked: number; refreshed: number };
 
 export async function sync(): Promise<SyncResult> {
-  const { user } = await devlogCreds();
+  const { velogUser: user } = await devlogCreds();
   const posts = (await allVelogPosts(user)).filter((p) => !p.is_private);
   const out: SyncResult = { total: posts.length, created: 0, linked: 0, refreshed: 0 };
 

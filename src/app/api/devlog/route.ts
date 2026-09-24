@@ -27,7 +27,7 @@ export async function GET(req: Request) {
 
 /** 손질 가능한 필드만. 반응 수·URL 은 velog 가 정하는 값이라 여기서 안 고친다 */
 const EDITABLE = ["title", "body_markdown", "tags", "status"] as const;
-const STATUSES = new Set(["draft", "approved", "published", "dropped"]);
+const STATUSES = new Set(["draft", "approved", "dropped"]);
 
 export async function PATCH(req: Request) {
   const body = await req.json().catch(() => ({}));
@@ -57,6 +57,14 @@ export async function PATCH(req: Request) {
   }
 
   try {
+    // 이미 올라간 글은 상태를 되돌리지 않는다. approved 로 돌아가면 다음 아침에 또 올라간다
+    if ("status" in patch) {
+      const current = await getVelogPost(id);
+      if (!current) return NextResponse.json({ ok: false, error: "없는 글입니다." }, { status: 404 });
+      if (current.status === "published") {
+        return NextResponse.json({ ok: false, error: "발행된 글의 상태는 바꿀 수 없습니다." }, { status: 400 });
+      }
+    }
     const post = await updateVelogPost(id, patch);
     if (!post) return NextResponse.json({ ok: false, error: "없는 글입니다." }, { status: 404 });
     return NextResponse.json({ ok: true, post });

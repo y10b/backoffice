@@ -45,6 +45,7 @@ type LogRow = {
 const STATUS_LABEL: Record<string, string> = {
   draft: "검토 대기",
   approved: "발행 승인",
+  publishing: "발행 중",
   published: "발행됨",
   dropped: "보류",
 };
@@ -60,7 +61,7 @@ function summarize(task: string, r: any): string {
   if (task === "collect") {
     const found = (r.found ?? []) as { repo: string; commits: number; score: number }[];
     if (!found.length) return `${r.date}: 커밋 없음. 아무것도 만들지 않았습니다.`;
-    return `${r.date}: ${found.map((f) => `${f.repo.split("/")[1]} ${f.commits}개(점수 ${f.score})`).join(", ")} — 새로 ${r.inserted}건`;
+    return `${r.date}: ${found.map((f) => `${f.repo.split("/")[1]} ${f.commits}개(점수 ${f.score})`).join(", ")} — 새로 ${r.inserted} · 갱신 ${r.updated ?? 0}`;
   }
   if (task === "draft") return r.made ? `초안 생성: ${r.title} (${r.repo} · 커밋 ${r.commits}개 · ${r.ai ? "모델 작성" : "뼈대만"})` : r.reason;
   if (task === "publish") {
@@ -191,7 +192,7 @@ export default function DevlogPage() {
   });
 
   const shown = posts.filter((p) =>
-    filter === "open" ? p.status === "draft" || p.status === "approved" : true,
+    filter === "open" ? ["draft", "approved", "publishing"].includes(p.status) : true,
   );
   const todo = body.match(/^>\s*TODO/gm)?.length ?? 0;
 
@@ -213,11 +214,15 @@ export default function DevlogPage() {
         </h2>
         <div className="row">
           {TASKS.map((t) => (
-            <button key={t.id} onClick={() => run(t.id)} disabled={running !== null}>
-              {running === t.id && <span className="spinner" />}
-              {t.label}
+            // Help 는 포커스 가능한 span(tabIndex=0)이라 button 안에 두면 중첩 포커스 대상이 생겨
+            // 접근성 경고가 난다. 버튼 밖, 같은 묶음 안에 나란히 둔다.
+            <span key={t.id} className="row" style={{ gap: 4 }}>
+              <button onClick={() => run(t.id)} disabled={running !== null}>
+                {running === t.id && <span className="spinner" />}
+                {t.label}
+              </button>
               <Help text={t.help} />
-            </button>
+            </span>
           ))}
         </div>
         {lastRun && <p className="hint">{lastRun}</p>}
@@ -262,12 +267,12 @@ export default function DevlogPage() {
                   {p.source}
                   {p.status === "published" && ` · 좋아요 ${p.likes} · 댓글 ${p.comments}`}
                 </div>
-                {p.error && <div className="hint" style={{ color: "var(--danger)" }}>발행 실패: {p.error}</div>}
+                {p.error && <div className="hint" style={{ color: "var(--danger-text)" }}>발행 실패: {p.error}</div>}
               </div>
               <div className="row" style={{ gap: 6 }}>
                 {p.url && (
-                  <a href={p.url} target="_blank" rel="noreferrer">
-                    <button className="small ghost">velog</button>
+                  <a href={p.url} target="_blank" rel="noreferrer" className="link-btn">
+                    velog ↗
                   </a>
                 )}
                 <button className="small ghost" onClick={() => open(p)}>
@@ -327,7 +332,7 @@ export default function DevlogPage() {
                       발행 승인
                     </button>
                   )}
-                  {p.status === "approved" && (
+                  {(p.status === "approved" || p.status === "publishing") && (
                     <button
                       onClick={async () => {
                         if (await patch(p.id, { ...edited(), status: "draft" })) flash("승인을 취소했습니다.");
@@ -377,7 +382,19 @@ export default function DevlogPage() {
               </thead>
               <tbody>
                 {logs.map((l) => (
-                  <tr key={l.id} className={showLog === l.id ? "picked-row" : ""} onClick={() => setShowLog(showLog === l.id ? null : l.id)} style={{ cursor: "pointer" }}>
+                  <tr
+                    key={l.id}
+                    className={showLog === l.id ? "picked-row" : ""}
+                    onClick={() => setShowLog(showLog === l.id ? null : l.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setShowLog(showLog === l.id ? null : l.id);
+                      }
+                    }}
+                    tabIndex={0}
+                    style={{ cursor: "pointer" }}
+                  >
                     <td className="dim">{l.date}</td>
                     <td>
                       {l.repo.split("/")[1]}

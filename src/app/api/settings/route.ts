@@ -30,7 +30,7 @@ export async function GET() {
     "adsense_client_id", "adsense_client_secret",
     "adsense_refresh_token", "adsense_account",
     "kakao_rest_api_key",
-    "github_pat", "github_user", "velog_token", "devlog_blocked_owners",
+    "github_pat", "github_user", "velog_user", "velog_token", "devlog_blocked_owners",
   ]);
 
   const adKey = resolve(s.searchad_api_key, "NAVER_SEARCHAD_API_KEY");
@@ -45,7 +45,8 @@ export async function GET() {
   const adsenseSecret = resolve(s.adsense_client_secret, "ADSENSE_CLIENT_SECRET");
   const adsenseToken = s.adsense_refresh_token ?? "";
   const kakao = resolve(s.kakao_rest_api_key, "KAKAO_REST_API_KEY");
-  const ghPat = resolve(s.github_pat, "GH_PAT");
+  // devlogCreds 와 같은 순서로 본다. 화면은 "미설정"인데 수집은 되는 어긋남을 막는다
+  const ghPat = resolve(s.github_pat, process.env.GH_PAT ? "GH_PAT" : "GITHUB_TOKEN");
   const velog = resolve(s.velog_token, "VELOG_TOKEN");
 
   // 서비스 계정 JSON 은 통째로 저장되므로, 화면에는 어느 계정인지만 보여준다
@@ -102,6 +103,7 @@ export async function GET() {
       githubFromEnv: ghPat.fromEnv,
       githubPreview: mask(ghPat.value),
       githubUser: s.github_user || process.env.GH_USER || "y10b",
+      velogUser: s.velog_user || process.env.VELOG_USER || "",
       velogConfigured: Boolean(velog.value),
       velogFromEnv: velog.fromEnv,
       blockedOwners: s.devlog_blocked_owners || process.env.DEVLOG_BLOCKED_OWNERS || "bambitcorporation",
@@ -124,6 +126,7 @@ const TEXT_FIELDS: Record<string, string> = {
   kakaoRestApiKey: "kakao_rest_api_key",
   githubPat: "github_pat",
   githubUser: "github_user",
+  velogUser: "velog_user",
   velogToken: "velog_token",
   devlogBlockedOwners: "devlog_blocked_owners",
 };

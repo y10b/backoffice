@@ -456,6 +456,45 @@ export async function insertDevLogs(
   return { inserted, skipped };
 }
 
+/**
+ * 있으면 갱신, 없으면 삽입. 아직 초안에 쓰이지 않은(consumed=false) 줄만 갱신한다 —
+ * 이미 글이 된 커밋 묶음을 바꾸면 글과 재료가 어긋난다.
+ */
+export async function upsertDevLogs(
+  rows: DevLogInput[],
+): Promise<{ inserted: number; updated: number; skipped: number }> {
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const r of rows) {
+    const ins = await supabase().from("dev_logs").insert(r);
+    if (!ins.error) {
+      inserted += 1;
+      continue;
+    }
+    if ((ins.error as { code?: string }).code !== "23505") {
+      throw new Error(`개발 로그 저장 실패: ${ins.error.message}`);
+    }
+    const { data, error } = await supabase()
+      .from("dev_logs")
+      .update({
+        private: r.private,
+        commit_count: r.commit_count,
+        messages: r.messages,
+        topics: r.topics,
+        score: r.score,
+      })
+      .eq("date", r.date)
+      .eq("repo", r.repo)
+      .eq("consumed", false)
+      .select("id");
+    if (error) throw new Error(`개발 로그 갱신 실패: ${error.message}`);
+    if (data?.length) updated += 1;
+    else skipped += 1;
+  }
+  return { inserted, updated, skipped };
+}
+
 export async function listDevLogs(limit = 60): Promise<DevLog[]> {
   const { data, error } = await supabase()
     .from("dev_logs")
@@ -547,7 +586,13 @@ export async function getVelogPost(id: number): Promise<VelogPost | null> {
   return (data as VelogPost) ?? null;
 }
 
-/** 역동기화의 매칭 키. url 이 먼저고, 없으면 제목으로 잇는다 */
+/** 제목 매칭용 정규화. 공백·문장부호·대소문자 차이를 무시한다 (원본 sync-velog.ts 의 norm()) */
+const normTitle = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
+/**
+ * 역동기화의 매칭 키. url 이 먼저고, 없으면 제목으로 잇는다.
+ * 제목은 정확히 같아야만 매칭하면 공백 하나 차이로도 중복 행이 생기므로 정규화해서 비교한다.
+ */
 export async function findVelogPost(url: string, title: string): Promise<VelogPost | null> {
   const byUrl = await supabase()
     .from("velog_posts")
@@ -556,15 +601,35 @@ export async function findVelogPost(url: string, title: string): Promise<VelogPo
     .maybeSingle();
   if (byUrl.error) throw new Error(`velog 글 조회 실패: ${byUrl.error.message}`);
   if (byUrl.data) return byUrl.data as VelogPost;
-  const byTitle = await supabase()
+
+  const target = normTitle(title);
+  if (!target) return null;
+  /*
+   * 제목으로는 아직 안 나간 글(draft · approved · publishing)만 잇는다. 보류한 글이
+   * 되살아나면 안 된다. 같은 제목이 둘 이상이면 어느 쪽인지 모르므로 잇지 않는다 —
+   * 그러면 새 행이 생기고 사람이 정리한다.
+   */
+  const { data, error } = await supabase()
     .from("velog_posts")
     .select("*")
-    .eq("title", title)
     .eq("url", "")
-    .limit(1)
+    .in("status", ["draft", "approved", "publishing"]);
+  if (error) throw new Error(`velog 글 조회 실패: ${error.message}`);
+  const hits = ((data ?? []) as VelogPost[]).filter((r) => normTitle(r.title) === target);
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** approved → publishing 조건부 선점. 다른 실행이 먼저 집었으면 null */
+export async function claimVelogPost(id: number): Promise<VelogPost | null> {
+  const { data, error } = await supabase()
+    .from("velog_posts")
+    .update({ status: "publishing", updated_at: nowIso() })
+    .eq("id", id)
+    .eq("status", "approved")
+    .select()
     .maybeSingle();
-  if (byTitle.error) throw new Error(`velog 글 조회 실패: ${byTitle.error.message}`);
-  return (byTitle.data as VelogPost) ?? null;
+  if (error) throw new Error(`velog 글 선점 실패: ${error.message}`);
+  return (data as VelogPost) ?? null;
 }
 
 export async function updateVelogPost(

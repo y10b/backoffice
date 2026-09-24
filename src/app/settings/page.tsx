@@ -31,6 +31,7 @@ type SettingsState = {
     githubFromEnv: boolean;
     githubPreview: string;
     githubUser: string;
+    velogUser: string;
     velogConfigured: boolean;
     velogFromEnv: boolean;
     blockedOwners: string;
@@ -93,6 +94,7 @@ export default function SettingsPage() {
   const [ghPat, setGhPat] = useState("");
   const [ghUser, setGhUser] = useState("");
   const [velogToken, setVelogToken] = useState("");
+  const [velogUser, setVelogUser] = useState("");
   const [blocked, setBlocked] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -107,6 +109,7 @@ export default function SettingsPage() {
         setAdCustomer((prev) => prev || s.searchAd.customerId);
         if (s.devlog) {
           setGhUser((prev) => prev || s.devlog.githubUser);
+          setVelogUser((prev) => prev || s.devlog.velogUser);
           setBlocked((prev) => prev || s.devlog.blockedOwners);
         }
       });
@@ -187,6 +190,10 @@ export default function SettingsPage() {
               <td>
                 키워드 탐색 → 글 작성 → 네이버·티스토리 복사 <strong>(블로그는 이것만으로 완결)</strong>
               </td>
+            </tr>
+            <tr>
+              <td>+ 카카오 REST API</td>
+              <td>방문 후기 — 사진에서 출발해 상호·주소를 카카오 로컬로 보강</td>
             </tr>
             <tr>
               <td>+ GitHub 토큰 · velog 쿠키</td>
@@ -635,6 +642,19 @@ export default function SettingsPage() {
               onChange={(e) => setGhUser(e.target.value)}
             />
           </div>
+          <div className="field">
+            <label>
+              velog 사용자
+              <Help text="velog 주소의 @ 뒤 핸들입니다. GitHub 과 같으면 비워두세요." />
+            </label>
+            <input
+              className="mono"
+              style={{ width: 130 }}
+              placeholder={ghUser || "y10b"}
+              value={velogUser}
+              onChange={(e) => setVelogUser(e.target.value)}
+            />
+          </div>
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
             <label>velog access_token</label>
             <input
@@ -666,6 +686,7 @@ export default function SettingsPage() {
               save({
                 githubPat: ghPat,
                 githubUser: ghUser,
+                velogUser,
                 velogToken,
                 devlogBlockedOwners: blocked,
               }).then(() => {
@@ -673,7 +694,7 @@ export default function SettingsPage() {
                 setVelogToken("");
               })
             }
-            disabled={!ghPat.trim() && !ghUser.trim() && !velogToken.trim() && !blocked.trim()}
+            disabled={!ghPat.trim() && !ghUser.trim() && !velogUser.trim() && !velogToken.trim() && !blocked.trim()}
           >
             저장
           </button>

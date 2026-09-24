@@ -11,3 +11,7 @@ drop table if exists render_jobs;
 delete from settings
  where key in ('youtube_api_key', 'anthropic_api_key', 'claude_model', 'veo_model',
                'fish_api_key', 'fish_model');
+
+-- 렌더 결과를 담던 공개 버킷. 남겨두면 공개 URL 이 그대로 살아 있다
+delete from storage.objects where bucket_id = 'shorts';
+delete from storage.buckets where id = 'shorts';
