@@ -12,9 +12,11 @@ export const dynamic = "force-dynamic";
  */
 
 export async function GET(req: Request) {
+  // `?id=` 가 없으면 get() 이 null 이고 Number(null) 은 0 이라 "조회" 분기로 빠졌다.
+  // 그래서 목록 요청이 늘 { post: null } 을 돌려줬다. 양수일 때만 단건 조회다
   const id = Number(new URL(req.url).searchParams.get("id"));
   try {
-    if (Number.isFinite(id)) {
+    if (Number.isFinite(id) && id > 0) {
       return NextResponse.json({ ok: true, post: await getVisitPost(id) });
     }
     return NextResponse.json({ ok: true, posts: await listVisitPosts() });
