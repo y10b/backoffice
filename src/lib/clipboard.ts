@@ -11,6 +11,14 @@ export async function copyText(text: string): Promise<void> {
  * ClipboardItem 미지원 브라우저에서는 평문 HTML 복사로 떨어진다.
  */
 export async function copyRichHtml(html: string): Promise<"rich" | "plain"> {
+  /*
+   * 터치 기기(아이폰)는 선택 복사를 먼저 쓴다.
+   *
+   * 사파리의 ClipboardItem 은 text/html 만 넣는데, 네이버 앱은 그 형식을 못 읽고 평문만
+   * 가져간다(PC 는 됨). 화면에 실제 선택을 만들고 execCommand("copy") 로 복사하면 iOS 가
+   * 서식 있는 텍스트(RTF 포함)로 넣어 줘서 앱에도 굵게·크기가 살아난다.
+   */
+  if (isTouch() && copyBySelection(html)) return "rich";
   if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
     try {
       await navigator.clipboard.write([
@@ -56,6 +64,37 @@ export function toNaverHtml(html: string, title?: string): string {
 /** 네이버용으로 변환해 서식 복사한다 */
 export async function copyForNaver(html: string, title?: string): Promise<"rich" | "plain"> {
   return copyRichHtml(toNaverHtml(html, title));
+}
+
+function isTouch(): boolean {
+  return typeof window !== "undefined" && ("ontouchend" in window || navigator.maxTouchPoints > 0);
+}
+
+/**
+ * 보이지 않는 편집 영역에 HTML 을 넣고 선택한 뒤 복사 명령을 내린다.
+ * 사용자 제스처 안에서만 되므로 버튼 onClick 에서 동기적으로 불러야 한다.
+ */
+export function copyBySelection(html: string): boolean {
+  try {
+    const host = document.createElement("div");
+    host.contentEditable = "true";
+    host.setAttribute("aria-hidden", "true");
+    // 화면 밖으로 빼되 display:none 은 안 된다 — 선택이 안 잡힌다
+    host.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;overflow:hidden;";
+    host.innerHTML = html;
+    document.body.appendChild(host);
+    const range = document.createRange();
+    range.selectNodeContents(host);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    const ok = document.execCommand("copy");
+    sel?.removeAllRanges();
+    host.remove();
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 function htmlToPlain(html: string): string {

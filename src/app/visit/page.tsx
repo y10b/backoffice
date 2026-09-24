@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Help from "@/components/Help";
-import { copyForNaver, copyText } from "@/lib/clipboard";
+import { copyForNaver, copyText, toNaverHtml } from "@/lib/clipboard";
 
 /**
  * 네이버 방문 후기 — 사진에서 글로.
@@ -113,6 +113,8 @@ function VisitInner() {
 
   /* 4단계 — 결과 */
   const [draft, setDraft] = useState<VisitPost | null>(null);
+  /* 아이폰에서 버튼 복사가 평문으로만 붙을 때 쓰는 수동 선택 영역 */
+  const [manualCopy, setManualCopy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -536,6 +538,42 @@ function VisitInner() {
             >
               제목 + 본문
             </button>
+            <button className="ghost" onClick={() => setManualCopy((v) => !v)}>
+              {manualCopy ? "선택 복사 닫기" : "아이폰에서 안 붙으면"}
+            </button>
+          </div>
+
+          {manualCopy && (
+            <div className="field" style={{ marginTop: 10 }}>
+              <label>
+                직접 선택해서 복사
+                <Help text="버튼 복사가 평문으로만 붙는 기기용입니다. 전체 선택을 누르면 아래 글이 선택되니, 뜨는 메뉴에서 복사를 누르세요. iOS 가 서식 있는 텍스트로 넣어 줍니다." />
+              </label>
+              <div className="row" style={{ marginBottom: 6 }}>
+                <button
+                  className="small"
+                  onClick={() => {
+                    const el = document.getElementById("naver-manual-copy");
+                    if (!el) return;
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    const sel = window.getSelection();
+                    sel?.removeAllRanges();
+                    sel?.addRange(range);
+                  }}
+                >
+                  전체 선택
+                </button>
+              </div>
+              <div
+                id="naver-manual-copy"
+                className="preview"
+                style={{ maxHeight: 360 }}
+                dangerouslySetInnerHTML={{ __html: toNaverHtml(draft.body_html ?? "", draft.title || draft.titles?.[0] || "") }}
+              />
+            </div>
+          )}
+          <div className="row" style={{ marginTop: 8 }}>
             <button
               onClick={() =>
                 copyText((draft.tags ?? []).map((t) => `#${t}`).join(" ")).then(() =>
