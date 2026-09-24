@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import Nav from "@/components/Nav";
+import Sidebar from "@/components/Sidebar";
+import TopBar from "@/components/TopBar";
 
 export const metadata: Metadata = {
   title: "블로그 백오피스",
@@ -16,20 +17,37 @@ export const metadata: Metadata = {
     nocache: true,
     googleBot: { index: false, follow: false, noimageindex: true },
   },
+  appleWebApp: { capable: true, title: "백오피스", statusBarStyle: "default" },
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+/*
+ * viewport-fit=cover 로 노치·홈 인디케이터 영역까지 그리고, 안쪽 여백은
+ * env(safe-area-inset-*) 로 CSS 가 직접 비운다.
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f2f2f7" },
+    { media: "(prefers-color-scheme: dark)", color: "#000000" },
+  ],
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="ko">
       <body>
         <div className="shell">
-          <aside className="sidebar">
-            <h1>
-              블로그 <span>백오피스</span>
-            </h1>
-            <Nav />
-          </aside>
-          <main className="main">{children}</main>
+          <Sidebar />
+          <main className="main">
+            <TopBar />
+            <div className="main-inner">{children}</div>
+          </main>
         </div>
       </body>
     </html>
