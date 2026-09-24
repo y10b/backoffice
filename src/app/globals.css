@@ -63,6 +63,10 @@
   --chart-views: #007aff;
   --chart-earnings: #34c759;
 
+  /* 세그먼트 컨트롤에서 고른 칸 — 라이트는 흰 판, 다크는 한 단계 밝은 회색 (iOS 와 같다) */
+  --segment-on: #ffffff;
+  --segment-shadow: 0 3px 8px rgba(0, 0, 0, 0.12), 0 3px 1px rgba(0, 0, 0, 0.04);
+
   --sidebar-w: 300px;
   --topbar-h: 44px;
 }
@@ -102,6 +106,8 @@
       0 10px 30px rgba(0, 0, 0, 0.6), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
     --chart-views: #0a84ff;
     --chart-earnings: #30d158;
+    --segment-on: #636366;
+    --segment-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
   }
 }
 
@@ -905,6 +911,22 @@ td.strong {
   min-width: 900px;
 }
 
+/*
+ * 카드 안의 표는 카드 좌우 여백(16px)까지 끌어써서 스크롤이 카드 가장자리에서
+ * 잘리게 한다. 카드에 overflow:hidden 을 걸면 도움말 툴팁이 잘려서 이 방법을 쓴다.
+ */
+.card .table-wrap {
+  margin-left: -16px;
+  margin-right: -16px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* 열이 적은 표. 폰에서 900px 까지 밀 필요는 없고, 열이 짓눌리지 않을 만큼만 */
+.table-wrap.compact table {
+  min-width: 640px;
+}
+
 .kw-cell {
   font-weight: 500;
 }
@@ -1511,4 +1533,164 @@ button .help {
   button:focus-visible {
     box-shadow: 0 0 0 3px var(--accent-dim);
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * 세그먼트 컨트롤 — iOS UISegmentedControl
+ *
+ * <div class="segment"><button class="on">…</button><button>…</button></div>
+ * ------------------------------------------------------------------ */
+
+.segment {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 9px;
+  background: var(--fill);
+  vertical-align: middle;
+}
+
+.segment button,
+.segment button:hover:not(:disabled) {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 14px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.segment button.on,
+.segment button.on:hover:not(:disabled) {
+  background: var(--segment-on);
+  box-shadow: var(--segment-shadow);
+}
+
+.segment button:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* 폰에서 한 줄을 다 쓰는 세그먼트 (채널 전환처럼 화면의 주 스위치일 때) */
+@media (max-width: 767px) {
+  .segment.full {
+    display: flex;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 두 줄 행 — 카드 안 .list-item 에 붙인다. 표 대신 쓴다
+ *
+ * 왼쪽(.entry-main) 제목 + 보조 한 줄, 오른쪽(.entry-side) 버튼들.
+ * 좁으면 버튼이 다음 줄 오른쪽으로 내려가고, 넓으면 한 줄에 선다.
+ * ------------------------------------------------------------------ */
+
+.entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.entry-main {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.entry-title {
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.4;
+  /* 한글이 글자 단위로 쪼개지지 않게 어절 단위로 접는다. 아주 긴 영문·URL 은 그래도 접는다 */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+a.entry-title {
+  color: var(--text);
+}
+
+a.entry-title:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.entry-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.entry-num {
+  flex: 0 0 auto;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-sub {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-dim);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.entry-side {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* ------------------------------------------------------------------ *
+ * 폭에 따라 하나만 보이기 — 상세 영역(.main-inner) 폭 기준
+ *
+ * 컨테이너 쿼리를 모르는 브라우저는 좁은 쪽(리스트)만 보인다. 깨지지 않는 쪽이다.
+ * ------------------------------------------------------------------ */
+
+.wide-only {
+  display: none;
+}
+
+@container detail (min-width: 700px) {
+  .wide-only {
+    display: block;
+  }
+
+  .narrow-only {
+    display: none;
+  }
+}
+
+/* 모은 키워드 카드 */
+.pool-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* 글자 크기는 건드리지 않는다 — 폰에서 16px 미만이면 사파리가 포커스 때 확대한다 */
+.pool-controls select {
+  min-height: 34px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.pool-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
 }

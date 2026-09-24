@@ -4,7 +4,30 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Nav, { Chevron, ITEMS, NavIcon } from "@/components/Nav";
 
-type Counts = { velog: number; threads: number; visit: number; posts: number };
+/** 각 칸은 셀 수 없으면 null. posts 는 예전 API 가 숫자 하나로 주던 것도 받는다 */
+type Counts = {
+  velog: number | null;
+  threads: number | null;
+  visit: number | null;
+  posts:
+    | { naver: number | null; tistory: number | null }
+    | number
+    | null;
+};
+
+type TodoKey = "velog" | "threads" | "visit" | "naver" | "tistory" | "pool";
+
+/** 채널별 초안 수. 구버전(숫자 하나)이면 티스토리 줄에만 쓰고 네이버는 없는 것으로 본다 */
+function countOf(c: Counts, key: TodoKey): number | null | undefined {
+  if (key === "pool") return null;
+  if (key === "naver" || key === "tistory") {
+    const p = c.posts;
+    if (p === null || p === undefined) return null;
+    if (typeof p === "number") return key === "tistory" ? p : undefined;
+    return p[key] ?? null;
+  }
+  return c[key] ?? null;
+}
 
 type HomeState =
   | { phase: "loading" }
@@ -12,11 +35,14 @@ type HomeState =
   | { phase: "error"; configured: boolean; error: string };
 
 /** 할 일 한 줄 = 어느 화면으로 가는지 + 무엇을 세었는지 */
-const TODOS: { key: keyof Counts; href: string; label: string }[] = [
+const TODOS: { key: TodoKey; href: string; label: string }[] = [
   { key: "velog", href: "/devlog", label: "검토·발행 대기 velog 글" },
   { key: "threads", href: "/threads", label: "손질할 쓰레드 후보" },
   { key: "visit", href: "/visit", label: "진행 중인 방문 후기" },
-  { key: "posts", href: "/posts", label: "아직 안 올린 블로그 초안" },
+  { key: "naver", href: "/posts?channel=naver", label: "네이버 초안 (안 올림)" },
+  { key: "tistory", href: "/posts?channel=tistory", label: "티스토리 초안 (안 올림)" },
+  // 세는 게 아니라 들어가 보는 곳이라 배지를 달지 않는다
+  { key: "pool", href: "/keywords", label: "모은 키워드" },
 ];
 
 export default function HomePage() {
@@ -48,7 +74,7 @@ export default function HomePage() {
 
   const total =
     state.phase === "ok"
-      ? Object.values(state.counts).reduce((a, b) => a + b, 0)
+      ? TODOS.reduce((a, t) => a + (countOf(state.counts, t.key) ?? 0), 0)
       : 0;
 
   return (
@@ -64,15 +90,18 @@ export default function HomePage() {
         <h2 className="ios-section-title">오늘 할 일</h2>
         <ul className="ios-list">
           {TODOS.map((t) => {
-            const item = ITEMS.find((i) => i.href === t.href);
-            const n = state.phase === "ok" ? state.counts[t.key] : 0;
+            const path = t.href.split("?")[0];
+            const item = ITEMS.find((i) => i.href === path);
+            const n = state.phase === "ok" ? countOf(state.counts, t.key) : 0;
+            // 구버전 API 는 네이버 칸을 주지 않는다. 0 이라고 거짓말하지 않고 줄을 숨긴다
+            if (n === undefined) return null;
             return (
               <li key={t.key}>
                 <Link href={t.href} className="ios-row">
                   {item && <NavIcon item={item} />}
                   <span className="ios-label">{t.label}</span>
-                  {state.phase === "loading" && <span className="spinner" />}
-                  {n > 0 && <span className="ios-count">{n}</span>}
+                  {state.phase === "loading" && t.key !== "pool" && <span className="spinner" />}
+                  {n !== null && n > 0 && <span className="ios-count">{n}</span>}
                   <Chevron />
                 </Link>
               </li>

@@ -368,7 +368,8 @@ export default function DevlogPage() {
         </h2>
         {!loading && !logs.length && <div className="empty">아직 수집된 커밋이 없습니다.</div>}
         {logs.length > 0 && (
-          <div className="table-wrap">
+          // 열이 여섯 개뿐이라 900px 까지 밀 필요는 없다. 폰에서는 카드 안에서 가로로 민다
+          <div className="table-wrap compact">
             <table>
               <thead>
                 <tr>
@@ -395,7 +396,7 @@ export default function DevlogPage() {
                     tabIndex={0}
                     style={{ cursor: "pointer" }}
                   >
-                    <td className="dim">{l.date}</td>
+                    <td className="dim" style={{ whiteSpace: "nowrap" }}>{l.date}</td>
                     <td>
                       {l.repo.split("/")[1]}
                       {l.private && <span className="badge" style={{ marginLeft: 5 }}>비공개</span>}

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings, setSetting } from "@/lib/db";
 import { splitKeys } from "@/lib/gemini";
+import { DEFAULT_SEEDS } from "@/lib/seeds";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,7 @@ export async function GET() {
     "adsense_refresh_token", "adsense_account",
     "kakao_rest_api_key",
     "github_pat", "github_user", "velog_user", "velog_token", "velog_refresh_token", "devlog_blocked_owners",
+    "seeds_naver", "seeds_tistory",
   ]);
 
   const adKey = resolve(s.searchad_api_key, "NAVER_SEARCHAD_API_KEY");
@@ -98,6 +100,15 @@ export async function GET() {
       fromEnv: kakao.fromEnv,
       apiKeyPreview: mask(kakao.value),
     },
+    // 저장값이 비면 코드 기본값(defaults)으로 돈다. 화면은 빈 칸에 defaults 를 흐리게 보여주면 된다
+    seeds: {
+      naver: s.seeds_naver ?? "",
+      tistory: s.seeds_tistory ?? "",
+      defaults: {
+        naver: DEFAULT_SEEDS.naver.join(", "),
+        tistory: DEFAULT_SEEDS.tistory.join(", "),
+      },
+    },
     devlog: {
       githubConfigured: Boolean(ghPat.value),
       githubFromEnv: ghPat.fromEnv,
@@ -140,6 +151,16 @@ export async function POST(req: Request) {
   for (const [field, key] of Object.entries(TEXT_FIELDS)) {
     const v = body[field];
     if (typeof v === "string" && v.trim()) await setSetting(key, v.trim());
+  }
+
+  /*
+   * 시드는 빈 값도 저장한다. 다른 필드는 빈 값이면 "안 건드림"이지만, 시드는 비우는 것이
+   * "기본값으로 돌아가기"라는 뜻이다 (seedPool 이 빈 설정을 기본값으로 읽는다).
+   */
+  const SEED_FIELDS = { seedsNaver: "seeds_naver", seedsTistory: "seeds_tistory" } as const;
+  for (const [field, key] of Object.entries(SEED_FIELDS)) {
+    const v = body[field];
+    if (typeof v === "string") await setSetting(key, v.trim());
   }
 
   if (

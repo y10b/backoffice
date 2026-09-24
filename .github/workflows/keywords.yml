@@ -1,0 +1,74 @@
+name: 키워드 모으기
+
+# 채널(naver · tistory)마다 시드 풀 전체로 연관 키워드를 조회해 keyword_pool 에 쌓는다.
+#
+# 티스토리 유입이 0 이었다 — 시드가 제각각이었고 검색량 · 수익 순으로 고르니 레드오션만
+# 나왔다. 그래서 2주 동안은 글을 쓰지 않고 키워드만 매일 모아, 쌓인 것을 보고 주제를 정한다.
+#
+# 개발 로그 워크플로와 같은 방식이다 — 배포본 API 를 부르지 않고 러너 안에서 스크립트를
+# 직접 돌린다. 배포·CRON_SECRET 과 무관하게 이 파일이 있는 브랜치에서 바로 돈다.
+# 시드는 백오피스 설정 표(seeds_naver · seeds_tistory)에서 읽고, 비어 있으면 코드 기본값이다.
+#
+# 크론은 UTC 다. 21:00 UTC = 06:00 KST. GitHub 크론은 수십 분 늦게 도는 일이 흔하다.
+#
+# 이 레포는 공개라 실행 로그도 공개다. 스크립트는 개수만 찍는다 — 키워드는 화면에서 본다.
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "어느 채널"
+        required: true
+        default: "all"
+        type: choice
+        options: [all, naver, tistory]
+
+permissions: {}
+
+# 수동 실행과 크론이 겹치면 seen_count 계산이 서로 덮는다. 한 번에 하나만 돈다
+concurrency:
+  group: keywords
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # src/lib 의 .ts 를 그대로 읽어야 해서 타입 스트리핑이 되는 버전이 필요하다
+          node-version: "24"
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci --omit=dev
+
+      - name: 수집
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # 설정 표에 키가 있으면 그게 먼저고, 이건 폴백이다
+          NAVER_SEARCHAD_API_KEY: ${{ secrets.NAVER_SEARCHAD_API_KEY }}
+          NAVER_SEARCHAD_SECRET_KEY: ${{ secrets.NAVER_SEARCHAD_SECRET_KEY }}
+          NAVER_SEARCHAD_CUSTOMER_ID: ${{ secrets.NAVER_SEARCHAD_CUSTOMER_ID }}
+          CHANNEL: ${{ inputs.channel || 'all' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "::error::SUPABASE_URL 과 SUPABASE_SERVICE_ROLE_KEY 시크릿을 등록하세요."
+            exit 1
+          fi
+          # 한 채널이 실패해도 요약은 남긴다. 종료 코드는 스크립트 것을 그대로 쓴다
+          status=0
+          node --import ./scripts/ts-register.mjs scripts/keywords.mjs "$CHANNEL" > summary.md 2>&1 || status=$?
+          cat summary.md
+          {
+            echo "## 키워드 모으기"
+            echo
+            cat summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status

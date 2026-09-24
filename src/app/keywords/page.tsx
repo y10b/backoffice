@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { COMPETITION_LABEL, competitionLevel } from "@/lib/competition";
 import type { SerpStats } from "@/lib/serp";
@@ -60,6 +60,267 @@ function Sparkline({ data }: { data: { ratio: number }[] }) {
     <svg width={w} height={h} className="spark" aria-hidden>
       <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" />
     </svg>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 모은 키워드 — 매일 크론이 쌓는 keyword_pool 을 채널별로 본다
+ * ------------------------------------------------------------------ */
+
+type PoolChannel = "naver" | "tistory";
+
+/** numeric 컬럼은 문자열로 올 수도 있어 숫자로 맞춰 받는다 */
+type PoolRow = {
+  id: number;
+  channel: PoolChannel;
+  seed: string;
+  keyword: string;
+  searches: number | null;
+  mobile_ratio: number | string | null;
+  bid: number | null;
+  ad_absorption: number | string | null;
+  revenue_score: number | string | null;
+  competition: string;
+  word_count: number;
+  first_seen: string;
+  last_seen: string;
+  seen_count: number;
+};
+
+type PoolRunResult = {
+  channel: PoolChannel;
+  seeds: number | string[];
+  fetched: number;
+  inserted: number;
+  updated: number;
+  /** 시드별 실패. 일부 시드가 실패해도 나머지는 쌓인다 */
+  errors?: unknown[];
+};
+
+const POOL_CHANNELS: { id: PoolChannel; label: string }[] = [
+  { id: "naver", label: "네이버" },
+  { id: "tistory", label: "티스토리" },
+];
+
+const POOL_DAYS = [7, 14, 30];
+
+const POOL_SORTS = [
+  { id: "searches", label: "검색량" },
+  { id: "absorption", label: "광고 흡수율 낮은 순" },
+  { id: "bid", label: "단가" },
+  { id: "seen", label: "자주 나온 순" },
+  { id: "long", label: "긴 키워드 순" },
+];
+
+function numOrNull(v: number | string | null | undefined): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function pctText(v: number | string | null): string {
+  const n = numOrNull(v);
+  return n === null ? "—" : `${Math.round(n)}%`;
+}
+
+function wonText(v: number | null): string {
+  return v == null ? "—" : `${Number(v).toLocaleString()}원`;
+}
+
+function PoolCard() {
+  const [channel, setChannel] = useState<PoolChannel>("tistory");
+  const [days, setDays] = useState(14);
+  const [sort, setSort] = useState("searches");
+  const [rows, setRows] = useState<PoolRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [running, setRunning] = useState(false);
+  const [runNote, setRunNote] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const q = new URLSearchParams({ channel, days: String(days), sort, limit: "300" });
+      const d = await (await fetch(`/api/pool?${q.toString()}`)).json();
+      if (d.ok === false) throw new Error(d.error ?? "불러오지 못했습니다.");
+      const list = (d.keywords ?? []) as PoolRow[];
+      setRows(list);
+      setTotal(typeof d.total === "number" ? d.total : list.length);
+    } catch (e) {
+      setRows([]);
+      setTotal(0);
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [channel, days, sort]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function runNow() {
+    setRunning(true);
+    setError("");
+    setRunNote("");
+    try {
+      const res = await fetch("/api/pool/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channel }),
+      });
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error ?? "수집에 실패했습니다.");
+      const r = d.result as PoolRunResult;
+      const seedCount = Array.isArray(r.seeds) ? r.seeds.length : (r.seeds ?? 0);
+      const failed = r.errors?.length ?? 0;
+      setRunNote(
+        `${r.channel === "naver" ? "네이버" : "티스토리"} · 시드 ${seedCount}개에서 ${(r.fetched ?? 0).toLocaleString()}개 조회 — 새로 ${(r.inserted ?? 0).toLocaleString()} · 갱신 ${(r.updated ?? 0).toLocaleString()}${failed ? ` · 실패 ${failed}건` : ""}`,
+      );
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const seedCount = useMemo(() => new Set(rows.map((r) => r.seed)).size, [rows]);
+  const lastSeen = useMemo(
+    () => rows.reduce((max, r) => (r.last_seen > max ? r.last_seen : max), ""),
+    [rows],
+  );
+
+  return (
+    <div className="card">
+      <h2>
+        모은 키워드
+        <Help text="매일 아침 6시에 채널별 시드로 연관 키워드를 모아 쌓습니다. 다시 나온 키워드는 '등장' 횟수가 늘어납니다. 2주쯤 쌓이면 주제를 정합니다." />
+      </h2>
+
+      <div className="pool-controls">
+        <div className="segment" role="tablist" aria-label="채널">
+          {POOL_CHANNELS.map((c) => (
+            <button
+              key={c.id}
+              role="tab"
+              aria-selected={channel === c.id}
+              className={channel === c.id ? "on" : ""}
+              onClick={() => setChannel(c.id)}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+        <div className="segment" role="tablist" aria-label="기간">
+          {POOL_DAYS.map((d) => (
+            <button
+              key={d}
+              role="tab"
+              aria-selected={days === d}
+              className={days === d ? "on" : ""}
+              onClick={() => setDays(d)}
+            >
+              {d}일
+            </button>
+          ))}
+        </div>
+        <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="정렬">
+          {POOL_SORTS.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="pool-summary">
+        <span className="dim">
+          {loading ? (
+            <>
+              <span className="spinner" />
+              불러오는 중…
+            </>
+          ) : (
+            <>
+              키워드 {total.toLocaleString()}개 · 시드 {seedCount}개
+              {lastSeen ? ` · 마지막 수집 ${lastSeen}` : ""}
+            </>
+          )}
+        </span>
+        <button className="small" onClick={runNow} disabled={running}>
+          {running && <span className="spinner" />}
+          {running ? "모으는 중… (최대 5분)" : "지금 모으기"}
+        </button>
+      </div>
+
+      {error && <div className="alert error">{error}</div>}
+      {runNote && <div className="alert ok">{runNote}</div>}
+
+      {!loading && rows.length === 0 && !error && (
+        <div className="empty">아직 모은 키워드가 없습니다. 내일 아침부터 쌓입니다.</div>
+      )}
+
+      {rows.length > 0 && (
+        <>
+          {/* 좁은 화면: 두 줄 행 */}
+          <div className="narrow-only">
+            {rows.map((r) => (
+              <div key={r.id} className="list-item entry">
+                <div className="entry-main">
+                  <div className="entry-line">
+                    <strong className="entry-title">{r.keyword}</strong>
+                    <span className="entry-num">{r.searches == null ? "—" : r.searches.toLocaleString()}</span>
+                  </div>
+                  <div className="entry-sub">
+                    단가 {wonText(r.bid)} · 모바일 {pctText(r.mobile_ratio)} · 흡수 {pctText(r.ad_absorption)} · {r.seen_count}회 등장 · {r.seed}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* 넓은 화면: 표 */}
+          <div className="wide-only table-wrap compact">
+            <table>
+              <thead>
+                <tr>
+                  <th>키워드</th>
+                  <th className="num">검색</th>
+                  <th className="num">단가</th>
+                  <th className="num">모바일</th>
+                  <th className="num">흡수</th>
+                  <th className="num">등장</th>
+                  <th>시드</th>
+                  <th>처음 본 날</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id}>
+                    <td className="kw-cell">{r.keyword}</td>
+                    <td className="num">{r.searches == null ? "—" : r.searches.toLocaleString()}</td>
+                    <td className="num">{wonText(r.bid)}</td>
+                    <td className="num">{pctText(r.mobile_ratio)}</td>
+                    <td className="num">{pctText(r.ad_absorption)}</td>
+                    <td className="num">{r.seen_count}</td>
+                    <td className="dim">{r.seed}</td>
+                    <td className="dim" style={{ whiteSpace: "nowrap" }}>{r.first_seen}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {total > rows.length && (
+            <p className="hint">상위 {rows.length.toLocaleString()}개만 보여줍니다.</p>
+          )}
+        </>
+      )}
+
+      <p className="hint">매일 아침 6시에 자동으로 모입니다. 2주쯤 쌓이면 주제를 정합니다.</p>
+    </div>
   );
 }
 
@@ -306,6 +567,8 @@ export default function KeywordsPage() {
         넘어가고, 옆의 <strong>⚡</strong> 는 서브 키워드 제안부터 본문까지 한 번에
         만듭니다.
       </p>
+
+      <PoolCard />
 
       {settings && !settings.searchAd.configured && (
         <div className="alert warn">

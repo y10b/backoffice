@@ -51,6 +51,12 @@ type SettingsState = {
     connected: boolean;
     account: string;
   };
+  /** 채널별 시드. 백엔드가 아직 안 내려주면 없다 */
+  seeds?: {
+    naver: string;
+    tistory: string;
+    defaults: { naver: string; tistory: string };
+  };
 };
 
 /** 애드센스 OAuth 클라이언트에 이 URI 를 그대로 등록해야 한다 */
@@ -98,6 +104,8 @@ export default function SettingsPage() {
   const [velogUser, setVelogUser] = useState("");
   const [velogRefresh, setVelogRefresh] = useState("");
   const [blocked, setBlocked] = useState("");
+  const [seedsNaver, setSeedsNaver] = useState("");
+  const [seedsTistory, setSeedsTistory] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [tests, setTests] = useState<TestState>({});
@@ -113,6 +121,13 @@ export default function SettingsPage() {
           setGhUser((prev) => prev || s.devlog.githubUser);
           setVelogUser((prev) => prev || s.devlog.velogUser);
           setBlocked((prev) => prev || s.devlog.blockedOwners);
+        }
+        // 저장한 값을 보여준다. 빈 값이면 placeholder 에 기본값이 보인다.
+        // 다른 카드를 저장해 load 가 다시 돌 때 고치던 내용을 덮지 않게 비어 있을 때만 채운다
+        if (s.seeds) {
+          const seeds = s.seeds;
+          setSeedsNaver((prev) => prev || seeds.naver || "");
+          setSeedsTistory((prev) => prev || seeds.tistory || "");
         }
       });
   }, []);
@@ -559,6 +574,56 @@ export default function SettingsPage() {
             }
           >
             저장
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          시드 키워드 — 채널별
+          <Help text="키워드 수집과 매일 초안이 이 시드로 돕니다. 쉼표나 줄바꿈으로 구분.&#10;비워 두고 저장하면 기본값을 씁니다." />
+        </h2>
+        <div className="row" style={{ alignItems: "stretch" }}>
+          <div className="field" style={{ flex: 1, minWidth: 240 }}>
+            <label>네이버</label>
+            <textarea
+              rows={4}
+              placeholder={state?.seeds?.defaults.naver ?? ""}
+              value={seedsNaver}
+              onChange={(e) => setSeedsNaver(e.target.value)}
+            />
+          </div>
+          <div className="field" style={{ flex: 1, minWidth: 240 }}>
+            <label>티스토리</label>
+            <textarea
+              rows={4}
+              placeholder={state?.seeds?.defaults.tistory ?? ""}
+              value={seedsTistory}
+              onChange={(e) => setSeedsTistory(e.target.value)}
+            />
+          </div>
+        </div>
+        <p className="hint">
+          키워드 수집과 매일 초안이 이 시드로 돕니다. 쉼표나 줄바꿈으로 구분. 비어 있으면
+          흐린 글씨의 기본값을 씁니다.
+        </p>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button
+            className="primary"
+            onClick={() => save({ seedsNaver, seedsTistory })}
+          >
+            저장
+          </button>
+          <button
+            className="ghost"
+            onClick={() => {
+              if (!confirm("두 채널 시드를 기본값으로 되돌릴까요?")) return;
+              setSeedsNaver("");
+              setSeedsTistory("");
+              save({ seedsNaver: "", seedsTistory: "" });
+            }}
+          >
+            기본값으로
           </button>
         </div>
       </div>

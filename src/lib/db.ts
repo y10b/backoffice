@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Channel } from "./seeds";
 
 /**
  * 저장소. 원래는 로컬 파일 SQLite(`node:sqlite`)였는데 Supabase Postgres 로 옮겼다.
@@ -94,6 +95,8 @@ export async function getSettings(keys: string[]): Promise<Record<string, string
  * ------------------------------------------------------------------ */
 
 export type DraftInput = {
+  /** 어느 블로그용 글인지. 목록·크론이 채널별로 나뉜다 */
+  channel: Channel;
   mainKeyword: string;
   subKeyword: string;
   draft: {
@@ -119,6 +122,7 @@ export async function insertDraft(input: DraftInput): Promise<number> {
   const { data, error } = await supabase()
     .from("posts")
     .insert({
+      channel: input.channel,
       main_keyword: input.mainKeyword,
       sub_keyword: input.subKeyword,
       title: draft.title,
@@ -139,13 +143,15 @@ export async function insertDraft(input: DraftInput): Promise<number> {
   return Number(data.id);
 }
 
-/** 글 목록. 본문은 빼서 목록 응답이 무거워지지 않게 한다 */
-export async function listPosts(limit = 200) {
-  const { data, error } = await supabase()
+/** 글 목록. 본문은 빼서 목록 응답이 무거워지지 않게 한다. channel 을 주면 그 채널만 */
+export async function listPosts(limit = 200, channel?: Channel) {
+  let q = supabase()
     .from("posts")
     .select(
-      "id, main_keyword, sub_keyword, title, meta_desc, tags, status, posted_naver, posted_tistory, created_at, updated_at",
-    )
+      "id, channel, main_keyword, sub_keyword, title, meta_desc, tags, status, posted_naver, posted_tistory, created_at, updated_at",
+    );
+  if (channel) q = q.eq("channel", channel);
+  const { data, error } = await q
     .order("updated_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`글 목록 조회 실패: ${error.message}`);
@@ -213,6 +219,174 @@ export async function latestSnapshot() {
     .maybeSingle();
   if (error) throw new Error(`최근 스냅샷 조회 실패: ${error.message}`);
   return data;
+}
+
+/* ------------------------------------------------------------------ *
+ * keyword_pool — 채널별로 매일 모으는 키워드
+ *
+ * 스냅샷은 조회 한 번의 통짜 JSON 이라 날짜를 넘어 비교할 수 없다. 여기는 키워드 한 줄이
+ * 한 행이고, 다시 나오면 수치와 last_seen 만 갱신해 "며칠째 보이는지"가 쌓인다.
+ * 날짜는 전부 KST 다 — 수집이 06:00 KST(=전날 21:00 UTC)에 돌아 UTC 로 찍으면 하루 밀린다.
+ * ------------------------------------------------------------------ */
+
+export type PoolRow = {
+  id: number;
+  channel: Channel;
+  seed: string;
+  keyword: string;
+  searches: number | null;
+  mobile_ratio: number | null;
+  bid: number | null;
+  ad_absorption: number | null;
+  revenue_score: number | null;
+  competition: string;
+  word_count: number;
+  first_seen: string;
+  last_seen: string;
+  seen_count: number;
+  created_at: string;
+};
+
+export type PoolInput = Pick<
+  PoolRow,
+  | "channel"
+  | "seed"
+  | "keyword"
+  | "searches"
+  | "mobile_ratio"
+  | "bid"
+  | "ad_absorption"
+  | "revenue_score"
+  | "competition"
+  | "word_count"
+>;
+
+export type PoolSort = "searches" | "absorption" | "bid" | "seen" | "long";
+
+/** KST 기준 YYYY-MM-DD. offsetDays 만큼 앞뒤로 민다 */
+export function kstDate(offsetDays = 0): string {
+  const d = new Date(Date.now() + offsetDays * 86_400_000);
+  return d.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+}
+
+/**
+ * 있으면 갱신, 없으면 삽입.
+ *
+ * seen_count 를 +1 하려면 기존 값을 알아야 해서 먼저 한 번 읽는다. 그 뒤 한 번의 upsert 로
+ * 전부 쓴다 — 줄마다 update 를 보내면 수백 번 왕복한다. 기존 줄은 first_seen · seed 를
+ * 그대로 실어 보내 덮어써도 바뀌지 않게 한다.
+ *
+ * 같은 날 다시 돌리면 seen_count 는 늘지 않는다. "며칠에 걸쳐 보였나"를 세려는 값이다.
+ * 같은 키워드가 입력에 두 번 있으면 처음 것만 쓴다 (한 upsert 안에 같은 키가 두 번이면
+ * Postgres 가 거부한다).
+ */
+export async function upsertKeywordPool(
+  rows: PoolInput[],
+): Promise<{ inserted: number; updated: number }> {
+  if (!rows.length) return { inserted: 0, updated: 0 };
+  const today = kstDate();
+
+  const unique = new Map<string, PoolInput>();
+  for (const r of rows) {
+    const k = `${r.channel}\u0000${r.keyword}`;
+    if (!unique.has(k)) unique.set(k, r);
+  }
+  const list = [...unique.values()];
+
+  // 기존 줄. in() 목록이 URL 에 실리므로 잘라서 읽는다
+  const existing = new Map<string, { seed: string; first_seen: string; last_seen: string; seen_count: number }>();
+  const byChannel = new Map<Channel, string[]>();
+  for (const r of list) byChannel.set(r.channel, [...(byChannel.get(r.channel) ?? []), r.keyword]);
+  for (const [channel, keywords] of byChannel) {
+    for (let i = 0; i < keywords.length; i += 100) {
+      const { data, error } = await supabase()
+        .from("keyword_pool")
+        .select("keyword, seed, first_seen, last_seen, seen_count")
+        .eq("channel", channel)
+        .in("keyword", keywords.slice(i, i + 100));
+      if (error) throw new Error(`키워드 풀 조회 실패: ${error.message}`);
+      for (const e of data ?? []) {
+        existing.set(`${channel}\u0000${e.keyword}`, {
+          seed: String(e.seed),
+          first_seen: String(e.first_seen),
+          last_seen: String(e.last_seen),
+          seen_count: Number(e.seen_count ?? 0),
+        });
+      }
+    }
+  }
+
+  let inserted = 0;
+  let updated = 0;
+  const payload = list.map((r) => {
+    const e = existing.get(`${r.channel}\u0000${r.keyword}`);
+    if (e) updated += 1;
+    else inserted += 1;
+    return {
+      ...r,
+      seed: e?.seed ?? r.seed,
+      first_seen: e?.first_seen ?? today,
+      last_seen: today,
+      seen_count: e ? (e.last_seen < today ? e.seen_count + 1 : e.seen_count) : 1,
+    };
+  });
+
+  for (let i = 0; i < payload.length; i += 500) {
+    const { error } = await supabase()
+      .from("keyword_pool")
+      .upsert(payload.slice(i, i + 500), { onConflict: "channel,keyword" });
+    if (error) throw new Error(`키워드 풀 저장 실패: ${error.message}`);
+  }
+  return { inserted, updated };
+}
+
+/** 최근 days 일(last_seen, KST) 안에 보인 키워드 */
+export async function listKeywordPool(
+  channel: Channel,
+  o: { days?: number; limit?: number; sort?: PoolSort } = {},
+): Promise<PoolRow[]> {
+  const days = Math.max(1, o.days ?? 14);
+  const limit = Math.min(Math.max(1, o.limit ?? 300), 2000);
+  const sort = o.sort ?? "searches";
+
+  let q = supabase()
+    .from("keyword_pool")
+    .select("*")
+    .eq("channel", channel)
+    .gte("last_seen", kstDate(-(days - 1)));
+
+  const desc = { ascending: false, nullsFirst: false } as const;
+  switch (sort) {
+    case "absorption":
+      // 흡수율 낮은 순 = 광고로 덜 빠지는 정보성 키워드
+      q = q.order("ad_absorption", { ascending: true, nullsFirst: false }).order("searches", desc);
+      break;
+    case "bid":
+      q = q.order("bid", desc).order("searches", desc);
+      break;
+    case "seen":
+      q = q.order("seen_count", desc).order("searches", desc);
+      break;
+    case "long":
+      q = q.order("word_count", desc).order("searches", desc);
+      break;
+    default:
+      q = q.order("searches", desc);
+  }
+
+  const { data, error } = await q.limit(limit);
+  if (error) throw new Error(`키워드 풀 조회 실패: ${error.message}`);
+  return (data ?? []) as PoolRow[];
+}
+
+export async function countKeywordPool(channel: Channel, days = 14): Promise<number> {
+  const { count, error } = await supabase()
+    .from("keyword_pool")
+    .select("id", { count: "exact", head: true })
+    .eq("channel", channel)
+    .gte("last_seen", kstDate(-(Math.max(1, days) - 1)));
+  if (error) throw new Error(`키워드 풀 개수 조회 실패: ${error.message}`);
+  return count ?? 0;
 }
 
 /* ------------------------------------------------------------------ *

@@ -1,22 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { copyText } from "@/lib/clipboard";
-import Help from "@/components/Help";
+import type { Channel } from "@/lib/seeds";
 
 type PostRow = {
   id: number;
+  channel?: Channel;
   main_keyword: string;
   sub_keyword: string;
   title: string;
+  meta_desc?: string;
   /** jsonb 컬럼이라 배열로 온다. SQLite 시절의 JSON 문자열이 아니다 */
   tags: string[] | string;
   status: string;
   posted_naver: boolean | number;
   posted_tistory: boolean | number;
+  created_at?: string;
   updated_at: string;
 };
+
+const CHANNELS: { id: Channel; label: string }[] = [
+  { id: "naver", label: "네이버" },
+  { id: "tistory", label: "티스토리" },
+];
+
+function toChannel(v: string | null): Channel {
+  return v === "naver" ? "naver" : "tistory";
+}
 
 /** 저장 시점에 따라 배열이거나 JSON 문자열이라 양쪽을 받아준다 */
 function tagList(tags: PostRow["tags"]): string[] {
@@ -29,26 +42,41 @@ function tagList(tags: PostRow["tags"]): string[] {
   }
 }
 
-export default function PostsPage() {
+function PostsInner() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const channel = toChannel(params.get("channel"));
+  const field = channel === "naver" ? "posted_naver" : "posted_tistory";
+
   const [posts, setPosts] = useState<PostRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [copied, setCopied] = useState<number | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
-    fetch("/api/posts")
+    setError("");
+    fetch(`/api/posts?channel=${channel}`)
       .then((r) => r.json())
-      .then((d) => setPosts(d.posts ?? []))
+      .then((d) => {
+        setPosts(d.posts ?? []);
+        if (d.ok === false && d.error) setError(d.error);
+      })
+      .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [channel]);
 
   useEffect(load, [load]);
 
-  async function toggle(post: PostRow, field: "posted_naver" | "posted_tistory") {
+  function pick(next: Channel) {
+    if (next === channel) return;
+    router.replace(`${pathname}?channel=${next}`, { scroll: false });
+  }
+
+  async function toggle(post: PostRow) {
     const next = !post[field];
-    setPosts((prev) =>
-      prev.map((p) => (p.id === post.id ? { ...p, [field]: next } : p)),
-    );
+    setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, [field]: next } : p)));
     await fetch(`/api/posts/${post.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -62,12 +90,28 @@ export default function PostsPage() {
     load();
   }
 
+  const label = channel === "naver" ? "네이버" : "티스토리";
+
   return (
     <>
       <h1 className="page-title">글 목록</h1>
-      <p className="page-desc">
-        생성한 초안과 발행 여부를 관리합니다. 발행 체크는 수동 기록용입니다.
-      </p>
+      <p className="page-desc">채널별 초안과 발행 여부. 발행 체크는 수동 기록용.</p>
+
+      <div className="segment full" role="tablist" aria-label="채널" style={{ marginBottom: 16 }}>
+        {CHANNELS.map((c) => (
+          <button
+            key={c.id}
+            role="tab"
+            aria-selected={channel === c.id}
+            className={channel === c.id ? "on" : ""}
+            onClick={() => pick(c.id)}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      {error && <div className="alert error">{error}</div>}
 
       <div className="card">
         {loading ? (
@@ -77,89 +121,66 @@ export default function PostsPage() {
           </div>
         ) : posts.length === 0 ? (
           <div className="empty">
-            아직 저장된 글이 없습니다. <Link href="/keywords">키워드 탐색</Link>부터 시작하세요.
+            아직 글이 없습니다. 지금은 키워드를 모으는 중입니다 —{" "}
+            <Link href="/keywords">키워드 탐색</Link>에서 모은 키워드를 보세요.
           </div>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: 45 }} className="num">
-                  #
-                </th>
-                <th>제목</th>
-                <th style={{ width: 170 }}>키워드</th>
-                <th style={{ width: 60 }} title="네이버 블로그에 올렸는지 직접 체크하는 칸입니다. 자동 발행은 API 가 폐지돼 불가능하므로, 붙여넣고 발행한 뒤 눌러 기록하세요">네이버</th>
-                <th style={{ width: 70 }} title="티스토리에 올렸는지 직접 체크하는 칸입니다. 같은 글을 두 곳에 올리므로 어디까지 했는지 여기서 봅니다">티스토리</th>
-                <th style={{ width: 96 }} title="누르면 #태그 형태로 클립보드에 복사됩니다. 네이버·티스토리 태그 입력란에 그대로 붙여넣으세요">태그</th>
-                <th style={{ width: 100 }}>수정일</th>
-                <th style={{ width: 110 }} />
-              </tr>
-            </thead>
-            <tbody>
-              {posts.map((p) => (
-                <tr key={p.id}>
-                  <td className="num">{p.id}</td>
-                  <td>
-                    <Link href={`/write?post=${p.id}`}>{p.title || "(제목 없음)"}</Link>
-                  </td>
-                  <td style={{ color: "var(--text-dim)", fontSize: 12 }}>
+          posts.map((p) => {
+            const tags = tagList(p.tags);
+            const posted = Boolean(p[field]);
+            return (
+              <div key={p.id} className="list-item entry">
+                <div className="entry-main">
+                  <Link href={`/write?post=${p.id}`} className="entry-title">
+                    {p.title || "(제목 없음)"}
+                  </Link>
+                  <div className="entry-sub">
                     {p.main_keyword}
                     {p.sub_keyword ? ` + ${p.sub_keyword}` : ""}
-                  </td>
-                  <td>
+                    {p.updated_at ? ` · ${p.updated_at.slice(0, 10)}` : ""}
+                  </div>
+                </div>
+                <div className="entry-side">
+                  <button
+                    className={`small ${posted ? channel : ""}`}
+                    onClick={() => toggle(p)}
+                    title={`${label}에 올렸는지 직접 체크하는 칸입니다. 붙여넣고 발행한 뒤 눌러 기록하세요`}
+                  >
+                    {posted ? "발행함" : "안 올림"}
+                  </button>
+                  {tags.length > 0 && (
                     <button
-                      className={`small ${p.posted_naver ? "naver" : "ghost"}`}
-                      onClick={() => toggle(p, "posted_naver")}
+                      className="small ghost"
+                      title={tags.map((t) => `#${t}`).join(" ")}
+                      onClick={() =>
+                        copyText(tags.map((t) => `#${t}`).join(" ")).then(() => {
+                          // 복사는 눈에 보이는 변화가 없어서, 눌린 행만 잠깐 표시한다
+                          setCopied(p.id);
+                          setTimeout(() => setCopied((c) => (c === p.id ? null : c)), 1600);
+                        })
+                      }
                     >
-                      {p.posted_naver ? "완료" : "대기"}
+                      {copied === p.id ? "복사됨" : `태그 ${tags.length}`}
                     </button>
-                  </td>
-                  <td>
-                    <button
-                      className={`small ${p.posted_tistory ? "tistory" : "ghost"}`}
-                      onClick={() => toggle(p, "posted_tistory")}
-                    >
-                      {p.posted_tistory ? "완료" : "대기"}
-                    </button>
-                  </td>
-                  <td>
-                    {(() => {
-                      const tags = tagList(p.tags);
-                      if (!tags.length) return <span className="dim">—</span>;
-                      return (
-                        <button
-                          className="small ghost"
-                          title={tags.map((t) => `#${t}`).join(" ")}
-                          onClick={() =>
-                            copyText(tags.map((t) => `#${t}`).join(" ")).then(() => {
-                              // 복사는 눈에 보이는 변화가 없어서, 눌린 행만 잠깐 표시한다
-                              setCopied(p.id);
-                              setTimeout(() => setCopied((c) => (c === p.id ? null : c)), 1600);
-                            })
-                          }
-                        >
-                          {copied === p.id ? "복사됨" : `태그 ${tags.length}`}
-                        </button>
-                      );
-                    })()}
-                  </td>
-                  <td style={{ color: "var(--text-dim)", fontSize: 12 }}>
-                    {p.updated_at.slice(0, 10)}
-                  </td>
-                  <td>
-                    <Link href={`/write?post=${p.id}`}>
-                      <button className="small">열기</button>
-                    </Link>{" "}
-                    <button className="small ghost" onClick={() => remove(p.id)}>
-                      삭제
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  )}
+                  <button className="small ghost danger" onClick={() => remove(p.id)}>
+                    삭제
+                  </button>
+                </div>
+              </div>
+            );
+          })
         )}
       </div>
     </>
+  );
+}
+
+export default function PostsPage() {
+  // useSearchParams 는 Suspense 경계가 필요하다
+  return (
+    <Suspense fallback={<div className="empty">불러오는 중…</div>}>
+      <PostsInner />
+    </Suspense>
   );
 }

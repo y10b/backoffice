@@ -52,13 +52,21 @@ export async function GET() {
         "visit_posts",
         head("visit_posts").in("status", ["analyzed", "drafted", "ready"]),
       ),
-      // 네이버·티스토리 중 한 곳이라도 아직 안 올린 블로그 초안
+      /*
+       * 블로그 초안은 채널별로 그 채널에 아직 안 올린 것.
+       * 네이버용 글이 티스토리에 안 올라간 건 할 일이 아니다.
+       */
       count(
         "posts",
-        head("posts").or("posted_naver.eq.false,posted_tistory.eq.false"),
+        head("posts").eq("channel", "naver").eq("posted_naver", false),
+      ),
+      count(
+        "posts",
+        head("posts").eq("channel", "tistory").eq("posted_tistory", false),
       ),
     ]);
-    const [velog, threads, visit, posts] = settled.map((r) => (r.status === "fulfilled" ? r.value : null));
+    const [velog, threads, visit, naver, tistory] = settled.map((r) => (r.status === "fulfilled" ? r.value : null));
+    const posts = { naver, tistory };
     const errors = settled.flatMap((r) => (r.status === "rejected" ? [String((r.reason as Error).message)] : []));
     return NextResponse.json({
       ok: true,
