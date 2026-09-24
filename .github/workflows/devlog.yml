@@ -1,0 +1,85 @@
+name: 개발 로그 (velog)
+
+# 원래 y10b/devlog 레포의 워크플로 네 개였다. 백오피스로 옮기면서 하나로 합쳤다.
+# daily-post 처럼 러너는 배포본 API 를 부를 뿐이고, 판단은 전부 서버에 있다.
+#
+#   매일 21:00 KST  collect  그날 커밋 수집 (회사 레포 제외)
+#   일요일 10:00    draft    지난 7일에서 글감 하나 → velog 초안 (검토 대기)
+#   매일 07:00      publish  '발행 승인' 상태만 velog 에 올림
+#   매일 22:00      sync     velog 에 올라간 글·반응을 되돌려 채움
+#
+# 크론은 UTC 다. GitHub 크론은 부하에 따라 수십 분 늦게 도는 일이 흔하다.
+on:
+  schedule:
+    - cron: "0 12 * * *"
+    - cron: "0 1 * * 0"
+    - cron: "0 22 * * *"
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "collect · draft · publish · sync"
+        required: true
+        default: "collect"
+        type: choice
+        options: [collect, draft, publish, sync]
+      date:
+        description: "collect 만: YYYY-MM-DD (비우면 오늘)"
+        required: false
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 어떤 단계인지 정하기
+        id: pick
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_TASK: ${{ inputs.task }}
+        run: |
+          case "$SCHEDULE" in
+            "0 12 * * *") task=collect ;;
+            "0 1 * * 0")  task=draft ;;
+            "0 22 * * *") task=publish ;;
+            "0 13 * * *") task=sync ;;
+            *) task="${INPUT_TASK:-collect}" ;;
+          esac
+          echo "task=$task" >> "$GITHUB_OUTPUT"
+
+      - name: 배포본 호출
+        env:
+          APP_ORIGIN: ${{ secrets.APP_ORIGIN }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TASK: ${{ steps.pick.outputs.task }}
+          DATE: ${{ inputs.date }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_ORIGIN:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::APP_ORIGIN 과 CRON_SECRET 시크릿을 등록하세요."
+            exit 1
+          fi
+          payload=$(printf '{"task":"%s","date":"%s"}' "$TASK" "${DATE:-}")
+          http=$(curl -sS -o response.json -w '%{http_code}' \
+            --max-time 600 \
+            -X POST "${APP_ORIGIN%/}/api/cron/devlog" \
+            -H "authorization: Bearer ${CRON_SECRET}" \
+            -H "content-type: application/json" \
+            -d "$payload")
+          echo "HTTP $http ($TASK)"
+          cat response.json
+          echo
+          ok=$(node -e "try{process.stdout.write(String(JSON.parse(require('fs').readFileSync('response.json','utf8')).ok))}catch{process.stdout.write('false')}")
+          {
+            echo "## $TASK"
+            echo
+            echo '```json'
+            cat response.json
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ok" != "true" ]; then
+            echo "::error::$TASK 실패 (HTTP $http)"
+            exit 1
+          fi
