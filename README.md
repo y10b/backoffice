@@ -30,7 +30,13 @@ SUPABASE_SERVICE_ROLE_KEY=
 ```
 
 [Supabase](https://supabase.com) 프로젝트를 만들고 `supabase/migrations/` 의 SQL 을 파일명
-순서대로 실행하세요. 나머지 API 키는 `.env.local` 이 아니라 **설정 화면**에 넣는 편이 낫습니다 —
+순서대로 실행하세요. SQL 편집기에 붙여넣어도 되고, 개인 액세스 토큰이 있으면 한 줄로 됩니다.
+
+```bash
+SUPABASE_ACCESS_TOKEN=sbp_... SUPABASE_PROJECT_REF=<ref> node scripts/migrate.mjs
+```
+
+나머지 API 키는 `.env.local` 이 아니라 **설정 화면**에 넣는 편이 낫습니다 —
 DB 에 저장돼 재시작 없이 바꿀 수 있고, 항목마다 `연결 테스트` 버튼이 있습니다.
 
 > 왜 SQLite 가 아닌가: 배포(Vercel)는 파일시스템이 읽기 전용이고 인스턴스마다 초기화됩니다.
