@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { generateDraft } from "@/lib/gemini";
 import { insertDraft } from "@/lib/db";
-import { isChannel } from "@/lib/seeds";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,8 +8,6 @@ export const maxDuration = 300;
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
-  // 어느 블로그용 글인지. 안 주면 예전처럼 티스토리
-  const channel = isChannel(body.channel) ? body.channel : "tistory";
   const mainKeyword = String(body.mainKeyword ?? "").trim();
   const subKeyword = String(body.subKeyword ?? "").trim();
 
@@ -29,7 +26,7 @@ export async function POST(req: Request) {
 
     let postId: number | null = null;
     if (body.save !== false) {
-      postId = await insertDraft({ channel, mainKeyword, subKeyword, draft });
+      postId = await insertDraft({ mainKeyword, subKeyword, draft });
     }
 
     return NextResponse.json({ ok: true, draft, postId });

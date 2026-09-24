@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { writeDailyPost } from "@/lib/dailyPost";
-import { isChannel } from "@/lib/seeds";
 import { cronDenied } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -9,12 +8,12 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * 채널 하나에 하루 한 편. 로직은 src/lib/dailyPost.ts 에 있다.
+ * 티스토리 초안 하루 한 편. 로직은 src/lib/dailyPost.ts 에 있다.
  *
  * 매일 도는 건 깃액션이 러너에서 scripts/daily-post.mjs 로 직접 돌린다.
  * 이 경로는 수동으로 한 번 더 돌리고 싶을 때를 위해 남겨 둔다.
  *
- * body: { channel?: "naver" | "tistory" (기본 tistory), seed?: string }
+ * body: { seed?: string }
  */
 export async function POST(req: Request) {
   /*
@@ -25,18 +24,11 @@ export async function POST(req: Request) {
   if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
-  const channel = body.channel ?? "tistory";
-  if (!isChannel(channel)) {
-    return NextResponse.json(
-      { ok: false, error: "channel 은 naver 또는 tistory 입니다." },
-      { status: 400 },
-    );
-  }
   const seed = String(body.seed ?? "").trim() || undefined;
 
   try {
-    return NextResponse.json(await writeDailyPost(channel, { seed }));
+    return NextResponse.json(await writeDailyPost({ seed }));
   } catch (e) {
-    return NextResponse.json({ ok: false, channel, seed, error: (e as Error).message });
+    return NextResponse.json({ ok: false, seed, error: (e as Error).message });
   }
 }

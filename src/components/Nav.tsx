@@ -62,8 +62,9 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       {
         href: "/posts",
-        label: "글 목록",
-        color: "#5856d6",
+        label: "티스토리",
+        // 티스토리 주황. 버튼(button.tistory)의 --tistory 와 같은 색
+        color: "#ff5544",
         icon: svg(
           <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />,
         ),
@@ -71,8 +72,9 @@ export const NAV_GROUPS: NavGroup[] = [
       // 키워드가 아니라 사진에서 출발하는 갈래. 방향이 반대라 글 작성과 섞지 않는다
       {
         href: "/visit",
-        label: "방문 후기",
-        color: "#ff3b30",
+        label: "네이버 방문 후기",
+        // 네이버 초록. 버튼(button.naver)의 --naver 와 같은 색
+        color: "#03c75a",
         icon: svg(
           <>
             <path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z" />
@@ -92,7 +94,7 @@ export const NAV_GROUPS: NavGroup[] = [
         color: "#30b0c7",
         icon: svg(<path d="M5 7l5 5-5 5M13 17h6" />),
       },
-      // 제휴 수익 갈래. 블로그 글과 수명·손질 방식이 달라 글 목록과 따로 둔다
+      // 제휴 수익 갈래. 블로그 글과 수명·손질 방식이 달라 티스토리 글과 따로 둔다
       {
         href: "/threads",
         label: "쓰레드",

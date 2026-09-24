@@ -3,6 +3,7 @@ import { fetchRelatedKeywords } from "@/lib/searchad";
 import { blogDocCount, openApiCreds, searchTrend } from "@/lib/openapi";
 import { fetchGa4Report } from "@/lib/ga4";
 import { devlogCreds, velogWhoAmI } from "@/lib/devlog";
+import { openaiPing } from "@/lib/openai";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +23,15 @@ export async function POST(req: Request) {
         ? `정상 — 연관 키워드 ${r.keywords.length}건을 받았습니다.`
         : (r.error ?? "실패"),
     });
+  }
+
+  if (target === "openai") {
+    try {
+      const model = await openaiPing();
+      return NextResponse.json({ ok: true, message: `정상 — ${model} 사용 가능` });
+    } catch (e) {
+      return NextResponse.json({ ok: false, message: (e as Error).message });
+    }
   }
 
   if (target === "ga4") {

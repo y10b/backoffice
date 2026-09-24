@@ -1,5 +1,8 @@
 /**
- * 키워드 풀 — 채널별 시드로 연관 키워드를 매일 모아 쌓는다.
+ * 키워드 풀 — 티스토리 시드로 연관 키워드를 매일 모아 쌓는다.
+ *
+ * 네이버는 방문 후기 레인이 담당하므로 키워드 수집은 티스토리뿐이다. keyword_pool.channel 은
+ * 늘 'tistory' 로 넣는다.
  *
  * 티스토리 유입이 0 이었다. 시드가 서로 다른 주제였고, 월 검색 1,000 이상 · 수익 잠재력
  * 순으로 한 번에 골라 쓰다 보니 레드오션 키워드만 나왔다. 그래서 2주 동안은 글을 쓰지 않고
@@ -7,7 +10,7 @@
  *
  *  | 누가           | 언제        | 하는 일                                   |
  *  |----------------|-------------|-------------------------------------------|
- *  | keywords.yml   | 매일 06:00  | 채널마다 시드 풀 전체 → keyword_pool upsert |
+ *  | keywords.yml   | 매일 06:00  | 시드 풀 전체 → keyword_pool upsert        |
  *  | /api/pool/run  | 화면 버튼   | 같은 함수를 지금 돌린다                   |
  *  | /api/pool      | 화면        | 최근 N일 풀을 정렬해 보여준다             |
  *
@@ -24,7 +27,7 @@ import {
   type PoolRow,
   type PoolSort,
 } from "./db";
-import { seedPool, type Channel } from "./seeds";
+import { seedPool } from "./seeds";
 
 export type { PoolRow, PoolSort };
 
@@ -72,7 +75,6 @@ function attributeSeed(keyword: string, seeds: string[]): string {
 }
 
 export type CollectResult = {
-  channel: Channel;
   seeds: string[];
   /** 조회로 받은 키워드 수 (묶음 사이 중복 제거 후) */
   fetched: number;
@@ -83,11 +85,10 @@ export type CollectResult = {
 };
 
 export async function collectKeywords(
-  channel: Channel,
   opts: { seeds?: string[] } = {},
 ): Promise<CollectResult> {
-  const seeds = opts.seeds?.length ? opts.seeds : await seedPool(channel);
-  if (!seeds.length) throw new Error(`${channel} 시드가 비어 있습니다.`);
+  const seeds = opts.seeds?.length ? opts.seeds : await seedPool();
+  if (!seeds.length) throw new Error("시드가 비어 있습니다.");
 
   const rows: PoolInput[] = [];
   const seen = new Set<string>();
@@ -116,7 +117,7 @@ export async function collectKeywords(
       if (seen.has(k.keyword)) continue;
       seen.add(k.keyword);
       rows.push({
-        channel,
+        channel: "tistory",
         seed: attributeSeed(k.keyword, chunk),
         keyword: k.keyword,
         searches: k.totalSearches,
@@ -133,12 +134,11 @@ export async function collectKeywords(
   if (errors.length === chunks.length) throw new Error(errors[0]);
 
   const { inserted, updated } = await upsertKeywordPool(rows);
-  return { channel, seeds, fetched: rows.length, inserted, updated, errors };
+  return { seeds, fetched: rows.length, inserted, updated, errors };
 }
 
 export async function listKeywordPool(
-  channel: Channel,
   o: { days?: number; limit?: number; sort?: PoolSort } = {},
 ): Promise<PoolRow[]> {
-  return dbListKeywordPool(channel, o);
+  return dbListKeywordPool(o);
 }

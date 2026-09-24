@@ -26,6 +26,13 @@ type SettingsState = {
     model: string;
   };
   kakao: { configured: boolean; fromEnv: boolean; apiKeyPreview: string };
+  /** 네이버 방문 후기의 사진 분석·본문. 백엔드가 아직 안 내려주면 없다 */
+  openai?: {
+    configured: boolean;
+    fromEnv: boolean;
+    apiKeyPreview: string;
+    model: string;
+  };
   devlog: {
     githubConfigured: boolean;
     githubFromEnv: boolean;
@@ -51,11 +58,10 @@ type SettingsState = {
     connected: boolean;
     account: string;
   };
-  /** 채널별 시드. 백엔드가 아직 안 내려주면 없다 */
+  /** 티스토리 시드. tistory 는 저장값(빈 문자열이면 기본값을 쓰는 중), default 는 기본값 */
   seeds?: {
-    naver: string;
     tistory: string;
-    defaults: { naver: string; tistory: string };
+    default: string;
   };
 };
 
@@ -104,7 +110,8 @@ export default function SettingsPage() {
   const [velogUser, setVelogUser] = useState("");
   const [velogRefresh, setVelogRefresh] = useState("");
   const [blocked, setBlocked] = useState("");
-  const [seedsNaver, setSeedsNaver] = useState("");
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [openaiModel, setOpenaiModel] = useState("gpt-5.5");
   const [seedsTistory, setSeedsTistory] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -116,6 +123,7 @@ export default function SettingsPage() {
       .then((s: SettingsState) => {
         setState(s);
         setModel(s.gemini.model);
+        if (s.openai?.model) setOpenaiModel(s.openai.model);
         setAdCustomer((prev) => prev || s.searchAd.customerId);
         if (s.devlog) {
           setGhUser((prev) => prev || s.devlog.githubUser);
@@ -126,7 +134,6 @@ export default function SettingsPage() {
         // 다른 카드를 저장해 load 가 다시 돌 때 고치던 내용을 덮지 않게 비어 있을 때만 채운다
         if (s.seeds) {
           const seeds = s.seeds;
-          setSeedsNaver((prev) => prev || seeds.naver || "");
           setSeedsTistory((prev) => prev || seeds.tistory || "");
         }
       });
@@ -205,12 +212,15 @@ export default function SettingsPage() {
             <tr>
               <td>검색광고 + Gemini</td>
               <td>
-                키워드 탐색 → 글 작성 → 네이버·티스토리 복사 <strong>(블로그는 이것만으로 완결)</strong>
+                키워드 탐색 → 글 작성 → 티스토리 복사 <strong>(블로그는 이것만으로 완결)</strong>
               </td>
             </tr>
             <tr>
-              <td>+ 카카오 REST API</td>
-              <td>방문 후기 — 사진에서 출발해 상호·주소를 카카오 로컬로 보강</td>
+              <td>+ 카카오 REST API + OpenAI</td>
+              <td>
+                네이버 방문 후기 — 사진에서 출발해 상호·주소를 카카오 로컬로 보강하고,
+                사진 분석과 본문은 GPT 가 씀
+              </td>
             </tr>
             <tr>
               <td>+ GitHub 토큰 · velog 쿠키</td>
@@ -580,47 +590,32 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          시드 키워드 — 채널별
+          시드 키워드 — 티스토리
           <Help text="키워드 수집과 매일 초안이 이 시드로 돕니다. 쉼표나 줄바꿈으로 구분.&#10;비워 두고 저장하면 기본값을 씁니다." />
         </h2>
-        <div className="row" style={{ alignItems: "stretch" }}>
-          <div className="field" style={{ flex: 1, minWidth: 240 }}>
-            <label>네이버</label>
-            <textarea
-              rows={4}
-              placeholder={state?.seeds?.defaults.naver ?? ""}
-              value={seedsNaver}
-              onChange={(e) => setSeedsNaver(e.target.value)}
-            />
-          </div>
-          <div className="field" style={{ flex: 1, minWidth: 240 }}>
-            <label>티스토리</label>
-            <textarea
-              rows={4}
-              placeholder={state?.seeds?.defaults.tistory ?? ""}
-              value={seedsTistory}
-              onChange={(e) => setSeedsTistory(e.target.value)}
-            />
-          </div>
+        <div className="field">
+          <textarea
+            rows={4}
+            aria-label="티스토리 시드 키워드"
+            placeholder={state?.seeds?.default ?? ""}
+            value={seedsTistory}
+            onChange={(e) => setSeedsTistory(e.target.value)}
+          />
         </div>
         <p className="hint">
           키워드 수집과 매일 초안이 이 시드로 돕니다. 쉼표나 줄바꿈으로 구분. 비어 있으면
           흐린 글씨의 기본값을 씁니다.
         </p>
         <div className="row" style={{ marginTop: 10 }}>
-          <button
-            className="primary"
-            onClick={() => save({ seedsNaver, seedsTistory })}
-          >
+          <button className="primary" onClick={() => save({ seedsTistory })}>
             저장
           </button>
           <button
             className="ghost"
             onClick={() => {
-              if (!confirm("두 채널 시드를 기본값으로 되돌릴까요?")) return;
-              setSeedsNaver("");
+              if (!confirm("티스토리 시드를 기본값으로 되돌릴까요?")) return;
               setSeedsTistory("");
-              save({ seedsNaver: "", seedsTistory: "" });
+              save({ seedsTistory: "" });
             }}
           >
             기본값으로
@@ -630,7 +625,64 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          카카오 로컬 API — 방문 후기
+          OpenAI — 네이버 방문 후기
+          <Help text="방문 후기의 사진 분석과 본문은 GPT 가 씁니다. 티스토리 본문은 계속 Gemini 입니다." />{" "}
+          {state?.openai && (
+            <Status
+              configured={state.openai.configured}
+              fromEnv={state.openai.fromEnv}
+              preview={state.openai.apiKeyPreview}
+            />
+          )}
+        </h2>
+        <p className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
+          방문 후기의 사진 분석과 본문은 GPT 가 씁니다. 티스토리 본문은 계속 Gemini 입니다.
+        </p>
+        <div className="row">
+          <div className="field" style={{ flex: 1, minWidth: 260 }}>
+            <label>API 키 (platform.openai.com → API keys)</label>
+            <input
+              type="password"
+              className="mono"
+              placeholder="sk-..."
+              value={openaiKey}
+              onChange={(e) => setOpenaiKey(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>모델</label>
+            <select value={openaiModel} onChange={(e) => setOpenaiModel(e.target.value)}>
+              <option value="gpt-5.5">gpt-5.5 (권장)</option>
+              <option value="gpt-5.4">gpt-5.4</option>
+              <option value="gpt-5.4-mini">gpt-5.4-mini (저렴)</option>
+              <option value="gpt-4.1">gpt-4.1</option>
+            </select>
+          </div>
+        </div>
+        <div className="row">
+          <button
+            className="primary"
+            onClick={() =>
+              // 키 칸이 비어 있으면 모델만 바꾼다. 빈 키를 보내 기존 키를 지우지 않게
+              save(
+                openaiKey.trim()
+                  ? { openaiApiKey: openaiKey.trim(), openaiModel }
+                  : { openaiModel },
+              ).then(() => setOpenaiKey(""))
+            }
+          >
+            저장
+          </button>
+          <TestButton target="openai" />
+          <button className="ghost" onClick={() => save({ clearOpenai: true })}>
+            삭제
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          카카오 로컬 API — 네이버 방문 후기
           <Help text="방문 후기의 상호·주소·업종 보강에 씁니다.&#10;네이버 지역검색을 쓰려 했으나 그 스코프는 신규 발급이 막혀 있어(401 Scope Status Invalid) 카카오로 대체했습니다." />{" "}
           {state?.kakao && (
             <Status

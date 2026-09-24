@@ -53,20 +53,12 @@ export async function GET() {
         head("visit_posts").in("status", ["analyzed", "drafted", "ready"]),
       ),
       /*
-       * 블로그 초안은 채널별로 그 채널에 아직 안 올린 것.
-       * 네이버용 글이 티스토리에 안 올라간 건 할 일이 아니다.
+       * 티스토리에 아직 안 올린 블로그 초안. 키워드 기반 글은 티스토리뿐이다
+       * (네이버는 위의 방문 후기 숫자가 맡는다).
        */
-      count(
-        "posts",
-        head("posts").eq("channel", "naver").eq("posted_naver", false),
-      ),
-      count(
-        "posts",
-        head("posts").eq("channel", "tistory").eq("posted_tistory", false),
-      ),
+      count("posts", head("posts").eq("posted_tistory", false)),
     ]);
-    const [velog, threads, visit, naver, tistory] = settled.map((r) => (r.status === "fulfilled" ? r.value : null));
-    const posts = { naver, tistory };
+    const [velog, threads, visit, posts] = settled.map((r) => (r.status === "fulfilled" ? r.value : null));
     const errors = settled.flatMap((r) => (r.status === "rejected" ? [String((r.reason as Error).message)] : []));
     return NextResponse.json({
       ok: true,

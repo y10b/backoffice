@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings, setSetting } from "@/lib/db";
 import { splitKeys } from "@/lib/gemini";
 import { DEFAULT_SEEDS } from "@/lib/seeds";
+import { DEFAULT_MODEL as OPENAI_DEFAULT_MODEL } from "@/lib/openai";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,12 +28,13 @@ export async function GET() {
     "searchad_api_key", "searchad_secret_key", "searchad_customer_id",
     "naver_client_id", "naver_client_secret",
     "gemini_api_key", "gemini_model",
+    "openai_api_key", "openai_model",
     "ga4_service_account", "ga4_property_id",
     "adsense_client_id", "adsense_client_secret",
     "adsense_refresh_token", "adsense_account",
     "kakao_rest_api_key",
     "github_pat", "github_user", "velog_user", "velog_token", "velog_refresh_token", "devlog_blocked_owners",
-    "seeds_naver", "seeds_tistory",
+    "seeds_tistory",
   ]);
 
   const adKey = resolve(s.searchad_api_key, "NAVER_SEARCHAD_API_KEY");
@@ -41,6 +43,7 @@ export async function GET() {
   const clientId = resolve(s.naver_client_id, "NAVER_CLIENT_ID");
   const clientSecret = resolve(s.naver_client_secret, "NAVER_CLIENT_SECRET");
   const gemini = resolve(s.gemini_api_key, "GEMINI_API_KEY");
+  const openai = resolve(s.openai_api_key, "OPENAI_API_KEY");
   const gaKey = resolve(s.ga4_service_account, "GA4_SERVICE_ACCOUNT");
   const gaProp = resolve(s.ga4_property_id, "GA4_PROPERTY_ID");
   const adsenseId = resolve(s.adsense_client_id, "ADSENSE_CLIENT_ID");
@@ -95,19 +98,22 @@ export async function GET() {
       keyCount: splitKeys(`${gemini.value}\n${process.env.GEMINI_API_KEY ?? ""}`).length,
       model: s.gemini_model || process.env.GEMINI_MODEL || "gemini-2.5-flash",
     },
+    // 방문 후기 전용 (사진 분석·본문). 티스토리 본문은 위 gemini
+    openai: {
+      configured: Boolean(openai.value),
+      fromEnv: openai.fromEnv,
+      apiKeyPreview: mask(openai.value),
+      model: s.openai_model || process.env.OPENAI_MODEL || OPENAI_DEFAULT_MODEL,
+    },
     kakao: {
       configured: Boolean(kakao.value),
       fromEnv: kakao.fromEnv,
       apiKeyPreview: mask(kakao.value),
     },
-    // 저장값이 비면 코드 기본값(defaults)으로 돈다. 화면은 빈 칸에 defaults 를 흐리게 보여주면 된다
+    // 티스토리 시드. 저장값이 비면 코드 기본값(default)으로 돈다. 화면은 빈 칸에 default 를 흐리게 보여주면 된다
     seeds: {
-      naver: s.seeds_naver ?? "",
       tistory: s.seeds_tistory ?? "",
-      defaults: {
-        naver: DEFAULT_SEEDS.naver.join(", "),
-        tistory: DEFAULT_SEEDS.tistory.join(", "),
-      },
+      default: DEFAULT_SEEDS.join(", "),
     },
     devlog: {
       githubConfigured: Boolean(ghPat.value),
@@ -131,6 +137,8 @@ const TEXT_FIELDS: Record<string, string> = {
   naverClientSecret: "naver_client_secret",
   geminiApiKey: "gemini_api_key",
   geminiModel: "gemini_model",
+  openaiApiKey: "openai_api_key",
+  openaiModel: "openai_model",
   ga4ServiceAccount: "ga4_service_account",
   ga4PropertyId: "ga4_property_id",
   adsenseClientId: "adsense_client_id",
@@ -157,11 +165,7 @@ export async function POST(req: Request) {
    * 시드는 빈 값도 저장한다. 다른 필드는 빈 값이면 "안 건드림"이지만, 시드는 비우는 것이
    * "기본값으로 돌아가기"라는 뜻이다 (seedPool 이 빈 설정을 기본값으로 읽는다).
    */
-  const SEED_FIELDS = { seedsNaver: "seeds_naver", seedsTistory: "seeds_tistory" } as const;
-  for (const [field, key] of Object.entries(SEED_FIELDS)) {
-    const v = body[field];
-    if (typeof v === "string") await setSetting(key, v.trim());
-  }
+  if (typeof body.seedsTistory === "string") await setSetting("seeds_tistory", body.seedsTistory.trim());
 
   if (
     typeof body.searchAdCustomerId === "string" &&
@@ -179,6 +183,10 @@ export async function POST(req: Request) {
   if (body.clearOpenApi) {
     await setSetting("naver_client_id", "");
     await setSetting("naver_client_secret", "");
+  }
+  if (body.clearOpenai) {
+    await setSetting("openai_api_key", "");
+    await setSetting("openai_model", "");
   }
   if (body.clearDevlog) {
     await setSetting("github_pat", "");

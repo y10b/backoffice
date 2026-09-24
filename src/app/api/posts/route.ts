@@ -1,17 +1,12 @@
 import { NextResponse } from "next/server";
 import { insertDraft, listPosts } from "@/lib/db";
-import { isChannel } from "@/lib/seeds";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** `?channel=naver|tistory` 면 그 채널만. 없거나 모르는 값이면 전부 */
-export async function GET(req: Request) {
-  const channel = new URL(req.url).searchParams.get("channel");
+export async function GET() {
   try {
-    return NextResponse.json({
-      posts: await listPosts(200, isChannel(channel) ? channel : undefined),
-    });
+    return NextResponse.json({ posts: await listPosts(200) });
   } catch (e) {
     return NextResponse.json({ posts: [], error: (e as Error).message });
   }
@@ -22,7 +17,6 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   try {
     const id = await insertDraft({
-      channel: isChannel(body.channel) ? body.channel : "tistory",
       mainKeyword: String(body.main_keyword ?? ""),
       subKeyword: String(body.sub_keyword ?? ""),
       draft: {

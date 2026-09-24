@@ -1,5 +1,7 @@
 /**
- * 매일 블로그 초안 한 편 — 채널(naver · tistory)마다 따로 돈다.
+ * 매일 티스토리 초안 한 편.
+ *
+ * 네이버는 방문 후기 레인(visit_posts)이 담당하므로 키워드 기반 자동 초안은 티스토리뿐이다.
  *
  * 원래 `/api/cron/daily-post` 라우트 안에 있었다. 워크플로가 배포본 API 를 curl 로 부르던
  * 시절이라 로직이 서버에 있어야 했는데, 이제 러너가 scripts/daily-post.mjs 로 이 함수를
@@ -18,7 +20,7 @@
 import { pickSubKeyword, researchKeywords } from "./research";
 import { generateDraft, suggestSubKeywords } from "./gemini";
 import { insertDraft, listPosts } from "./db";
-import { seedForDate, seedPool, type Channel } from "./seeds";
+import { seedForDate, seedPool } from "./seeds";
 import { wordCount } from "./keywordPool";
 import type { Keyword } from "./types";
 
@@ -28,7 +30,6 @@ const MIN_SEARCHES = 300;
 
 export type DailyPostResult = {
   ok: true;
-  channel: Channel;
   seed: string;
   postId: number;
   mainKeyword: string;
@@ -56,10 +57,9 @@ function byLongThenAbsorption(a: Keyword, b: Keyword): number {
 }
 
 export async function writeDailyPost(
-  channel: Channel,
   opts: { seed?: string } = {},
 ): Promise<DailyPostResult> {
-  const seed = opts.seed?.trim() || seedForDate(new Date(), await seedPool(channel));
+  const seed = opts.seed?.trim() || seedForDate(new Date(), await seedPool());
 
   /* 1. 정보성 키워드 후보 */
   const research = await researchKeywords({
@@ -76,11 +76,11 @@ export async function writeDailyPost(
 
   /*
    * 최근에 쓴 주제는 건너뛴다. 같은 키워드로 이어 쓰면 자기 글끼리 경쟁하고
-   * (cannibalization) 목록도 지저분해진다. 채널이 다르면 독자가 달라 겹쳐도 된다.
+   * (cannibalization) 목록도 지저분해진다.
    */
   const since = Date.now() - RECENT_DAYS * 86_400_000;
   const recent = new Set(
-    (await listPosts(300, channel))
+    (await listPosts(300))
       .filter((p) => new Date(String(p.created_at)).getTime() >= since)
       .map((p) => String(p.main_keyword ?? "").trim()),
   );
@@ -115,7 +115,6 @@ export async function writeDailyPost(
   /*
    * 재시도를 넉넉히 준다. 새벽에 혼자 돌고 실패하면 다음 기회가 24시간 뒤라,
    * 몇십 초 기다리는 값이 하루를 버리는 값보다 훨씬 싸다 (최근 실패는 전부 503 이었다).
-   * GenerateOptions 에 채널별 옵션은 없어 두 채널이 같은 설정으로 쓴다.
    */
   const draft = await generateDraft({
     mainKeyword,
@@ -123,11 +122,10 @@ export async function writeDailyPost(
     targetChars: 2000,
     retries: 4,
   });
-  const postId = await insertDraft({ channel, mainKeyword, subKeyword, draft, auto: true });
+  const postId = await insertDraft({ channel: "tistory", mainKeyword, subKeyword, draft, auto: true });
 
   return {
     ok: true,
-    channel,
     seed,
     postId,
     mainKeyword,

@@ -1,5 +1,4 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { Channel } from "./seeds";
 
 /**
  * 저장소. 원래는 로컬 파일 SQLite(`node:sqlite`)였는데 Supabase Postgres 로 옮겼다.
@@ -94,9 +93,16 @@ export async function getSettings(keys: string[]): Promise<Record<string, string
  * posts — 초안
  * ------------------------------------------------------------------ */
 
+/**
+ * posts.channel · keyword_pool.channel 컬럼의 값. 키워드 기반 글은 티스토리뿐이라 늘 'tistory' 다
+ * (네이버는 방문 후기 레인 visit_posts 가 맡는다). 컬럼은 예전 행 호환으로 남겨 둔다.
+ */
+export type Channel = "tistory";
+const CHANNEL: Channel = "tistory";
+
 export type DraftInput = {
-  /** 어느 블로그용 글인지. 목록·크론이 채널별로 나뉜다 */
-  channel: Channel;
+  /** 생략하면 'tistory'. 컬럼이 남아 있어 값만 받는다 */
+  channel?: Channel;
   mainKeyword: string;
   subKeyword: string;
   draft: {
@@ -122,7 +128,7 @@ export async function insertDraft(input: DraftInput): Promise<number> {
   const { data, error } = await supabase()
     .from("posts")
     .insert({
-      channel: input.channel,
+      channel: input.channel ?? CHANNEL,
       main_keyword: input.mainKeyword,
       sub_keyword: input.subKeyword,
       title: draft.title,
@@ -143,14 +149,13 @@ export async function insertDraft(input: DraftInput): Promise<number> {
   return Number(data.id);
 }
 
-/** 글 목록. 본문은 빼서 목록 응답이 무거워지지 않게 한다. channel 을 주면 그 채널만 */
-export async function listPosts(limit = 200, channel?: Channel) {
-  let q = supabase()
+/** 글 목록. 본문은 빼서 목록 응답이 무거워지지 않게 한다 */
+export async function listPosts(limit = 200) {
+  const q = supabase()
     .from("posts")
     .select(
       "id, channel, main_keyword, sub_keyword, title, meta_desc, tags, status, posted_naver, posted_tistory, created_at, updated_at",
     );
-  if (channel) q = q.eq("channel", channel);
   const { data, error } = await q
     .order("updated_at", { ascending: false })
     .limit(limit);
@@ -222,7 +227,7 @@ export async function latestSnapshot() {
 }
 
 /* ------------------------------------------------------------------ *
- * keyword_pool — 채널별로 매일 모으는 키워드
+ * keyword_pool — 티스토리 시드로 매일 모으는 키워드 (channel 은 늘 'tistory')
  *
  * 스냅샷은 조회 한 번의 통짜 JSON 이라 날짜를 넘어 비교할 수 없다. 여기는 키워드 한 줄이
  * 한 행이고, 다시 나오면 수치와 last_seen 만 갱신해 "며칠째 보이는지"가 쌓인다.
@@ -342,7 +347,6 @@ export async function upsertKeywordPool(
 
 /** 최근 days 일(last_seen, KST) 안에 보인 키워드 */
 export async function listKeywordPool(
-  channel: Channel,
   o: { days?: number; limit?: number; sort?: PoolSort } = {},
 ): Promise<PoolRow[]> {
   const days = Math.max(1, o.days ?? 14);
@@ -352,7 +356,7 @@ export async function listKeywordPool(
   let q = supabase()
     .from("keyword_pool")
     .select("*")
-    .eq("channel", channel)
+    .eq("channel", CHANNEL)
     .gte("last_seen", kstDate(-(days - 1)));
 
   const desc = { ascending: false, nullsFirst: false } as const;
@@ -379,11 +383,11 @@ export async function listKeywordPool(
   return (data ?? []) as PoolRow[];
 }
 
-export async function countKeywordPool(channel: Channel, days = 14): Promise<number> {
+export async function countKeywordPool(days = 14): Promise<number> {
   const { count, error } = await supabase()
     .from("keyword_pool")
     .select("id", { count: "exact", head: true })
-    .eq("channel", channel)
+    .eq("channel", CHANNEL)
     .gte("last_seen", kstDate(-(Math.max(1, days) - 1)));
   if (error) throw new Error(`키워드 풀 개수 조회 실패: ${error.message}`);
   return count ?? 0;

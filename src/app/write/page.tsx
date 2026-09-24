@@ -254,7 +254,7 @@ function WritePageInner() {
       const d = await res.json();
       if (!d.ok) throw new Error(d.error);
       applyDraft(d.draft, d.postId ?? null);
-      flash("초안을 생성하고 글 목록에 저장했습니다.");
+      flash("초안을 생성하고 티스토리에 저장했습니다.");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -542,7 +542,7 @@ function WritePageInner() {
       <div className="card">
         <h2>
           생성 옵션
-          <Help text="Gemini 가 제목·본문·태그·메타 설명·FAQ 를 한 번에 만들고 글 목록에 자동 저장합니다.&#10;검색 그라운딩이 켜져 있으면 본문 작성 전에 최신 수치를 먼저 조사합니다(2패스라 시간과 쿼터가 2배)." />
+          <Help text="Gemini 가 제목·본문·태그·메타 설명·FAQ 를 한 번에 만들고 티스토리에 자동 저장합니다.&#10;검색 그라운딩이 켜져 있으면 본문 작성 전에 최신 수치를 먼저 조사합니다(2패스라 시간과 쿼터가 2배)." />
         </h2>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 260 }}>

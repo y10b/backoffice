@@ -1694,3 +1694,18 @@ a.entry-title:hover {
   margin-bottom: 8px;
   font-size: 13px;
 }
+
+/* 네이버 방문 후기 — 지난 초안 행의 첫 줄: 가게 이름 + 상태 배지 + 확인 N.
+   좁으면 배지가 이름 아래로 접힌다 */
+.visit-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.visit-line .tag {
+  margin: 0;
+  padding: 1px 8px;
+  font-size: 12px;
+}

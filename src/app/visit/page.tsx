@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Help from "@/components/Help";
 import { copyRichHtml, copyText } from "@/lib/clipboard";
 
 /**
- * 방문 후기 — 사진에서 글로.
+ * 네이버 방문 후기 — 사진에서 글로.
  *
  * `/write` 와 방향이 반대다. 저쪽은 키워드를 고르고 글을 쓰지만, 여기는 이미 다녀온
  * 가게의 사진을 올리는 것으로 시작한다. 그래서 화면도 표가 아니라 단계다.
@@ -31,7 +32,9 @@ type VisitPost = {
   warnings: string[];
   needs_check: string[];
   status: string;
+  posted_at?: string | null;
   created_at: string;
+  updated_at?: string;
 };
 
 type Analysis = {
@@ -82,7 +85,8 @@ async function shrink(file: File): Promise<{ mimeType: string; data: string }> {
   return { mimeType: "image/jpeg", data: url.slice(url.indexOf(",") + 1) };
 }
 
-export default function VisitPage() {
+function VisitInner() {
+  const params = useSearchParams();
   const [posts, setPosts] = useState<VisitPost[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -123,6 +127,32 @@ export default function VisitPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  /** 지난 초안 하나를 4단계 자리에 띄운다. 목록의 "열기"와 ?post=ID 진입이 같이 쓴다 */
+  const openPost = useCallback(async (postId: number) => {
+    try {
+      const d = await (await fetch(`/api/visit?id=${postId}`)).json();
+      if (d.post) {
+        setDraft(d.post);
+        setId(postId);
+      } else if (d.error) {
+        setError(d.error);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  // 홈 등에서 /visit?post=ID 로 들어오면 그 초안을 바로 연다. 같은 ID 는 한 번만
+  const openedFromQuery = useRef<string | null>(null);
+  const postParam = params.get("post");
+  useEffect(() => {
+    if (!postParam || openedFromQuery.current === postParam) return;
+    const n = Number(postParam);
+    if (!Number.isInteger(n) || n <= 0) return;
+    openedFromQuery.current = postParam;
+    openPost(n);
+  }, [postParam, openPost]);
 
   function flash(msg: string) {
     setNotice(msg);
@@ -216,7 +246,7 @@ export default function VisitPage() {
 
   return (
     <div className="main">
-      <h1 className="page-title">방문 후기</h1>
+      <h1 className="page-title">네이버 방문 후기</h1>
       <p className="page-desc">
         이미 다녀온 가게의 사진에서 시작합니다. 사진이 사실을 채우고, 네 문항이 감상을
         채웁니다. 발행은 네이버 앱에서 직접 하세요.
@@ -541,51 +571,42 @@ export default function VisitPage() {
         {posts.length === 0 ? (
           <p className="empty">아직 없습니다.</p>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>가게</th>
-                  <th>방문</th>
-                  <th>제목</th>
-                  <th>상태</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {posts.map((p) => (
-                  <tr key={p.id}>
-                    <td>{p.place?.name || p.place_query}</td>
-                    <td className="dim">{p.visited_on}</td>
-                    <td>{p.title || <span className="dim">—</span>}</td>
-                    <td>
-                      <span className="badge">{STATUS_LABEL[p.status] ?? p.status}</span>
-                      {p.warnings?.length > 0 && (
-                        <span className="tag" title={p.warnings.join("\n")}>
-                          확인 {p.warnings.length}
-                        </span>
-                      )}
-                    </td>
-                    <td className="cell-actions">
-                      <button
-                        onClick={async () => {
-                          const d = await (await fetch(`/api/visit?id=${p.id}`)).json();
-                          if (d.post) {
-                            setDraft(d.post);
-                            setId(p.id);
-                          }
-                        }}
-                      >
-                        열기
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          posts.map((p) => (
+            <div key={p.id} className="list-item entry">
+              <div className="entry-main">
+                <div className="visit-line">
+                  <strong className="entry-title">{p.place?.name || p.place_query}</strong>
+                  <span className={`badge${p.status === "posted" ? " on" : ""}`}>
+                    {STATUS_LABEL[p.status] ?? p.status}
+                  </span>
+                  {p.warnings?.length > 0 && (
+                    <span className="tag" title={p.warnings.join("\n")}>
+                      확인 {p.warnings.length}
+                    </span>
+                  )}
+                </div>
+                <div className="entry-sub">
+                  {[p.visited_on, p.title].filter(Boolean).join(" · ") || "—"}
+                </div>
+              </div>
+              <div className="entry-side">
+                <button className="small" onClick={() => openPost(p.id)}>
+                  열기
+                </button>
+              </div>
+            </div>
+          ))
         )}
       </div>
     </div>
+  );
+}
+
+export default function VisitPage() {
+  // useSearchParams(?post=ID) 는 Suspense 경계가 필요하다
+  return (
+    <Suspense fallback={<div className="empty">불러오는 중…</div>}>
+      <VisitInner />
+    </Suspense>
   );
 }

@@ -64,15 +64,12 @@ function Sparkline({ data }: { data: { ratio: number }[] }) {
 }
 
 /* ------------------------------------------------------------------ *
- * 모은 키워드 — 매일 크론이 쌓는 keyword_pool 을 채널별로 본다
+ * 모은 키워드 — 매일 크론이 쌓는 keyword_pool 을 본다 (티스토리 시드 하나)
  * ------------------------------------------------------------------ */
-
-type PoolChannel = "naver" | "tistory";
 
 /** numeric 컬럼은 문자열로 올 수도 있어 숫자로 맞춰 받는다 */
 type PoolRow = {
   id: number;
-  channel: PoolChannel;
   seed: string;
   keyword: string;
   searches: number | null;
@@ -88,7 +85,6 @@ type PoolRow = {
 };
 
 type PoolRunResult = {
-  channel: PoolChannel;
   seeds: number | string[];
   fetched: number;
   inserted: number;
@@ -96,11 +92,6 @@ type PoolRunResult = {
   /** 시드별 실패. 일부 시드가 실패해도 나머지는 쌓인다 */
   errors?: unknown[];
 };
-
-const POOL_CHANNELS: { id: PoolChannel; label: string }[] = [
-  { id: "naver", label: "네이버" },
-  { id: "tistory", label: "티스토리" },
-];
 
 const POOL_DAYS = [7, 14, 30];
 
@@ -128,7 +119,6 @@ function wonText(v: number | null): string {
 }
 
 function PoolCard() {
-  const [channel, setChannel] = useState<PoolChannel>("tistory");
   const [days, setDays] = useState(14);
   const [sort, setSort] = useState("searches");
   const [rows, setRows] = useState<PoolRow[]>([]);
@@ -142,7 +132,7 @@ function PoolCard() {
     setLoading(true);
     setError("");
     try {
-      const q = new URLSearchParams({ channel, days: String(days), sort, limit: "300" });
+      const q = new URLSearchParams({ days: String(days), sort, limit: "300" });
       const d = await (await fetch(`/api/pool?${q.toString()}`)).json();
       if (d.ok === false) throw new Error(d.error ?? "불러오지 못했습니다.");
       const list = (d.keywords ?? []) as PoolRow[];
@@ -155,7 +145,7 @@ function PoolCard() {
     } finally {
       setLoading(false);
     }
-  }, [channel, days, sort]);
+  }, [days, sort]);
 
   useEffect(() => {
     load();
@@ -166,18 +156,14 @@ function PoolCard() {
     setError("");
     setRunNote("");
     try {
-      const res = await fetch("/api/pool/run", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ channel }),
-      });
+      const res = await fetch("/api/pool/run", { method: "POST" });
       const d = await res.json();
       if (!d.ok) throw new Error(d.error ?? "수집에 실패했습니다.");
       const r = d.result as PoolRunResult;
       const seedCount = Array.isArray(r.seeds) ? r.seeds.length : (r.seeds ?? 0);
       const failed = r.errors?.length ?? 0;
       setRunNote(
-        `${r.channel === "naver" ? "네이버" : "티스토리"} · 시드 ${seedCount}개에서 ${(r.fetched ?? 0).toLocaleString()}개 조회 — 새로 ${(r.inserted ?? 0).toLocaleString()} · 갱신 ${(r.updated ?? 0).toLocaleString()}${failed ? ` · 실패 ${failed}건` : ""}`,
+        `시드 ${seedCount}개에서 ${(r.fetched ?? 0).toLocaleString()}개 조회 — 새로 ${(r.inserted ?? 0).toLocaleString()} · 갱신 ${(r.updated ?? 0).toLocaleString()}${failed ? ` · 실패 ${failed}건` : ""}`,
       );
       await load();
     } catch (e) {
@@ -197,23 +183,10 @@ function PoolCard() {
     <div className="card">
       <h2>
         모은 키워드
-        <Help text="매일 아침 6시에 채널별 시드로 연관 키워드를 모아 쌓습니다. 다시 나온 키워드는 '등장' 횟수가 늘어납니다. 2주쯤 쌓이면 주제를 정합니다." />
+        <Help text="매일 아침 6시에 티스토리 시드로 연관 키워드를 모아 쌓습니다. 다시 나온 키워드는 '등장' 횟수가 늘어납니다. 2주쯤 쌓이면 주제를 정합니다." />
       </h2>
 
       <div className="pool-controls">
-        <div className="segment" role="tablist" aria-label="채널">
-          {POOL_CHANNELS.map((c) => (
-            <button
-              key={c.id}
-              role="tab"
-              aria-selected={channel === c.id}
-              className={channel === c.id ? "on" : ""}
-              onClick={() => setChannel(c.id)}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>
         <div className="segment" role="tablist" aria-label="기간">
           {POOL_DAYS.map((d) => (
             <button

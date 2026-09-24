@@ -20,9 +20,12 @@
  *
  * 사진 원본은 저장하지 않는다. 분석 결과만 남긴다 — 발행은 사용자가 휴대폰에서 직접
  * 하므로 서버가 원본을 들고 있을 이유가 없고, 무료 티어 용량도 아낀다.
+ *
+ * 모델은 OpenAI(GPT)다. 사용자가 채널별로 모델을 나눴다 — 네이버 후기 갈래는 GPT,
+ * 티스토리 본문은 Gemini. 그래서 여기만 openai.ts 를 쓴다.
  */
 
-import { geminiCall, geminiModel } from "./gemini";
+import { openaiJson } from "./openai";
 import { markdownToHtml } from "./markdown";
 import { searchPlaces, type Place } from "./kakao";
 
@@ -60,13 +63,19 @@ export type PhotoAnalysis = {
   uncertain: string[];
 };
 
+/*
+ * OpenAI strict 스키마: 객체마다 additionalProperties:false, 키는 전부 required.
+ * 없을 수 있는 값(못 읽은 가격, 영수증 없음)은 null 을 허용해 표현한다.
+ */
 const ANALYSIS_SCHEMA = {
   type: "object",
+  additionalProperties: false,
   properties: {
     photos: {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
         properties: {
           index: { type: "integer" },
           kind: { type: "string", enum: ["외관", "내부", "메뉴판", "음식", "영수증", "기타"] },
@@ -79,22 +88,25 @@ const ANALYSIS_SCHEMA = {
       type: "array",
       items: {
         type: "object",
-        properties: { name: { type: "string" }, price: { type: "integer" } },
-        required: ["name"],
+        additionalProperties: false,
+        properties: { name: { type: "string" }, price: { type: ["integer", "null"] } },
+        required: ["name", "price"],
       },
     },
     receipt: {
-      type: "object",
+      type: ["object", "null"],
+      additionalProperties: false,
       properties: {
         items: { type: "array", items: { type: "string" } },
-        total: { type: "integer" },
-        people: { type: "integer" },
+        total: { type: ["integer", "null"] },
+        people: { type: ["integer", "null"] },
       },
+      required: ["items", "total", "people"],
     },
     observations: { type: "array", items: { type: "string" } },
     uncertain: { type: "array", items: { type: "string" } },
   },
-  required: ["photos", "menu", "observations", "uncertain"],
+  required: ["photos", "menu", "receipt", "observations", "uncertain"],
 };
 
 const ANALYSIS_PROMPT = `너는 음식점 방문 사진을 읽어 **사실만** 뽑아내는 분석기다.
@@ -106,9 +118,10 @@ const ANALYSIS_PROMPT = `너는 음식점 방문 사진을 읽어 **사실만** 
 
 메뉴판 사진이 있으면 menu 에 **적힌 그대로** 메뉴명과 가격을 옮긴다. 이것이 이 글에서
 가격의 유일한 근거다. 흐리거나 잘려서 못 읽는 항목은 넣지 말고 uncertain 에 적는다.
-가격을 추측해서 채우지 마라.
+가격을 추측해서 채우지 마라. 메뉴명은 읽었는데 가격이 안 보이면 price 는 null 이다.
 
-영수증 사진이 있으면 receipt 에 주문 항목·총액·인원을 옮긴다.
+영수증 사진이 있으면 receipt 에 주문 항목·총액·인원을 옮긴다. 영수증이 없으면 receipt 는
+null 이고, 총액·인원을 못 읽으면 그 칸만 null 이다.
 
 observations 에는 **사진에서 직접 확인되는 사실**만 문장으로 적는다. 예:
   좋음: "테이블 6개 규모의 작은 홀이고 좌석은 전부 의자석"
@@ -125,25 +138,25 @@ observations 에는 **사진에서 직접 확인되는 사실**만 문장으로 
 export async function analyzePhotos(photos: InputPhoto[]): Promise<PhotoAnalysis> {
   if (!photos.length) throw new Error("사진이 없습니다.");
 
-  const parts: unknown[] = [
-    { text: ANALYSIS_PROMPT },
-    ...photos.flatMap((p) => [
-      { text: `--- 사진 ${p.index} ---` },
-      { inlineData: { mimeType: p.mimeType, data: p.data } },
-    ]),
-  ];
-
-  const payload = await geminiCall(await geminiModel(), {
-    contents: [{ role: "user", parts }],
-    generationConfig: {
-      // 사실 추출이라 창의성이 필요 없다. 낮게 둬야 없는 것을 덜 지어낸다
-      temperature: 0.1,
-      responseMimeType: "application/json",
-      responseSchema: ANALYSIS_SCHEMA,
-    },
-  });
-
-  const parsed = readJson(payload, "사진 분석");
+  /*
+   * 이미지마다 "--- 사진 N ---" 이름표를 바로 앞에 붙인다. 모델이 돌려주는 index 를
+   * 화면의 사진에 다시 이어 붙이는 유일한 끈이다.
+   *
+   * temperature 는 주지 않는다. gpt-5 계열은 받지 않고(400), 날조 억제는 프롬프트와
+   * strict 스키마가 맡는다.
+   */
+  const parsed = await withContext("사진 분석", () =>
+    openaiJson<any>({
+      user: ANALYSIS_PROMPT,
+      images: photos.map((p) => ({
+        mimeType: p.mimeType,
+        data: p.data,
+        label: `--- 사진 ${p.index} ---`,
+      })),
+      schema: ANALYSIS_SCHEMA,
+      schemaName: "photo_analysis",
+    }),
+  );
   return {
     photos: Array.isArray(parsed.photos) ? parsed.photos : [],
     menu: Array.isArray(parsed.menu)
@@ -245,6 +258,7 @@ export type VisitDraft = {
 
 const DRAFT_SCHEMA = {
   type: "object",
+  additionalProperties: false,
   properties: {
     titles: { type: "array", items: { type: "string" } },
     bodyMarkdown: { type: "string" },
@@ -253,6 +267,7 @@ const DRAFT_SCHEMA = {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
         properties: { index: { type: "integer" }, note: { type: "string" } },
         required: ["index", "note"],
       },
@@ -388,21 +403,14 @@ needsCheck 를 JSON 으로 낸다.`;
 }
 
 export async function generateVisitDraft(o: GenerateVisitOptions): Promise<VisitDraft> {
-  const payload = await geminiCall(
-    await geminiModel(),
-    {
-      contents: [{ role: "user", parts: [{ text: buildVisitPrompt(o) }] }],
-      generationConfig: {
-        // 후기는 사람 냄새가 나야 하지만, 사실 날조를 막아야 해 본문 생성보다 낮게 둔다
-        temperature: 0.7,
-        responseMimeType: "application/json",
-        responseSchema: DRAFT_SCHEMA,
-      },
-    },
-    { retries: o.retries },
+  const d = await withContext("후기 생성", () =>
+    openaiJson<any>({
+      user: buildVisitPrompt(o),
+      schema: DRAFT_SCHEMA,
+      schemaName: "visit_draft",
+      retries: o.retries,
+    }),
   );
-
-  const d = readJson(payload, "후기 생성");
   const bodyMarkdown = String(d.bodyMarkdown ?? "");
   const titles = (d.titles ?? []).map((t: unknown) => String(t).trim()).filter(Boolean);
 
@@ -420,17 +428,11 @@ export async function generateVisitDraft(o: GenerateVisitOptions): Promise<Visit
   };
 }
 
-/** Gemini 응답에서 JSON 본문을 꺼낸다. 두 경로가 같은 실수를 하지 않게 한 곳에 둔다 */
-function readJson(payload: any, what: string): any {
-  const parts = payload?.candidates?.[0]?.content?.parts;
-  const text = Array.isArray(parts) ? parts.map((p: any) => p?.text ?? "").join("") : "";
-  if (!text.trim()) {
-    const reason = payload?.candidates?.[0]?.finishReason ?? "알 수 없음";
-    throw new Error(`${what}: Gemini 가 응답을 반환하지 않았습니다 (finishReason: ${reason}).`);
-  }
+/** 어느 단계에서 실패했는지 오류 앞에 붙인다. 두 경로가 같은 모양으로 알리게 한 곳에 둔다 */
+async function withContext<T>(what: string, fn: () => Promise<T>): Promise<T> {
   try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(`${what}: Gemini 가 반환한 JSON 을 파싱하지 못했습니다.`);
+    return await fn();
+  } catch (e) {
+    throw new Error(`${what}: ${(e as Error).message}`);
   }
 }
