@@ -8,7 +8,7 @@
  *  | 단계    | 언제        | 하는 일                                            |
  *  |---------|-------------|----------------------------------------------------|
  *  | collect | 매일 21시   | 그날 커밋을 레포별로 모아 dev_logs 에 쌓는다        |
- *  | draft   | 일요일 10시 | 지난 7일에서 글감을 골라 velog_posts 초안을 만든다  |
+ *  | draft   | 매일 22시반 | 최근 7일에서 글감 하나를 골라 velog_posts 초안을 만든다 |
  *  | publish | 매일 7시    | status=approved 만 velog 에 올린다                 |
  *  | sync    | 매일 22시   | velog 에 올라간 글을 되돌려 채우고 반응을 갱신한다 |
  *
@@ -232,8 +232,12 @@ export async function collect(date = kstToday()): Promise<CollectResult> {
  * 2. draft — 지난 7일에서 글감 하나를 골라 초안
  * ------------------------------------------------------------------ */
 
+/*
+ * 매일 돈다. 창은 7일로 두어 어제 놓친 글감도 잡고, 점수 문턱은 2 로 낮춘다 —
+ * 매일 검토하기로 했으니 걸러내는 건 사람이 한다. 다만 점수 미달인 날은 여전히 비운다.
+ */
 const WINDOW_DAYS = 7;
-const MIN_SCORE = 3;
+const MIN_SCORE = 2;
 
 function draftPrompt(repo: string, dates: string[], messages: string[], user: string): string {
   return `아래는 개발자 ${user} 가 ${dates[0]}~${dates[dates.length - 1]} 사이 \`${repo}\` 레포에 남긴 커밋 메시지다.

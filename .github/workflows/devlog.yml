@@ -7,9 +7,12 @@ name: 개발 로그 (velog)
 # 자격증명(GitHub 토큰 · velog 쿠키)은 백오피스 설정 표에 있으니 러너는 DB 접속만 알면 된다.
 #
 #   매일 21:00 KST  collect  그날 커밋 수집 (회사 레포 제외)
-#   일요일 10:00    draft    지난 7일에서 글감 하나 → velog 초안 (검토 대기)
-#   매일 07:00      publish  '발행 승인' 상태만 velog 에 올림
 #   매일 22:00      sync     velog 에 올라간 글·반응을 되돌려 채움
+#   매일 22:30      draft    최근 커밋에서 글감 하나 → velog 초안 (검토 대기)
+#   매일 07:00      publish  '발행 승인' 상태만 velog 에 올림
+#
+# 초안은 매일이다. 사람이 매일 검토하기로 했으니 빈도는 사람이 조절한다 —
+# 커밋이 없거나 글감 점수가 낮은 날은 여전히 아무것도 만들지 않는다.
 #
 # 크론은 UTC 다. GitHub 크론은 부하에 따라 수십 분 늦게 도는 일이 흔하다.
 #
@@ -18,7 +21,7 @@ name: 개발 로그 (velog)
 on:
   schedule:
     - cron: "0 12 * * *"
-    - cron: "0 1 * * 0"
+    - cron: "30 13 * * *"
     - cron: "0 22 * * *"
     - cron: "0 13 * * *"
   workflow_dispatch:
@@ -54,7 +57,7 @@ jobs:
         run: |
           case "$SCHEDULE" in
             "0 12 * * *") task=collect ;;
-            "0 1 * * 0")  task=draft ;;
+            "30 13 * * *") task=draft ;;
             "0 22 * * *") task=publish ;;
             "0 13 * * *") task=sync ;;
             *) task="${INPUT_TASK:-collect}" ;;

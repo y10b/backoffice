@@ -52,7 +52,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 const TASKS: { id: "collect" | "draft" | "publish" | "sync"; label: string; help: string }[] = [
   { id: "collect", label: "오늘 커밋 수집", help: "오늘(KST) 내 커밋을 레포별로 모아 아래 개발 로그에 쌓습니다. 회사 레포는 설정의 차단 목록으로 걸러집니다. 매일 21시에 자동으로 돕니다." },
-  { id: "draft", label: "초안 만들기", help: "지난 7일 로그 중 글감 점수 3 이상에서 가장 큰 덩어리 하나를 골라 초안을 씁니다. 커밋이 없으면 만들지 않습니다. 일요일 10시에 자동으로 돕니다." },
+  { id: "draft", label: "초안 만들기", help: "최근 7일 로그 중 글감 점수 2 이상에서 가장 큰 덩어리 하나를 골라 초안을 씁니다. 커밋이 없으면 만들지 않습니다. 매일 22시 30분에 자동으로 돕니다." },
   { id: "publish", label: "승인된 글 발행", help: "상태가 '발행 승인'인 글을 velog 에 올립니다. 본문에 TODO 가 남아 있거나 200자 미만이면 올리지 않습니다. 매일 7시에 자동으로 돕니다." },
   { id: "sync", label: "velog 동기화", help: "velog 에 올라간 공개 글을 되돌려 채우고 좋아요·댓글 수를 갱신합니다. 손으로 올린 글도 여기 이력에 들어옵니다. 매일 22시에 자동으로 돕니다." },
 ];
@@ -250,7 +250,7 @@ export default function DevlogPage() {
 
         {!loading && !shown.length && (
           <div className="empty">
-            {filter === "open" ? "검토할 글이 없습니다. 일요일에 초안이 생깁니다." : "아직 글이 없습니다."}
+            {filter === "open" ? "검토할 글이 없습니다. 커밋이 있는 날 밤에 초안이 생깁니다." : "아직 글이 없습니다."}
           </div>
         )}
 
