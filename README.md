@@ -237,11 +237,13 @@ API 목록에 없고, 호출하면 `401 Scope Status Invalid` 가 옵니다 — 
 `velog_posts`(글, 자동 초안과 역동기화 이력이 한 표에 있음). 화면은 `/devlog` — 검토·승인,
 직접 실행 버튼, 최근 로그를 봅니다.
 
-실행 진입점은 하나입니다. `src/lib/devlog.ts` 의 `runTask` 를 크론(`/api/cron/devlog`,
-`CRON_SECRET` 인증) · 화면 버튼(`/api/devlog/run`) · CLI(`scripts/devlog.mjs`)가 똑같이
-부릅니다. 워크플로도 하나(`.github/workflows/devlog.yml`)입니다 — 크론 4개를
-`github.event.schedule` 문자열로 분기합니다. 레포 시크릿은 `daily-post` 와 같은 두 개
-(`APP_ORIGIN`, `CRON_SECRET`)면 됩니다.
+실행 진입점은 하나입니다. `src/lib/devlog.ts` 의 `runTask` 를 깃액션(`scripts/devlog.mjs`) ·
+화면 버튼(`/api/devlog/run`) · 크론 라우트(`/api/cron/devlog`)가 똑같이 부릅니다. 워크플로도
+하나(`.github/workflows/devlog.yml`)입니다 — 크론 4개를 `github.event.schedule` 문자열로
+분기하고, **제휴 후보 워크플로처럼 러너 안에서 스크립트를 직접 돌립니다.** 배포본을 거치지
+않으므로 머지·배포 전에도 이 파일이 있는 브랜치에서 바로 돕니다. 레포 시크릿은 `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY` 면 됩니다(GitHub 토큰·velog 쿠키는 설정 표에서
+읽습니다). 공개 레포라 액션 로그에는 개수만 남깁니다.
 
 자격증명은 설정 화면 **"GitHub · velog"** 카드에 있습니다 — GitHub PAT(classic, `repo`
 스코프), GitHub 사용자, velog 사용자(GitHub 과 다를 때만), velog access_token(쿠키), 수집하지 않을 소유자
@@ -266,8 +268,8 @@ API 목록에 없고, 호출하면 `401 Scope Status Invalid` 가 옵니다 — 
 SERP 경쟁 분석은 하지 않습니다 — 네이버 검색 페이지를 읽는 것이라 실패해도 글은 나와야 하고,
 자동 실행에서는 사람이 결과를 보고 판단할 수도 없습니다. 검색광고 데이터만으로 고릅니다.
 
-개발 로그의 수집·초안·발행·역동기화도 같은 구조(크론이 배포본 API 를 curl 로 부르고, 판단은
-서버에)입니다 — 위 **개발 로그** 절을 보세요.
+개발 로그의 수집·초안·발행·역동기화는 배포본을 거치지 않고 러너가 스크립트를 직접 돌립니다 —
+위 **개발 로그** 절을 보세요.
 
 ## 화면
 
