@@ -186,14 +186,15 @@ export async function collect(date = kstToday()): Promise<CollectResult> {
   for (const r of candidates) {
     if (await forkOfBlocked(r, token, blocked)) continue;
     try {
-      const commits = (await gh(
+      const list = (await gh(
         `/repos/${r.full_name}/commits?author=${user}&since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&per_page=100`,
         token,
-      )) as { commit?: { message?: string } }[];
-      const messages = commits
-        .map((c) => (c.commit?.message ?? "").split("\n")[0].trim())
-        .filter(Boolean)
-        .filter((m) => !/^Merge (branch|pull request)/i.test(m));
+      )) as { sha: string; commit?: { message?: string } }[];
+      // 병합 커밋은 글감이 아니다. 본문 전체를 남긴다 — 이 레포는 커밋 본문에 이유를 쓴다
+      const commits = list
+        .map((c) => ({ sha: c.sha, message: (c.commit?.message ?? "").trim() }))
+        .filter((c) => c.message && !/^Merge (branch|pull request)/i.test(c.message));
+      const messages = commits.map((c) => c.message.split("\n")[0].trim());
       if (!messages.length) continue;
       const topics = topicsOf(messages);
       rows.push({
@@ -202,6 +203,7 @@ export async function collect(date = kstToday()): Promise<CollectResult> {
         private: r.private,
         commit_count: messages.length,
         messages,
+        commits,
         topics,
         score: scoreOf(messages, topics),
       });
@@ -239,19 +241,113 @@ export async function collect(date = kstToday()): Promise<CollectResult> {
 const WINDOW_DAYS = 7;
 const MIN_SCORE = 2;
 
-function draftPrompt(repo: string, dates: string[], messages: string[], user: string): string {
-  return `아래는 개발자 ${user} 가 ${dates[0]}~${dates[dates.length - 1]} 사이 \`${repo}\` 레포에 남긴 커밋 메시지다.
+/* ------------------------------------------------------------------ *
+ * 초안 재료 — 커밋 본문과 실제 diff
+ *
+ * 제목 첫 줄만 넘기면 "무엇을 했다"는 나열밖에 못 쓴다. 기술 글의 값은 "왜 그랬고
+ * 어떻게 바뀌었나"에 있고, 그건 커밋 본문과 diff 에 있다. 토큰 예산 안에서 잘라 넣는다.
+ * ------------------------------------------------------------------ */
 
-${messages.map((m) => `- ${m}`).join("\n")}
+const MAX_COMMITS = 12;
+const MAX_FILES_PER_COMMIT = 6;
+const MAX_PATCH_CHARS = 1800;
+const MAX_TOTAL_CHARS = 42000;
+/** 잠금 파일·빌드 산출물·바이너리는 읽어도 글감이 안 된다 */
+const SKIP_FILE = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|.*\.min\.(js|css)|.*\.(png|jpg|jpeg|gif|webp|svg|ico|mp4|pdf|ttf|otf|woff2?))$|(^|\/)(dist|build|\.next|node_modules)\//i;
 
-이걸로 velog(개발자 대상 기술 블로그)에 올릴 글의 **초안**을 한국어로 써라.
+type CommitDetail = {
+  sha: string;
+  commit: { message: string };
+  stats?: { additions: number; deletions: number };
+  files?: { filename: string; status: string; additions: number; deletions: number; patch?: string }[];
+};
+
+/**
+ * 커밋들을 diff 까지 읽어 모델에 줄 재료 문자열로 만든다.
+ * 예전 행(commits 가 빈 것)은 날짜 범위로 다시 조회해 SHA 를 채운다.
+ */
+async function gatherMaterials(repo: string, group: DevLog[], token: string, user: string): Promise<string> {
+  let refs = group.flatMap((r) => r.commits ?? []);
+  if (!refs.length) {
+    for (const r of group) {
+      const since = `${r.date}T00:00:00+09:00`;
+      const until = `${r.date}T23:59:59+09:00`;
+      try {
+        const list = (await gh(
+          `/repos/${repo}/commits?author=${user}&since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&per_page=100`,
+          token,
+        )) as { sha: string; commit?: { message?: string } }[];
+        refs.push(
+          ...list
+            .map((c) => ({ sha: c.sha, message: (c.commit?.message ?? "").trim() }))
+            .filter((c) => c.message && !/^Merge (branch|pull request)/i.test(c.message)),
+        );
+      } catch {
+        /* 못 읽으면 제목만으로 간다 */
+      }
+    }
+  }
+  // 오래된 것부터 — 글은 작업 순서대로 읽힌다
+  refs = refs.slice(-MAX_COMMITS);
+
+  const chunks: string[] = [];
+  let used = 0;
+  for (const ref of refs) {
+    let detail: CommitDetail | null = null;
+    try {
+      detail = (await gh(`/repos/${repo}/commits/${ref.sha}`, token)) as CommitDetail;
+    } catch {
+      /* diff 를 못 읽어도 메시지는 넣는다 */
+    }
+    const lines: string[] = [];
+    lines.push(`### 커밋 ${ref.sha.slice(0, 7)}`);
+    lines.push(ref.message);
+    const files = (detail?.files ?? []).filter((f) => !SKIP_FILE.test(f.filename));
+    if (files.length) {
+      lines.push(
+        `변경 파일 ${files.length}개: ` +
+          files.slice(0, 12).map((f) => `${f.filename} (+${f.additions}/-${f.deletions})`).join(", "),
+      );
+      for (const f of files.slice(0, MAX_FILES_PER_COMMIT)) {
+        if (!f.patch) continue;
+        const patch = f.patch.length > MAX_PATCH_CHARS ? `${f.patch.slice(0, MAX_PATCH_CHARS)}\n… (이하 생략)` : f.patch;
+        lines.push(`\`\`\`diff\n# ${f.filename}\n${patch}\n\`\`\``);
+      }
+    }
+    const chunk = lines.join("\n");
+    if (used + chunk.length > MAX_TOTAL_CHARS) {
+      chunks.push(`### 커밋 ${ref.sha.slice(0, 7)}\n${ref.message.split("\n")[0]}\n(예산 초과로 diff 생략)`);
+      continue;
+    }
+    chunks.push(chunk);
+    used += chunk.length;
+  }
+  return chunks.join("\n\n");
+}
+
+function draftPrompt(repo: string, dates: string[], materials: string, user: string): string {
+  return `아래는 개발자 ${user} 가 ${dates[0]}~${dates[dates.length - 1]} 사이 \`${repo}\` 레포에 남긴 커밋들이다.
+커밋 본문과 실제 diff 가 들어 있다. 이 재료만으로 velog(개발자 대상 기술 블로그)에 올릴 글의 **초안**을 한국어로 써라.
+
+=== 재료 시작 ===
+${materials}
+=== 재료 끝 ===
+
+글의 목적: 읽는 사람이 "이 사람은 무엇이 막혔고, 왜 이렇게 풀었고, 그래서 코드가 어떻게 달라졌는지"를 이해하게 하는 것.
+
+구성 (소제목은 내용에 맞게 다시 지어라):
+1. 배경 — 어떤 상황에서 무엇이 문제였나. 커밋 본문에 적힌 이유를 근거로 쓴다
+2. 판단 — 왜 그 방법을 골랐나. 버린 대안이 커밋에 있으면 함께
+3. 구현 — diff 에서 핵심 부분을 골라 **변경 전 / 변경 후** 코드 블록으로 보여주고, 무엇이 달라졌는지 설명. 코드는 재료의 diff 에서 그대로 가져오고 언어 태그를 붙인다. \`-\` \`+\` 접두는 떼고 읽히는 코드로 정리해도 된다
+4. 결과와 남은 것 — 무엇이 해결됐고 무엇이 아직 확인 필요인지
 
 규칙:
-- 커밋에 실제로 드러난 사실만 쓴다. **없는 수치·없는 결과를 지어내지 마라.** 모르는 건 "확인 필요"로 남겨라
-- 기능 나열이 아니라 **"왜 그렇게 했는가"** 가 중심이다. 문제 → 원인 → 판단 → 결과 순서
-- 제목은 구체적인 한 문장. "OO 개발기" 같은 제목 금지
-- 마크다운. 2000자 내외
-- 첫 줄에 \`# 제목\` 한 줄만 두고, 그 아래부터 본문
+- **재료에 없는 사실·수치·결과를 지어내지 마라.** 재료에 없으면 \`> TODO: ~\` 로 남겨라
+- 기능 나열 금지. 문제 → 원인 → 판단 → 변화 흐름으로
+- 코드 블록은 최소 2개, 각 40줄 이하. diff 를 통째로 붙이지 말고 요점만
+- 제목은 문제와 해법이 드러나는 구체적인 한 문장. "OO 개발기" 금지
+- 마크다운, 2500~3500자. 첫 줄에 \`# 제목\` 한 줄만 두고 그 아래부터 본문
+- 존댓말이 아니라 담백한 평어체("~했다")
 
 글쓴이가 읽고 고칠 초안이다. 확신 없는 부분은 \`> TODO: ~\` 로 표시해라.`;
 }
@@ -284,10 +380,10 @@ function skeleton(title: string, messages: string[]): string {
 
 export type DraftResult =
   | { made: false; reason: string }
-  | { made: true; id: number; title: string; repo: string; commits: number; ai: boolean };
+  | { made: true; id: number; title: string; repo: string; commits: number; ai: boolean; aiError?: string };
 
 export async function draft(): Promise<DraftResult> {
-  const { user } = await devlogCreds();
+  const { user, token } = await devlogCreds();
   const from = kstToday(-WINDOW_DAYS);
   const rows = (await listUnconsumedDevLogs(from)).filter((r) => r.score >= MIN_SCORE);
   if (!rows.length) {
@@ -304,10 +400,16 @@ export async function draft(): Promise<DraftResult> {
   const dates = group.map((r) => r.date).sort();
   const fromPrivate = group.some((r) => r.private);
 
+  // diff 까지 읽는다. 토큰이 없으면(설정 누락) 제목만으로 간다
+  const materials = token
+    ? await gatherMaterials(repo, group, token, user)
+    : messages.map((m) => `- ${m}`).join("\n");
+
   let ai: string | null = null;
+  let aiError: string | undefined;
   try {
     const payload = await geminiCall(await geminiModel(), {
-      contents: [{ role: "user", parts: [{ text: draftPrompt(repo, dates, messages, user) }] }],
+      contents: [{ role: "user", parts: [{ text: draftPrompt(repo, dates, materials, user) }] }],
       // 생각에도 토큰을 쓰는 모델이라 짜게 주면 본문이 빈 채로 돌아온다
       generationConfig: { maxOutputTokens: 8192, temperature: 0.7 },
     });
@@ -323,8 +425,9 @@ export async function draft(): Promise<DraftResult> {
       text += "\n\n> TODO: 모델 응답이 길이 제한으로 잘렸습니다. 끝부분을 확인하세요.";
     }
     ai = text || null;
-  } catch {
-    // 모델이 막혀도 뼈대는 만든다. 중요한 건 "그때 뭘 했는지"가 남는 것이다
+  } catch (e) {
+    // 모델이 막혀도 뼈대는 만든다. 중요한 건 "그때 뭘 했는지"가 남는 것이다. 사유는 결과에 남긴다
+    aiError = (e as Error).message.slice(0, 200);
   }
 
   const short = repo.split("/")[1];
@@ -342,7 +445,7 @@ export async function draft(): Promise<DraftResult> {
   });
   await markDevLogsConsumed(group.map((r) => r.id));
 
-  return { made: true, id, title, repo, commits: messages.length, ai: Boolean(ai) };
+  return { made: true, id, title, repo, commits: messages.length, ai: Boolean(ai), aiError };
 }
 
 /* ------------------------------------------------------------------ *

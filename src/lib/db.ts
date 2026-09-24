@@ -605,6 +605,8 @@ export type DevLog = {
   private: boolean;
   commit_count: number;
   messages: string[];
+  /** SHA 와 커밋 본문 전체. 초안이 실제 diff 를 다시 읽는 열쇠다 */
+  commits: { sha: string; message: string }[];
   topics: string[];
   score: number;
   consumed: boolean;
@@ -659,6 +661,7 @@ export async function upsertDevLogs(
         private: r.private,
         commit_count: r.commit_count,
         messages: r.messages,
+        commits: r.commits,
         topics: r.topics,
         score: r.score,
       })
