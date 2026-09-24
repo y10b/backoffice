@@ -25,15 +25,17 @@ type SettingsState = {
     keyCount: number;
     model: string;
   };
-  youtube: { configured: boolean; fromEnv: boolean; apiKeyPreview: string };
-  claude: { configured: boolean; fromEnv: boolean; apiKeyPreview: string; model: string };
-  veo: { configured: boolean; model: string };
-  fish: {
-    configured: boolean;
-    fromEnv: boolean;
-    apiKeyPreview: string;
-    model: string;
-    free: boolean;
+  kakao: { configured: boolean; fromEnv: boolean; apiKeyPreview: string };
+  devlog: {
+    githubConfigured: boolean;
+    githubFromEnv: boolean;
+    githubPreview: string;
+    githubUser: string;
+    velogUser: string;
+    velogConfigured: boolean;
+    velogFromEnv: boolean;
+    velogRefreshSet: boolean;
+    blockedOwners: string;
   };
   ga4: {
     configured: boolean;
@@ -89,12 +91,13 @@ export default function SettingsPage() {
   const [ga4Property, setGa4Property] = useState("");
   const [adsenseId, setAdsenseId] = useState("");
   const [adsenseSecret, setAdsenseSecret] = useState("");
-  const [youtubeKey, setYoutubeKey] = useState("");
-  const [anthropicKey, setAnthropicKey] = useState("");
-  const [claudeModel, setClaudeModel] = useState("claude-sonnet-5");
-  const [veoModel, setVeoModel] = useState("");
-  const [fishKey, setFishKey] = useState("");
-  const [fishModel, setFishModel] = useState("");
+  const [kakaoKey, setKakaoKey] = useState("");
+  const [ghPat, setGhPat] = useState("");
+  const [ghUser, setGhUser] = useState("");
+  const [velogToken, setVelogToken] = useState("");
+  const [velogUser, setVelogUser] = useState("");
+  const [velogRefresh, setVelogRefresh] = useState("");
+  const [blocked, setBlocked] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [tests, setTests] = useState<TestState>({});
@@ -106,10 +109,11 @@ export default function SettingsPage() {
         setState(s);
         setModel(s.gemini.model);
         setAdCustomer((prev) => prev || s.searchAd.customerId);
-        if (s.claude) setClaudeModel(s.claude.model);
-        // 저장된 값이 곧 화면 기본값이다. 사용자가 입력 중이면 덮어쓰지 않는다
-        if (s.veo) setVeoModel((prev) => prev || s.veo.model);
-        if (s.fish) setFishModel((prev) => prev || s.fish.model);
+        if (s.devlog) {
+          setGhUser((prev) => prev || s.devlog.githubUser);
+          setVelogUser((prev) => prev || s.devlog.velogUser);
+          setBlocked((prev) => prev || s.devlog.blockedOwners);
+        }
       });
   }, []);
 
@@ -170,8 +174,7 @@ export default function SettingsPage() {
     <>
       <h1 className="page-title">설정</h1>
       <p className="page-desc">
-        전부 네이버 공식 API 자격증명입니다. 이 컴퓨터의{" "}
-        <span className="mono">data/backoffice.db</span> 에만 저장됩니다.
+        자격증명은 Supabase 의 settings 표에 저장되고, 항목마다 연결 테스트가 있습니다.
       </p>
 
       <details style={{ marginBottom: 18 }}>
@@ -191,16 +194,12 @@ export default function SettingsPage() {
               </td>
             </tr>
             <tr>
-              <td>+ YouTube</td>
-              <td>쇼츠 소재 검색 · 댓글 타임스탬프 하이라이트 · 유아 인기 영상 조회</td>
+              <td>+ 카카오 REST API</td>
+              <td>방문 후기 — 사진에서 출발해 상호·주소를 카카오 로컬로 보강</td>
             </tr>
             <tr>
-              <td>+ Claude</td>
-              <td>유아 채널 기획안 (캐릭터 · 대본 · 장면 프롬프트)</td>
-            </tr>
-            <tr>
-              <td>+ Fish Audio</td>
-              <td>내레이션 음성 (무료 등급 가능)</td>
+              <td>+ GitHub 토큰 · velog 쿠키</td>
+              <td>개발 로그 — 커밋 수집 → velog 초안 → 승인 → 발행</td>
             </tr>
             <tr>
               <td>+ GA4 · 애드센스</td>
@@ -208,10 +207,6 @@ export default function SettingsPage() {
             </tr>
           </tbody>
         </table>
-        <p className="hint" style={{ marginBottom: 0 }}>
-          영상 렌더는 ffmpeg 가 필요해 로컬에서만 됩니다. 터미널에{" "}
-          <span className="mono">npm run worker</span> 를 띄워두세요.
-        </p>
       </details>
 
       {notice && <div className="alert ok">{notice}</div>}
@@ -516,7 +511,7 @@ export default function SettingsPage() {
       <div className="card">
         <h2>
           Gemini API
-          <Help text="블로그 본문·제목·태그를 생성합니다. 무료 티어로 충분하지만 쿼터가 빡빡해서, 키를 여러 개 넣으면 걸린 키를 건너뜁니다.&#10;유아 채널의 Veo 영상 생성도 같은 키를 씁니다(단 Veo 는 유료 프로젝트 키 필요)." />{" "}
+          <Help text="블로그 본문·제목·태그를 생성합니다. 무료 티어로 충분하지만 쿼터가 빡빡해서, 키를 여러 개 넣으면 걸린 키를 건너뜁니다." />{" "}
           {state && (
             <Status
               configured={state.gemini.configured}
@@ -570,35 +565,35 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          YouTube Data API
-          <Help text="쇼츠의 인기 영상·CC 소재 검색과 댓글 하이라이트, 유아 채널의 인기 영상 조회에 씁니다.&#10;블로그만 쓸 거면 없어도 됩니다." />{" "}
-          {state?.youtube && (
+          카카오 로컬 API — 방문 후기
+          <Help text="방문 후기의 상호·주소·업종 보강에 씁니다.&#10;네이버 지역검색을 쓰려 했으나 그 스코프는 신규 발급이 막혀 있어(401 Scope Status Invalid) 카카오로 대체했습니다." />{" "}
+          {state?.kakao && (
             <Status
-              configured={state.youtube.configured}
-              fromEnv={state.youtube.fromEnv}
-              preview={state.youtube.apiKeyPreview}
+              configured={state.kakao.configured}
+              fromEnv={state.kakao.fromEnv}
+              preview={state.kakao.apiKeyPreview}
             />
           )}
         </h2>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
-            <label>API 키 (GCP → YouTube Data API v3 사용 설정 후 발급)</label>
+            <label>REST API 키 (developers.kakao.com → 내 애플리케이션 → 앱 키)</label>
             <input
               type="password"
               className="mono"
-              placeholder="AIza..."
-              value={youtubeKey}
-              onChange={(e) => setYoutubeKey(e.target.value)}
+              placeholder="32자리 키"
+              value={kakaoKey}
+              onChange={(e) => setKakaoKey(e.target.value)}
             />
             <p className="hint" style={{ marginTop: 6 }}>
-              쇼츠·유아 채널의 영상 조회에 씁니다. 일일 할당량 10,000 단위이고 검색은 1회당
-              100 단위라 금세 닳습니다.
+              <strong>JavaScript 키가 아니라 REST API 키</strong>여야 합니다. 앱을 만든 뒤
+              카카오맵을 활성화하세요. 방문 후기에서 가게를 못 찾으면 폐업 의심으로 표시합니다.
             </p>
           </div>
           <button
             className="primary"
-            onClick={() => save({ youtubeApiKey: youtubeKey }).then(() => setYoutubeKey(""))}
-            disabled={!youtubeKey.trim()}
+            onClick={() => save({ kakaoRestApiKey: kakaoKey }).then(() => setKakaoKey(""))}
+            disabled={!kakaoKey.trim()}
           >
             저장
           </button>
@@ -607,138 +602,126 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
-          Claude API — 영상 기획
-          <Help text="유아 채널의 기획안(캐릭터·대본·장면 프롬프트)만 만듭니다. 블로그 본문은 계속 Gemini 가 담당합니다.&#10;영상을 안 만들 거면 없어도 됩니다." />{" "}
-          {state?.claude && (
-            <Status
-              configured={state.claude.configured}
-              fromEnv={state.claude.fromEnv}
-              preview={state.claude.apiKeyPreview}
-            />
+          GitHub · velog — 개발 로그
+          <Help text="깃 커밋을 모아 velog 초안을 만들고 승인한 것만 올립니다.&#10;GitHub 토큰은 비공개 레포 커밋을 읽기 위한 것이고, velog 토큰은 발행에만 씁니다 (읽기는 토큰 없이 됩니다)." />{" "}
+          {state?.devlog && (
+            <>
+              <Status
+                configured={state.devlog.githubConfigured}
+                fromEnv={state.devlog.githubFromEnv}
+                preview={state.devlog.githubPreview}
+              />{" "}
+              <span className={`badge ${state.devlog.velogConfigured ? "on" : ""}`}>
+                {state.devlog.velogConfigured ? "velog 토큰 있음" : "velog 토큰 없음"}
+              </span>{" "}
+              {state.devlog.velogConfigured && !state.devlog.velogRefreshSet && (
+                <span className="badge off">refresh 없음 — 24시간 뒤 끊김</span>
+              )}
+            </>
           )}
         </h2>
-        <p className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
-          블로그 본문은 Gemini 가 그대로 담당합니다. Claude 는 유아 채널의 영상 기획·대본·장면
-          프롬프트에만 씁니다.
+        <p className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
+          <strong>GitHub</strong> — Settings → Developer settings → Personal access token (classic),{" "}
+          <span className="mono">repo</span> 스코프. <strong>velog</strong> — 크롬에서 velog.io 로그인 →
+          F12 → Application → Cookies → <span className="mono">access_token</span> 과{" "}
+          <span className="mono">refresh_token</span> 값 둘 다. access 는 24시간, refresh 는 30일짜리라
+          둘을 같이 보내면 velog 가 새 토큰을 돌려주고 여기 설정이 자동으로 갱신됩니다. 30일 안에
+          한 번도 발행이 없으면 다시 꺼내 넣어야 합니다. velog 는 공식 쓰기 API 가 없어 이 방식은
+          비공식입니다.
         </p>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
-            <label>API 키 (console.anthropic.com)</label>
+            <label>GitHub 토큰</label>
             <input
               type="password"
               className="mono"
-              placeholder="sk-ant-..."
-              value={anthropicKey}
-              onChange={(e) => setAnthropicKey(e.target.value)}
+              placeholder="ghp_..."
+              value={ghPat}
+              onChange={(e) => setGhPat(e.target.value)}
             />
           </div>
           <div className="field">
-            <label>모델</label>
-            <select value={claudeModel} onChange={(e) => setClaudeModel(e.target.value)}>
-              {/* 대본은 스키마가 고정된 유계 작업이라 Sonnet 으로 충분하다 */}
-              <option value="claude-sonnet-5">claude-sonnet-5 (권장 · 출력 $15/1M)</option>
-              <option value="claude-opus-5">claude-opus-5 (품질 · 출력 $25/1M)</option>
-              <option value="claude-haiku-4-5">claude-haiku-4-5 (최저가 · 출력 $5/1M)</option>
-            </select>
-          </div>
-          <button
-            className="primary"
-            onClick={() =>
-              save({ anthropicApiKey: anthropicKey, claudeModel }).then(() =>
-                setAnthropicKey(""),
-              )
-            }
-          >
-            저장
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <h2>
-          Veo — 영상 생성{" "}
-          {state?.veo && (
-            <span className={`badge ${state.veo.configured ? "on" : ""}`}>
-              {state.veo.configured ? "Gemini 키 사용" : "Gemini 키 필요"}
-            </span>
-          )}
-        </h2>
-        <div className="alert warn" style={{ marginBottom: 12 }}>
-          <strong>구글 플로우(flow.google)는 API 가 없습니다.</strong> 코드에서 부를 수 있는
-          건 같은 Veo 모델의 Gemini API 경로이고, 이쪽은 <strong>유료</strong>입니다
-          (초당 약 $0.15~0.40 → 8초 클립 $1.2~3.2). 무료로 하려면 Flow 웹에서 만들어
-          내려받아 <a href="/shorts">쇼츠</a> 화면의 소재 업로드로 넣으세요.
-        </div>
-        <p className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
-          별도 키가 없습니다 — 위 Gemini 키를 그대로 씁니다. 단 Veo 는 무료 티어에 없어서
-          <strong> 결제가 설정된 프로젝트의 키</strong>여야 합니다. 프리뷰 모델이라 이름이
-          자주 바뀌니 404 가 나면 다른 모델을 골라보세요.
-        </p>
-        <div className="row">
-          <div className="field" style={{ minWidth: 300 }}>
-            <label>모델</label>
-            <select value={veoModel} onChange={(e) => setVeoModel(e.target.value)}>
-              <option value="veo-3.1-lite-generate-preview">veo-3.1-lite (가장 저렴)</option>
-              <option value="veo-3.1-fast-generate-preview">veo-3.1-fast</option>
-              <option value="veo-3.1-generate-preview">veo-3.1 (표준 · 가장 비쌈)</option>
-            </select>
-          </div>
-          <button className="primary" onClick={() => save({ veoModel })}>
-            저장
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <h2>
-          Fish Audio — 내레이션 음성
-          <Help text="유아 채널 영상의 내레이션을 만듭니다. 무료 등급으로 시작해도 유료와 같은 모델입니다.&#10;fish.audio 에서 한국어 목소리를 골라두면 더 자연스럽습니다." />{" "}
-          {state?.fish && (
-            <Status
-              configured={state.fish.configured}
-              fromEnv={state.fish.fromEnv}
-              preview={state.fish.apiKeyPreview}
+            <label>GitHub 사용자</label>
+            <input
+              className="mono"
+              style={{ width: 130 }}
+              value={ghUser}
+              onChange={(e) => setGhUser(e.target.value)}
             />
-          )}
-          {state?.fish?.free && (
-            <span className="badge on" style={{ marginLeft: 5 }}>
-              무료 등급
-            </span>
-          )}
-        </h2>
-        <p className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
-          <a href="https://fish.audio" target="_blank" rel="noreferrer">
-            fish.audio
-          </a>{" "}
-          에서 발급합니다. <span className="mono">s2.1-pro-free</span> 는 유료와 같은 모델을
-          무료로 쓰고 하드 캡이 없습니다(Fair Use 정책 적용). 다만 무료 등급은{" "}
-          <strong>일부 상용 시나리오에 제약이 있을 수 있다</strong>고 공지돼 있어, 수익화
-          채널에 쓸 거라면 유료 모델로 바꾸는 편이 안전합니다.
-        </p>
-        <div className="row">
+          </div>
+          <div className="field">
+            <label>
+              velog 사용자
+              <Help text="velog 주소의 @ 뒤 핸들입니다. GitHub 과 같으면 비워두세요." />
+            </label>
+            <input
+              className="mono"
+              style={{ width: 130 }}
+              placeholder={ghUser || "y10b"}
+              value={velogUser}
+              onChange={(e) => setVelogUser(e.target.value)}
+            />
+          </div>
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
-            <label>API 키</label>
+            <label>velog access_token</label>
             <input
               type="password"
               className="mono"
-              value={fishKey}
-              onChange={(e) => setFishKey(e.target.value)}
+              value={velogToken}
+              onChange={(e) => setVelogToken(e.target.value)}
             />
           </div>
-          <div className="field" style={{ minWidth: 220 }}>
-            <label>모델</label>
-            <select value={fishModel} onChange={(e) => setFishModel(e.target.value)}>
-              <option value="s2.1-pro-free">s2.1-pro-free (무료)</option>
-              <option value="s2.1-pro">s2.1-pro (유료 · 상용 안전)</option>
-            </select>
+          <div className="field" style={{ flex: 1, minWidth: 260 }}>
+            <label>velog refresh_token</label>
+            <input
+              type="password"
+              className="mono"
+              value={velogRefresh}
+              onChange={(e) => setVelogRefresh(e.target.value)}
+            />
           </div>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <div className="field" style={{ flex: 1, minWidth: 260 }}>
+            <label>
+              수집하지 않을 소유자
+              <Help text="회사 코드가 공개 블로그로 새는 걸 막는 마지막 방어선입니다. 조직·사용자 이름을 쉼표로 구분해 넣으면 그 레포는 커밋 조회조차 하지 않습니다." />
+            </label>
+            <input
+              className="mono"
+              placeholder="bambitcorporation, another-org"
+              value={blocked}
+              onChange={(e) => setBlocked(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
           <button
             className="primary"
             onClick={() =>
-              save({ fishApiKey: fishKey, fishModel }).then(() => setFishKey(""))
+              save({
+                githubPat: ghPat,
+                githubUser: ghUser,
+                velogUser,
+                velogToken,
+                velogRefreshToken: velogRefresh,
+                devlogBlockedOwners: blocked,
+              }).then(() => {
+                setGhPat("");
+                setVelogToken("");
+                setVelogRefresh("");
+              })
+            }
+            disabled={
+              !ghPat.trim() && !ghUser.trim() && !velogUser.trim() && !velogToken.trim() && !velogRefresh.trim() && !blocked.trim()
             }
           >
             저장
+          </button>
+          <TestButton target="github" />
+          <TestButton target="velog" />
+          <button className="ghost" onClick={() => save({ clearDevlog: true })}>
+            토큰 삭제
           </button>
         </div>
       </div>

@@ -103,3 +103,26 @@ export function safeNextPath(input: string | null | undefined): string {
   if (!input || !input.startsWith("/") || input.startsWith("//")) return "/";
   return input;
 }
+
+/**
+ * 크론 경로 인증. 미들웨어가 `/api/cron/*` 을 세션 없이 통과시키므로 여기서 막는다.
+ *
+ * 배포 환경에서 CRON_SECRET 이 비어 있으면 열어두지 않고 거부한다(fail-closed) —
+ * 이 경로는 발행과 모델 호출까지 하므로 "시크릿을 깜빡했는데 누구나 실행" 은 안 된다.
+ * 로컬(개발)에서는 시크릿 없이 통과시켜 손으로 돌려볼 수 있게 한다.
+ */
+export function cronDenied(req: Request): Response | null {
+  const secret = process.env.CRON_SECRET ?? "";
+  if (!secret) {
+    if (process.env.NODE_ENV !== "production") return null;
+    return Response.json(
+      { ok: false, error: "CRON_SECRET 이 설정되지 않아 크론 경로를 닫아 둡니다." },
+      { status: 401 },
+    );
+  }
+  const header = req.headers.get("authorization") ?? "";
+  if (!timingSafeEqual(header, `Bearer ${secret}`)) {
+    return Response.json({ ok: false, error: "인증이 필요합니다." }, { status: 401 });
+  }
+  return null;
+}

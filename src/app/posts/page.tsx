@@ -77,7 +77,7 @@ export default function PostsPage() {
           </div>
         ) : posts.length === 0 ? (
           <div className="empty">
-            아직 저장된 글이 없습니다. <Link href="/">키워드 탐색</Link>부터 시작하세요.
+            아직 저장된 글이 없습니다. <Link href="/keywords">키워드 탐색</Link>부터 시작하세요.
           </div>
         ) : (
           <table>

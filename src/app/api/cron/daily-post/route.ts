@@ -3,6 +3,7 @@ import { pickSubKeyword, researchKeywords } from "@/lib/research";
 import { geminiKeys, generateDraft, suggestSubKeywords } from "@/lib/gemini";
 import { insertDraft, listPosts } from "@/lib/db";
 import { seedForDate } from "@/lib/seeds";
+import { cronDenied } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,23 +21,13 @@ export const maxDuration = 300;
  * (검색량 · 입찰가)만으로 고른다.
  */
 
-function unauthorized() {
-  return NextResponse.json(
-    { ok: false, error: "인증이 필요합니다." },
-    { status: 401 },
-  );
-}
-
 export async function POST(req: Request) {
   /*
    * 미들웨어가 세션 쿠키로 막지만, 자동화는 브라우저가 아니라 쿠키를 못 만든다.
    * 그래서 이 경로만 별도 시크릿으로 연다. 없으면(로컬) 그냥 통과시킨다.
    */
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const header = req.headers.get("authorization") ?? "";
-    if (header !== `Bearer ${secret}`) return unauthorized();
-  }
+  const denied = cronDenied(req);
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
   const seed = String(body.seed ?? "").trim() || seedForDate(new Date());
