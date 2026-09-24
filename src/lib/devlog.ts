@@ -266,7 +266,7 @@ type CommitDetail = {
  * 커밋들을 diff 까지 읽어 모델에 줄 재료 문자열로 만든다.
  * 예전 행(commits 가 빈 것)은 날짜 범위로 다시 조회해 SHA 를 채운다.
  */
-async function gatherMaterials(repo: string, group: DevLog[], token: string, user: string): Promise<string> {
+export async function gatherMaterials(repo: string, group: DevLog[], token: string, user: string): Promise<string> {
   let refs = group.flatMap((r) => r.commits ?? []);
   if (!refs.length) {
     for (const r of group) {
@@ -400,10 +400,13 @@ export async function draft(): Promise<DraftResult> {
   const dates = group.map((r) => r.date).sort();
   const fromPrivate = group.some((r) => r.private);
 
-  // diff 까지 읽는다. 토큰이 없으면(설정 누락) 제목만으로 간다
-  const materials = token
-    ? await gatherMaterials(repo, group, token, user)
-    : messages.map((m) => `- ${m}`).join("\n");
+  // diff 까지 읽는다. 토큰이 없거나 레포가 사라져 못 읽으면 제목만으로 간다
+  let materials = token ? await gatherMaterials(repo, group, token, user) : "";
+  if (!materials.trim()) {
+    materials =
+      "(레포에서 diff 를 읽지 못했다. 아래는 커밋 제목뿐이다 — 코드 블록은 만들지 말고 확인 필요로 남겨라)\n" +
+      messages.map((m) => `- ${m}`).join("\n");
+  }
 
   let ai: string | null = null;
   let aiError: string | undefined;
@@ -431,7 +434,10 @@ export async function draft(): Promise<DraftResult> {
   }
 
   const short = repo.split("/")[1];
-  const title = ai?.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? `${short} — ${topics.join(" · ") || "작업"} 기록`;
+  const fallbackTitle = `${short} — ${topics.join(" · ") || "작업"} 기록`;
+  const found = ai?.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? "";
+  // 모델이 제목 자리에 TODO 나 인용 표시를 넣으면 제목으로 못 쓴다
+  const title = found && !/^(>|TODO|\[)/.test(found) ? found : fallbackTitle;
   const body = (ai ?? skeleton(title, messages)).replace(/^#\s+.+\n+/, "");
 
   const id = await insertVelogPost({
