@@ -52,7 +52,12 @@ export async function searchPlaces(query: string, size = 5): Promise<Place[]> {
   }
   if (!query.trim()) return [];
 
-  const url = `${SEARCH_URL}?query=${encodeURIComponent(query.trim())}&size=${size}&category_group_code=FD6,CE7`;
+  /*
+   * category_group_code 는 코드 하나만 받는다. "FD6,CE7" 처럼 이어 보내면 400
+   * (Request validation is failed) 이다 — 실제로 배포본에서 그렇게 터졌다.
+   * 그래서 필터 없이 넉넉히 받아 음식점(FD6)·카페(CE7)만 남긴다. 둘 다 없으면 전부 돌려준다.
+   */
+  const url = `${SEARCH_URL}?query=${encodeURIComponent(query.trim())}&size=${Math.min(15, size * 3)}`;
   const res = await fetch(url, {
     headers: { Authorization: `KakaoAK ${key}` },
   });
@@ -67,7 +72,9 @@ export async function searchPlaces(query: string, size = 5): Promise<Place[]> {
     throw new Error("카카오 응답을 JSON 으로 해석하지 못했습니다.");
   }
 
-  return (json.documents ?? []).map(
+  const docs: any[] = json.documents ?? [];
+  const eatery = docs.filter((d) => d.category_group_code === "FD6" || d.category_group_code === "CE7");
+  return (eatery.length ? eatery : docs).slice(0, size).map(
     (d: any): Place => ({
       name: String(d.place_name ?? ""),
       address: String(d.road_address_name || d.address_name || ""),
