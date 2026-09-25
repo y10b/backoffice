@@ -266,7 +266,14 @@ export type PoolInput = Pick<
   | "word_count"
 >;
 
-export type PoolSort = "searches" | "absorption" | "bid" | "seen" | "long";
+/**
+ * value: 월 검색 × 단가 큰 순, 광고 흡수율 2% 미만만. "찾는 사람이 많고(검색) 광고주가 돈을 내는
+ * 주제(단가)인데 광고가 클릭을 덜 가져가는(흡수율)" 키워드 — 정보성 글로 애드센스 수익이 나는 쪽이다.
+ */
+export type PoolSort = "searches" | "absorption" | "bid" | "seen" | "long" | "value";
+
+/** value 정렬의 흡수율 상한(%) */
+export const VALUE_MAX_ABSORPTION = 2;
 
 /** KST 기준 YYYY-MM-DD. offsetDays 만큼 앞뒤로 민다 */
 export function kstDate(offsetDays = 0): string {
@@ -374,8 +381,20 @@ export async function listKeywordPool(
     case "long":
       q = q.order("word_count", desc).order("searches", desc);
       break;
+    case "value":
+      // 곱으로는 DB 에서 정렬할 수 없어(계산 컬럼 없음) 흡수율로 거른 뒤 아래에서 JS 로 정렬한다
+      q = q.lt("ad_absorption", VALUE_MAX_ABSORPTION).order("searches", desc);
+      break;
     default:
       q = q.order("searches", desc);
+  }
+
+  if (sort === "value") {
+    // 정렬 전에 자르면 곱이 큰 키워드가 빠진다. 흡수율로 거른 것을 넉넉히 받아 정렬 뒤 자른다
+    const { data, error } = await q.limit(2000);
+    if (error) throw new Error(`키워드 풀 조회 실패: ${error.message}`);
+    const value = (r: PoolRow) => Number(r.searches ?? 0) * Number(r.bid ?? 0);
+    return ((data ?? []) as PoolRow[]).sort((a, b) => value(b) - value(a)).slice(0, limit);
   }
 
   const { data, error } = await q.limit(limit);

@@ -226,6 +226,11 @@ export type GenerateOptions = {
   targetChars?: number;
   outline?: string;
   /**
+   * 사람이 글감 큐(post_queue)에 적어 둔 메모. "신고 방법 + 경비율", "표 정리" 처럼 이 글에서
+   * 꼭 챙길 각도다. outline(다룰 내용 목록)과 달리 짧은 방향 지시라 따로 받는다.
+   */
+  extraInstruction?: string;
+  /**
    * 본문 생성 전에 구글 검색 그라운딩으로 최신 사실을 먼저 조사할지.
    * 재테크·보험·정부지원금처럼 매년 수치가 바뀌는 주제가 주력이라 기본값은 켬이다.
    */
@@ -344,6 +349,7 @@ export function buildResearchPrompt(o: GenerateOptions): string {
     "아래 주제로 한국어 블로그 글을 쓰려 합니다. 구글 검색으로 최신 사실만 조사하세요. 글은 쓰지 마세요.",
     `주제: ${o.mainKeyword} / ${o.subKeyword}`,
     o.outline?.trim() ? `다룰 내용: ${o.outline.trim()}` : "",
+    o.extraInstruction?.trim() ? `글의 방향: ${o.extraInstruction.trim()}` : "",
     "",
     `- ${year}년 기준으로 바뀐 수치·요건·날짜·금액(한도, 요율, 신청 기간, 지원 대상, 가격)을 우선 확인할 것.`,
     "- 항목마다 '몇 년 기준'인지 함께 적을 것.",
@@ -457,6 +463,7 @@ export function buildPrompt(
     `## 메인 키워드\n${o.mainKeyword}`,
     `## 서브 키워드\n${o.subKeyword}`,
     outline ? `## 반드시 다룰 내용\n${outline}` : "",
+    o.extraInstruction?.trim() ? `## 이 글에서 특히 챙길 것 (작성자 메모)\n${o.extraInstruction.trim()}` : "",
     // 모델의 학습 시점 지식보다 방금 검색한 사실이 항상 최신이므로 우선순위를 명시한다.
     research?.text
       ? `## 조사된 최신 정보 (이 내용을 우선하라)\n${research.text}\n\n- 위 조사 결과가 당신의 기억과 다르면 **조사 결과를 따를 것**.\n- 위 조사 결과에 **없는** 수치·날짜·금액·요건은 지어내지 말 것. 필요하면 '확인이 필요하다'로 쓸 것.\n- '확인되지 않음'으로 표시된 항목은 확정된 것처럼 쓰지 말 것.`

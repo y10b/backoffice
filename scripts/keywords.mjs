@@ -20,7 +20,7 @@ try {
   else {
     const partial = r.errors.length ? ` · 실패 묶음 ${r.errors.length}` : "";
     console.log(
-      `- 시드 ${r.seeds.length} · 키워드 ${r.fetched} · 새로 ${r.inserted} · 갱신 ${r.updated}${partial}`,
+      `- 시드 ${r.seeds.length} (유입 신호 ${r.signalSeeds}) · 키워드 ${r.fetched} · 새로 ${r.inserted} · 갱신 ${r.updated}${partial}`,
     );
   }
   // 일부 묶음만 실패해도 액션을 빨갛게 만든다. 저장된 것은 그대로 둔다

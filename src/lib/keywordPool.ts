@@ -18,7 +18,11 @@
  * - 문서수·추세는 조회하지 않는다. 수백 개 키워드에 대해 매일 부르면 검색 API 한도를 먹고,
  *   고를 때 필요한 건 검색량·단가·흡수율뿐이다.
  * - 검색광고 호출 사이 1초 쉰다. 연달아 부르면 429 가 난다.
+ * - 시드에 유입 신호(topicSignals) 상위 5개 검색어를 더한다. 사람이 정한 시드만 돌면 풀이
+ *   처음 짐작한 주제 안에서만 맴돈다. 실제로 노출이 생기는 검색어를 시드로 넣어야 풀이 그쪽으로
+ *   넓어진다. 서치콘솔 표가 없거나 비어도(수집 전) 기본 시드로 그냥 돈다.
  */
+const SIGNAL_SEEDS = 5;
 import { researchKeywords } from "./research";
 import {
   listKeywordPool as dbListKeywordPool,
@@ -28,6 +32,7 @@ import {
   type PoolSort,
 } from "./db";
 import { seedPool } from "./seeds";
+import { topicSignals } from "./insights";
 
 export type { PoolRow, PoolSort };
 
@@ -76,6 +81,8 @@ function attributeSeed(keyword: string, seeds: string[]): string {
 
 export type CollectResult = {
   seeds: string[];
+  /** seeds 중 유입 신호에서 더한 것의 개수 */
+  signalSeeds: number;
   /** 조회로 받은 키워드 수 (묶음 사이 중복 제거 후) */
   fetched: number;
   inserted: number;
@@ -87,8 +94,24 @@ export type CollectResult = {
 export async function collectKeywords(
   opts: { seeds?: string[] } = {},
 ): Promise<CollectResult> {
-  const seeds = opts.seeds?.length ? opts.seeds : await seedPool();
+  const seeds = opts.seeds?.length ? [...opts.seeds] : await seedPool();
   if (!seeds.length) throw new Error("시드가 비어 있습니다.");
+
+  let signalSeeds = 0;
+  if (!opts.seeds?.length) {
+    try {
+      const have = new Set(seeds.map((x) => x.replace(/\s+/g, "")));
+      for (const q of await topicSignals({ limit: SIGNAL_SEEDS })) {
+        const b = q.query.replace(/\s+/g, "");
+        if (!b || have.has(b)) continue;
+        have.add(b);
+        seeds.push(q.query);
+        signalSeeds += 1;
+      }
+    } catch {
+      // 신호가 없어도 기본 시드로 수집은 돈다
+    }
+  }
 
   const rows: PoolInput[] = [];
   const seen = new Set<string>();
@@ -134,7 +157,7 @@ export async function collectKeywords(
   if (errors.length === chunks.length) throw new Error(errors[0]);
 
   const { inserted, updated } = await upsertKeywordPool(rows);
-  return { seeds, fetched: rows.length, inserted, updated, errors };
+  return { seeds, signalSeeds, fetched: rows.length, inserted, updated, errors };
 }
 
 export async function listKeywordPool(

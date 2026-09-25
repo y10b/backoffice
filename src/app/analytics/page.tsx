@@ -311,6 +311,96 @@ function attachKeywords(rows: PerfRow[], posts: PostLike[]): PerfRow[] {
   });
 }
 
+/** 유입 경로를 사람이 읽는 이름으로 바꾼다. 같은 이름은 화면에서 하나로 합친다 */
+function sourceLabel(sourceRaw: string, mediumRaw: string): string {
+  const source = (sourceRaw ?? "").trim().toLowerCase();
+  const medium = (mediumRaw ?? "").trim().toLowerCase();
+  const organic = medium === "organic";
+
+  if (source === "(direct)" || (source === "" && (medium === "(none)" || medium === ""))) {
+    return "직접 방문";
+  }
+  // gemini.google.com 은 구글 검색이 아니라 AI 답변이라 구글보다 먼저 본다
+  if (source.includes("gemini")) return "Gemini";
+  if (source.includes("chatgpt") || source.includes("openai")) return "ChatGPT";
+  if (source.includes("perplexity")) return "Perplexity";
+  if (source.includes("naver")) {
+    if (organic || source.includes("search.naver")) return "네이버 검색";
+    if (source.includes("blog.naver")) return "네이버 블로그";
+    if (source.includes("cafe.naver")) return "네이버 카페";
+    return "네이버 (기타)";
+  }
+  if (source.includes("google")) {
+    if (organic) return "구글 검색";
+    if (medium === "cpc") return "구글 광고";
+    return "구글 (기타)";
+  }
+  if (source.includes("daum") || source.includes("kakao")) {
+    if (organic || source.includes("search.daum")) return "다음 검색";
+    return source.includes("kakao") ? "카카오" : "다음 (기타)";
+  }
+  if (source.includes("bing")) return "빙 검색";
+  if (source.includes("yahoo")) return "야후 검색";
+  if (source.includes("tistory")) return "티스토리";
+  if (source.includes("threads")) return "쓰레드";
+  if (source.includes("instagram")) return "인스타그램";
+  if (source.includes("facebook")) return "페이스북";
+  if (source === "t.co" || source.includes("twitter") || source === "x.com") return "X (트위터)";
+  if (source.includes("velog")) return "velog";
+  return medium && medium !== "(none)" ? `${sourceRaw} / ${mediumRaw}` : sourceRaw || "(알 수 없음)";
+}
+
+type SourceLike = { source: string; medium: string; sessions: number; views: number };
+
+type SourceGroup = {
+  label: string;
+  sessions: number;
+  views: number;
+  /** 합쳐진 원본 source / medium — 보조 줄에 보여준다 */
+  raw: string[];
+};
+
+/** 같은 이름으로 묶고 세션 많은 순으로 */
+function groupSources(rows: SourceLike[]): SourceGroup[] {
+  const map = new Map<string, SourceGroup>();
+  for (const r of rows) {
+    const label = sourceLabel(r.source, r.medium);
+    let hit = map.get(label);
+    if (!hit) {
+      hit = { label, sessions: 0, views: 0, raw: [] };
+      map.set(label, hit);
+    }
+    hit.sessions += r.sessions ?? 0;
+    hit.views += r.views ?? 0;
+    hit.raw.push(`${r.source} / ${r.medium}`);
+  }
+  return [...map.values()].sort((a, b) => b.sessions - a.sessions || b.views - a.views);
+}
+
+/** GA4 이벤트 이름 → 한국어. 모르는 이름은 그대로 둔다 */
+const EVENT_LABELS: Record<string, string> = {
+  calculator_use: "계산기 사용",
+  scroll: "끝까지 스크롤",
+  page_view: "페이지 조회",
+  session_start: "세션 시작",
+  first_visit: "첫 방문",
+  user_engagement: "참여(10초 이상 머묾)",
+  click: "외부 링크 클릭",
+  file_download: "파일 다운로드",
+  view_search_results: "블로그 안 검색",
+  form_start: "입력 시작",
+  form_submit: "입력 제출",
+  video_start: "동영상 재생",
+  video_progress: "동영상 진행",
+  video_complete: "동영상 끝까지 봄",
+  copy: "복사",
+  share: "공유",
+};
+
+function eventLabel(name: string): string {
+  return EVENT_LABELS[name] ?? name;
+}
+
 /* ================================================================== *
  * PURE:END
  * ================================================================== */
@@ -576,6 +666,635 @@ function TrendChart({
 }
 
 /* ------------------------------------------------------------------ *
+ * 검색 유입 (서치콘솔 + GA4 유입 경로·이벤트) — /api/insights
+ * ------------------------------------------------------------------ */
+
+type InsightDaily = { date: string; clicks: number; impressions: number; sessions: number; views: number };
+type InsightQuery = {
+  query: string;
+  clicks: number;
+  impressions: number;
+  /** 0~1 */
+  ctr: number;
+  /** 평균 순위. 작을수록 좋다 */
+  position: number;
+  pages: string[];
+};
+type InsightOpportunity = {
+  query: string;
+  impressions: number;
+  clicks: number;
+  position: number;
+  pages: string[];
+};
+type InsightPage = {
+  path: string;
+  title?: string;
+  views: number;
+  sessions: number;
+  clicks: number;
+  impressions: number;
+  position: number | null;
+};
+type Insights = {
+  ok: boolean;
+  error?: string;
+  lastDate: string | null;
+  totals: { clicks: number; impressions: number; sessions: number; views: number };
+  daily: InsightDaily[];
+  queries: InsightQuery[];
+  opportunities: InsightOpportunity[];
+  sources: SourceLike[];
+  pages: InsightPage[];
+  events: { name: string; count: number }[];
+};
+
+type QueueItem = { keyword: string; note?: string; done?: boolean; postId?: number };
+
+const INSIGHT_EMPTY =
+  "아직 데이터가 없습니다. 매일 아침 9시 30분에 어제까지의 데이터가 쌓입니다. 서치콘솔은 2~3일 늦게 들어옵니다.";
+
+function rank(position: number | null | undefined, digits = 1): string {
+  if (position === null || position === undefined || !Number.isFinite(position) || position <= 0) return "—";
+  return `${position.toFixed(digits)}위`;
+}
+
+function pct(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  return `${(v * 100).toFixed(1)}%`;
+}
+
+/** 검색어가 걸린 페이지를 짧게. 여러 개면 첫 번째 + 외 N */
+function pagesText(pages: string[] | undefined): string {
+  const list = (pages ?? []).filter(Boolean);
+  if (!list.length) return "";
+  const first = normalizePath(list[0]);
+  return list.length > 1 ? `${first} 외 ${list.length - 1}` : first;
+}
+
+/** 싱크 결과 조각은 숫자·문자열·{start,end} 무엇이 와도 한 줄로 */
+function syncPart(v: unknown): string {
+  if (typeof v === "number") return v.toLocaleString();
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    if ("start" in o || "end" in o) return `${String(o.start ?? "?")} ~ ${String(o.end ?? "?")}`;
+    if ("startDate" in o || "endDate" in o)
+      return `${String(o.startDate ?? "?")} ~ ${String(o.endDate ?? "?")}`;
+    if (typeof o.rows === "number") return o.rows.toLocaleString();
+    if (typeof o.count === "number") return o.count.toLocaleString();
+  }
+  return v === undefined || v === null ? "—" : JSON.stringify(v);
+}
+
+const MINI_W = 600;
+const MINI_H = 120;
+
+/**
+ * 노출·세션 두 줄. 단위가 달라 각자 기간 최대값을 100% 로 놓는다(아래 성과 그래프와 같은 규칙).
+ * preserveAspectRatio="none" 으로 카드 폭에 맞춰 늘리고, 글자는 SVG 밖(HTML)에 둬서
+ * 폰에서 글자가 깨알처럼 줄어들지 않게 한다.
+ */
+function MiniTrend({ points }: { points: InsightDaily[] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const maxImpr = Math.max(1, ...points.map((p) => p.impressions ?? 0));
+  const maxSess = Math.max(1, ...points.map((p) => p.sessions ?? 0));
+  const toX = (i: number) => (points.length < 2 ? MINI_W / 2 : (i / (points.length - 1)) * MINI_W);
+  const toY = (v: number, max: number) => 4 + (MINI_H - 8) * (1 - v / max);
+  const line = (pick: (p: InsightDaily) => number, max: number) =>
+    points.map((p, i) => `${toX(i).toFixed(1)},${toY(pick(p) ?? 0, max).toFixed(1)}`).join(" ");
+
+  function onPointer(e: React.PointerEvent<SVGSVGElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (!rect.width) return;
+    const ratio = (e.clientX - rect.left) / rect.width;
+    const i = Math.round(ratio * (points.length - 1));
+    setHover(Math.min(points.length - 1, Math.max(0, i)));
+  }
+
+  const active = hover !== null ? points[hover] : null;
+  const activeRatio = hover !== null ? toX(hover) / MINI_W : 0;
+  const mid = points[Math.floor((points.length - 1) / 2)];
+
+  return (
+    <>
+      <div className="legend">
+        <span>
+          <i style={{ borderColor: "var(--chart-impressions)" }} />
+          검색 노출 <span className="dim">(최대 {maxImpr.toLocaleString()})</span>
+        </span>
+        <span>
+          <i style={{ borderColor: "var(--chart-views)" }} />
+          방문(세션) <span className="dim">(최대 {maxSess.toLocaleString()})</span>
+        </span>
+      </div>
+      <div className="mini-chart">
+        <svg
+          viewBox={`0 0 ${MINI_W} ${MINI_H}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label="일별 검색 노출과 방문 추이"
+          onPointerMove={onPointer}
+          onPointerDown={onPointer}
+          onPointerLeave={() => setHover(null)}
+        >
+          {[0, 0.5, 1].map((f) => (
+            <line
+              key={f}
+              x1={0}
+              x2={MINI_W}
+              y1={toY(f, 1)}
+              y2={toY(f, 1)}
+              stroke="var(--border)"
+              strokeWidth="1"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+          {hover !== null && (
+            <line
+              x1={toX(hover)}
+              x2={toX(hover)}
+              y1={0}
+              y2={MINI_H}
+              stroke="var(--text-dim)"
+              strokeWidth="1"
+              strokeDasharray="3 3"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+          <polyline
+            points={line((p) => p.impressions, maxImpr)}
+            fill="none"
+            stroke="var(--chart-impressions)"
+            strokeWidth="2"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+          <polyline
+            points={line((p) => p.sessions, maxSess)}
+            fill="none"
+            stroke="var(--chart-views)"
+            strokeWidth="2"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+        {active && (
+          <div
+            className="chart-tip"
+            style={{
+              left: `${(activeRatio * 100).toFixed(2)}%`,
+              transform: activeRatio > 0.6 ? "translateX(calc(-100% - 10px))" : "translateX(10px)",
+            }}
+          >
+            <div className="dim">{active.date}</div>
+            <div>
+              노출 <b>{num(active.impressions ?? 0)}</b>
+              <span className="dim"> · 클릭 {num(active.clicks ?? 0)}</span>
+            </div>
+            <div>
+              세션 <b>{num(active.sessions ?? 0)}</b>
+              <span className="dim"> · 조회 {num(active.views ?? 0)}</span>
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="mini-chart-axis">
+        <span>{shortDate(points[0].date)}</span>
+        {points.length > 2 && <span>{shortDate(mid.date)}</span>}
+        <span>{shortDate(points[points.length - 1].date)}</span>
+      </div>
+    </>
+  );
+}
+
+function SearchInsights() {
+  const [days, setDays] = useState(28);
+  const [data, setData] = useState<Insights | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState<{ ok: boolean; text: string } | null>(null);
+  /** 검색어별 큐 추가 상태 */
+  const [queued, setQueued] = useState<Record<string, "adding" | "added" | "exists" | "fail">>({});
+
+  useEffect(() => {
+    const ac = new AbortController();
+    setLoading(true);
+    setError("");
+    fetch(`/api/insights?days=${days}`, { signal: ac.signal })
+      .then((r) => r.json())
+      .then((d: Insights) => {
+        if (ac.signal.aborted) return;
+        if (d.ok === false) setError(d.error ?? "불러오지 못했습니다.");
+        setData(d);
+      })
+      .catch((e) => {
+        if (!ac.signal.aborted) setError((e as Error).message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setLoading(false);
+      });
+    return () => ac.abort();
+  }, [days, reload]);
+
+  async function syncNow() {
+    setSyncing(true);
+    setSyncNote(null);
+    try {
+      const res = await fetch("/api/insights/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ days }),
+      });
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error ?? "수집에 실패했습니다.");
+      const r = (d.result ?? {}) as Record<string, unknown>;
+      const errs = Array.isArray(r.errors) ? (r.errors as unknown[]) : [];
+      const parts = [
+        `검색 ${syncPart(r.search)}`,
+        `유입 ${syncPart(r.traffic)}`,
+        `이벤트 ${syncPart(r.events)}`,
+      ];
+      if (r.range !== undefined) parts.push(`기간 ${syncPart(r.range)}`);
+      setSyncNote({
+        ok: errs.length === 0,
+        text:
+          parts.join(" · ") +
+          (errs.length
+            ? ` — 실패 ${errs.length}건: ${typeof errs[0] === "string" ? errs[0] : JSON.stringify(errs[0])}`
+            : ""),
+      });
+      setReload((n) => n + 1);
+    } catch (e) {
+      setSyncNote({ ok: false, text: (e as Error).message });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function addToQueue(o: InsightOpportunity) {
+    setQueued((q) => ({ ...q, [o.query]: "adding" }));
+    try {
+      const cur = await (await fetch("/api/queue")).json();
+      if (cur.ok === false) throw new Error(cur.error);
+      const list: QueueItem[] = Array.isArray(cur.queue) ? cur.queue : [];
+      if (list.some((q) => q.keyword === o.query && !q.done)) {
+        setQueued((q) => ({ ...q, [o.query]: "exists" }));
+        return;
+      }
+      const next: QueueItem[] = [
+        ...list,
+        {
+          keyword: o.query,
+          note: `기회 검색어 · ${rank(o.position)} · 노출 ${num(o.impressions)}`,
+        },
+      ];
+      const res = await fetch("/api/queue", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ queue: next }),
+      });
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error);
+      setQueued((q) => ({ ...q, [o.query]: "added" }));
+    } catch {
+      setQueued((q) => ({ ...q, [o.query]: "fail" }));
+    }
+  }
+
+  const queries = useMemo(
+    () => [...(data?.queries ?? [])].sort((a, b) => b.impressions - a.impressions).slice(0, 50),
+    [data],
+  );
+  const opportunities = useMemo(
+    () => [...(data?.opportunities ?? [])].sort((a, b) => b.impressions - a.impressions),
+    [data],
+  );
+  const sources = useMemo(() => groupSources(data?.sources ?? []), [data]);
+  const sourceTotal = sources.reduce((a, s) => a + s.sessions, 0);
+  const sourceMax = Math.max(1, ...sources.map((s) => s.sessions));
+  const pages = useMemo(
+    () => [...(data?.pages ?? [])].sort((a, b) => b.views - a.views || b.clicks - a.clicks),
+    [data],
+  );
+  const events = useMemo(
+    () => [...(data?.events ?? [])].sort((a, b) => b.count - a.count),
+    [data],
+  );
+  const daily = data?.daily ?? [];
+
+  const empty =
+    !!data &&
+    !daily.length &&
+    !queries.length &&
+    !opportunities.length &&
+    !sources.length &&
+    !pages.length &&
+    !events.length;
+
+  const t = data?.totals;
+
+  return (
+    <>
+      <div className="card">
+        <h2>
+          검색 유입 {loading && <span className="spinner" />}
+          <Help text="구글 서치콘솔의 검색어·노출·순위와 GA4 의 유입 경로·이벤트를 매일 저장해 둔 것입니다. 네이버 검색 노출 수는 여기 없고, 네이버에서 들어온 방문만 '유입 경로'에 보입니다." />
+        </h2>
+        <div className="insight-controls">
+          <div className="segment" role="tablist" aria-label="기간">
+            {RANGES.map((d) => (
+              <button
+                key={d}
+                role="tab"
+                aria-selected={d === days}
+                className={d === days ? "on" : ""}
+                onClick={() => setDays(d)}
+              >
+                {d}일
+              </button>
+            ))}
+          </div>
+          <span className="dim insight-last">
+            마지막 데이터 {data?.lastDate ? <span className="mono">{data.lastDate}</span> : "—"}
+          </span>
+          <button className="small" onClick={syncNow} disabled={syncing}>
+            {syncing && <span className="spinner" />}
+            {syncing ? "수집 중… (몇 분 걸림)" : "지금 수집"}
+          </button>
+        </div>
+
+        {syncNote && (
+          <div className={`alert ${syncNote.ok ? "ok" : "error"}`}>{syncNote.text}</div>
+        )}
+        {error && <div className="alert error">{error}</div>}
+
+        <div className="stats">
+          <div className="stat">
+            <div className="k">검색 노출</div>
+            <div className="v">{t ? num(t.impressions) : "—"}</div>
+            <div className="s">구글 검색 결과에 뜬 횟수</div>
+          </div>
+          <div className="stat">
+            <div className="k">검색 클릭</div>
+            <div className="v">{t ? num(t.clicks) : "—"}</div>
+            <div className="s">
+              CTR {t && t.impressions > 0 ? pct(t.clicks / t.impressions) : "—"}
+            </div>
+          </div>
+          <div className="stat">
+            <div className="k">방문(세션)</div>
+            <div className="v">{t ? num(t.sessions) : "—"}</div>
+            <div className="s">모든 경로 합계</div>
+          </div>
+          <div className="stat">
+            <div className="k">조회수</div>
+            <div className="v">{t ? num(t.views) : "—"}</div>
+            <div className="s">GA4 페이지뷰</div>
+          </div>
+        </div>
+
+        {empty && <div className="empty">{INSIGHT_EMPTY}</div>}
+
+        {daily.length >= 2 && (
+          <div style={{ marginTop: 16 }}>
+            <MiniTrend points={daily} />
+          </div>
+        )}
+      </div>
+
+      {!empty && data && (
+        <>
+          <div className="card">
+            <h2>
+              기회 검색어{" "}
+              {opportunities.length > 0 && (
+                <span className="badge accent">{opportunities.length}</span>
+              )}
+            </h2>
+            <p className="hint" style={{ marginTop: 0, marginBottom: 4 }}>
+              구글에 이미 노출되지만 1페이지 아래에 있는 검색어입니다. 이 검색어로 글을
+              보강하거나 새로 쓰면 가장 빨리 유입이 늘어납니다.
+            </p>
+            {opportunities.length === 0 ? (
+              <div className="empty">지금은 5~30위 사이에 걸린 검색어가 없습니다.</div>
+            ) : (
+              opportunities.map((o) => {
+                const st = queued[o.query];
+                const where = pagesText(o.pages);
+                return (
+                  <div key={o.query} className="list-item entry">
+                    <div className="entry-main">
+                      <div className="entry-line">
+                        <span className="entry-title">{o.query}</span>
+                        <span className="badge accent">{rank(o.position, 0)}</span>
+                      </div>
+                      <div className="entry-sub">
+                        노출 {num(o.impressions)} · 클릭 {num(o.clicks)}
+                        {where && (
+                          <>
+                            {" · "}
+                            <span className="mono">{where}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div className="entry-side">
+                      <button
+                        className={`small ${st === "added" || st === "exists" ? "ghost" : ""}`}
+                        onClick={() => addToQueue(o)}
+                        disabled={st === "adding" || st === "added" || st === "exists"}
+                      >
+                        {st === "adding" && <span className="spinner" />}
+                        {st === "added"
+                          ? "큐에 넣음"
+                          : st === "exists"
+                            ? "이미 큐에 있음"
+                            : st === "fail"
+                              ? "실패 · 다시"
+                              : "글감 큐에 추가"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="card">
+            <h2>
+              검색어 <span className="dim">· 노출 많은 순 상위 {queries.length}</span>
+              <Help text="CTR 은 노출 대비 클릭 비율, 순위는 기간 평균입니다. 순위는 좋은데 CTR 이 낮으면 제목·설명을 손볼 차례입니다." />
+            </h2>
+            {queries.length === 0 ? (
+              <div className="empty">서치콘솔 검색어가 아직 없습니다. 2~3일 늦게 들어옵니다.</div>
+            ) : (
+              <>
+                <div className="narrow-only">
+                  {queries.map((q) => (
+                    <div key={q.query} className="list-item">
+                      <div className="entry-line">
+                        <span className="entry-title">{q.query}</span>
+                        <span className="entry-num">{num(q.impressions)}</span>
+                      </div>
+                      <div className="entry-sub">
+                        클릭 {num(q.clicks)} · CTR {pct(q.ctr)} · {rank(q.position)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="wide-only">
+                  <div className="table-wrap compact">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>검색어</th>
+                          <th className="num" style={{ width: 90 }}>노출</th>
+                          <th className="num" style={{ width: 80 }}>클릭</th>
+                          <th className="num" style={{ width: 80 }}>CTR</th>
+                          <th className="num" style={{ width: 80 }}>순위</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {queries.map((q) => (
+                          <tr key={q.query}>
+                            <td className="kw-cell">
+                              {q.query}
+                              {q.pages?.length > 0 && (
+                                <div className="dim mono">{pagesText(q.pages)}</div>
+                              )}
+                            </td>
+                            <td className="num strong">{num(q.impressions)}</td>
+                            <td className="num">{num(q.clicks)}</td>
+                            <td className="num dim">{pct(q.ctr)}</td>
+                            <td className="num">{rank(q.position)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>
+              유입 경로
+              <Help text="GA4 가 센 방문(세션)을 어디서 왔는지로 나눈 것입니다. 네이버·다음 검색으로 들어온 방문도 여기서 보입니다." />
+            </h2>
+            {sources.length === 0 ? (
+              <div className="empty">유입 경로 데이터가 아직 없습니다.</div>
+            ) : (
+              sources.map((s) => (
+                <div key={s.label} className="list-item">
+                  <div className="entry-line">
+                    <span className="entry-title">{s.label}</span>
+                    <span className="entry-num">
+                      {num(s.sessions)}
+                      <span className="dim" style={{ fontWeight: 400 }}>
+                        {" "}
+                        · {sourceTotal > 0 ? Math.round((s.sessions / sourceTotal) * 100) : 0}%
+                      </span>
+                    </span>
+                  </div>
+                  <div className="meter" aria-hidden="true">
+                    <i style={{ width: `${((s.sessions / sourceMax) * 100).toFixed(1)}%` }} />
+                  </div>
+                  <div className="entry-sub">
+                    조회 {num(s.views)} · <span className="mono">{s.raw.slice(0, 3).join(", ")}</span>
+                    {s.raw.length > 3 ? ` 외 ${s.raw.length - 3}` : ""}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="card">
+            <h2>
+              페이지별
+              <Help text="조회·세션은 GA4, 검색 클릭·평균 순위는 서치콘솔 값입니다. 조회는 많은데 검색 클릭이 적으면 검색 말고 다른 경로로 들어오는 글입니다." />
+            </h2>
+            {pages.length === 0 ? (
+              <div className="empty">페이지 데이터가 아직 없습니다.</div>
+            ) : (
+              <>
+                <div className="narrow-only">
+                  {pages.map((p) => (
+                    <div key={p.path} className="list-item">
+                      <div className="entry-title">{p.title || normalizePath(p.path)}</div>
+                      <div className="entry-sub">
+                        조회 {num(p.views)} · 세션 {num(p.sessions)} · 검색 클릭 {num(p.clicks)} ·{" "}
+                        {rank(p.position)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="wide-only">
+                  <div className="table-wrap compact">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>글</th>
+                          <th className="num" style={{ width: 80 }}>조회</th>
+                          <th className="num" style={{ width: 80 }}>세션</th>
+                          <th className="num" style={{ width: 96 }}>검색 클릭</th>
+                          <th className="num" style={{ width: 96 }}>평균 순위</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pages.map((p) => (
+                          <tr key={p.path}>
+                            <td className="kw-cell">
+                              {p.title || normalizePath(p.path)}
+                              {p.title && <div className="dim mono">{normalizePath(p.path)}</div>}
+                            </td>
+                            <td className="num strong">{num(p.views)}</td>
+                            <td className="num">{num(p.sessions)}</td>
+                            <td className="num">{num(p.clicks)}</td>
+                            <td className="num dim">{rank(p.position)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>
+              이벤트
+              <Help text="글 안에서 방문자가 한 행동입니다. '끝까지 스크롤' 이 조회수에 비해 적으면 글이 길거나 도입부에서 이탈한다는 뜻입니다." />
+            </h2>
+            {events.length === 0 ? (
+              <div className="empty">이벤트 데이터가 아직 없습니다.</div>
+            ) : (
+              events.map((e) => (
+                <div key={e.name} className="list-item entry-line">
+                  <span>
+                    {eventLabel(e.name)}
+                    {eventLabel(e.name) !== e.name && (
+                      <span className="dim mono" style={{ marginLeft: 6, fontSize: 12 }}>
+                        {e.name}
+                      </span>
+                    )}
+                  </span>
+                  <span className="entry-num">{num(e.count)}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ *
  * 페이지
  * ------------------------------------------------------------------ */
 
@@ -684,10 +1403,15 @@ export default function AnalyticsPage() {
     <>
       <h1 className="page-title">성과</h1>
       <p className="page-desc">
-        GA4 조회수와 애드센스 수익을 한 화면에서 봅니다. 아래{" "}
+        위는 검색 유입(어떤 검색어로 들어오는지), 아래는 GA4 조회수와 애드센스 수익입니다.
+        가장 먼저 <strong>기회 검색어</strong>를 보세요. 수익 쪽은 아래{" "}
         <strong>글별 성과</strong> 표가 핵심입니다 — 어떤 키워드로 쓴 글이 실제로 돈이
         됐는지 확인하고 다음 키워드 선정에 반영하세요.
       </p>
+
+      <SearchInsights />
+
+      <h2 className="group-title">조회수 · 수익</h2>
 
       <div className="card">
         <div className="card-head">

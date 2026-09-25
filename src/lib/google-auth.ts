@@ -153,13 +153,21 @@ function cacheKey(sa: ServiceAccount, scope: string): string {
   return `${sa.clientEmail}|${scope}|${fingerprint}`;
 }
 
+/**
+ * 이 기계 시계와 구글 시계의 차이(초). 구글은 iat 가 미래면 JWT 를 거부한다.
+ * 한 번 거부당하면 응답의 Date 헤더로 차이를 재서 이후 서명에 반영한다.
+ * 실제로 로컬 맥 시계가 8분 빨라 invalid_grant 가 났다.
+ */
+let clockSkewSeconds = 0;
+
 async function requestAccessToken(
   sa: ServiceAccount,
   scope: string,
+  retried = false,
 ): Promise<TokenEntry> {
   const body = new URLSearchParams({
     grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-    assertion: buildAssertion(sa, scope),
+    assertion: buildAssertion(sa, scope, Math.floor(Date.now() / 1000) + clockSkewSeconds),
   });
 
   let res: Response;
@@ -189,6 +197,14 @@ async function requestAccessToken(
   };
 
   if (!res.ok || !payload.access_token) {
+    const serverDate = Date.parse(res.headers.get("date") ?? "");
+    if (!retried && payload.error === "invalid_grant" && Number.isFinite(serverDate)) {
+      const skew = Math.round((serverDate - Date.now()) / 1000);
+      if (Math.abs(skew) > 30) {
+        clockSkewSeconds = skew;
+        return requestAccessToken(sa, scope, true);
+      }
+    }
     throw new Error(explainTokenError(res.status, payload.error, payload.error_description));
   }
 

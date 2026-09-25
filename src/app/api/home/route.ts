@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasSupabase, supabase } from "@/lib/db";
+import { topicSignals } from "@/lib/insights";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,12 +58,16 @@ export async function GET() {
        * (네이버는 위의 방문 후기 숫자가 맡는다).
        */
       count("posts", head("posts").eq("posted_tistory", false)),
+      // 다음 글감 후보(서치콘솔 5~30위 · 안 쓴 검색어). 수집 전이거나 표가 없으면 null
+      topicSignals().then((s) => s.length),
     ]);
-    const [velog, threads, visit, posts] = settled.map((r) => (r.status === "fulfilled" ? r.value : null));
+    const [velog, threads, visit, posts, opportunities] = settled.map((r) =>
+      r.status === "fulfilled" ? r.value : null,
+    );
     const errors = settled.flatMap((r) => (r.status === "rejected" ? [String((r.reason as Error).message)] : []));
     return NextResponse.json({
       ok: true,
-      counts: { velog, threads, visit, posts },
+      counts: { velog, threads, visit, posts, opportunities },
       error: errors.length ? errors.join(" / ") : undefined,
     });
   } catch (e) {

@@ -102,7 +102,9 @@ export async function ga4Creds(): Promise<{ creds: Ga4Creds } | { error: string 
   }
 }
 
-type RunReportResponse = {
+export type RunReportResponse = {
+  /** 잘리기 전 전체 행 수. offset 페이지네이션에 쓴다 */
+  rowCount?: number;
   rows?: {
     dimensionValues?: { value?: string }[];
     metricValues?: { value?: string }[];
@@ -111,13 +113,13 @@ type RunReportResponse = {
 };
 
 /** GA4 는 수치를 전부 문자열로 준다. 파싱 실패는 0 으로 떨어뜨려 표가 깨지지 않게 한다. */
-function num(v?: string): number {
+export function num(v?: string): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
 /** `20260801` → `2026-08-01` */
-function isoDate(compact: string): string {
+export function isoDate(compact: string): string {
   return /^\d{8}$/.test(compact)
     ? `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`
     : compact;
@@ -241,7 +243,8 @@ export function explainGa4Error(
   return `GA4 API 오류 (HTTP ${status}): ${message}`;
 }
 
-async function runReport(
+/** insights.ts(일별 적재)도 같은 호출·오류 문구를 쓴다 */
+export async function runReport(
   creds: Ga4Creds,
   token: string,
   body: Record<string, unknown>,

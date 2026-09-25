@@ -10,6 +10,8 @@ type Counts = {
   threads: number | null;
   visit: number | null;
   posts: number | null;
+  /** 서치콘솔 기회 검색어(노출은 되는데 5~30위). 백엔드가 아직 안 세면 없거나 null */
+  opportunities?: number | null;
 };
 
 type TodoKey = keyof Counts | "pool";
@@ -31,6 +33,7 @@ const TODOS: { key: TodoKey; href: string; label: string }[] = [
   { key: "threads", href: "/threads", label: "손질할 쓰레드 후보" },
   { key: "visit", href: "/visit", label: "네이버 방문 후기 (진행 중)" },
   { key: "posts", href: "/posts", label: "티스토리 초안 (안 올림)" },
+  { key: "opportunities", href: "/analytics", label: "기회 검색어" },
   // 세는 게 아니라 들어가 보는 곳이라 배지를 달지 않는다
   { key: "pool", href: "/keywords", label: "모은 키워드" },
 ];

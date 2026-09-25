@@ -1,0 +1,73 @@
+name: 유입 데이터 수집
+
+# 서치콘솔(검색어·노출·순위)과 GA4(유입 경로·조회·이벤트)를 하루 단위로
+# search_daily · traffic_daily · event_daily 에 쌓는다. 쌓인 것으로 다음 글감을 고른다
+# (src/lib/insights.ts topicSignals → 초안 생성 · 키워드 수집이 쓴다).
+#
+# 서치콘솔은 2~3일 늦게 확정되므로 매번 최근 7일을 지우고 다시 쓴다. 하루 빠져도 다음 날이 메운다.
+#
+# 키워드 모으기와 같은 방식이다 — 배포본 API 를 부르지 않고 러너에서 스크립트를 직접 돌린다.
+# 구글 자격증명(서비스 계정 JSON · 속성 ID · 서치콘솔 주소)은 백오피스 설정 표에서 읽으므로
+# 시크릿은 Supabase 두 개뿐이다.
+#
+# 크론은 UTC 다. 00:30 UTC = 09:30 KST. 어제치 GA4 가 아침이면 대부분 집계돼 있다.
+#
+# 이 레포는 공개라 실행 로그도 공개다. 스크립트는 개수만 찍는다 — 검색어는 화면에서 본다.
+on:
+  schedule:
+    - cron: "30 0 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "다시 쓸 기간(일, 어제부터 거꾸로). 처음 채울 때는 90 까지"
+        required: false
+        default: "7"
+
+permissions: {}
+
+# 수동 실행과 크론이 겹치면 같은 범위를 동시에 지우고 쓴다. 한 번에 하나만 돈다
+concurrency:
+  group: insights
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # src/lib 의 .ts 를 그대로 읽어야 해서 타입 스트리핑이 되는 버전이 필요하다
+          node-version: "24"
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci --omit=dev
+
+      - name: 수집
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # 입력값은 셸에 직접 넣지 않고 환경변수로 넘긴다 (스크립트 주입 방지)
+          DAYS: ${{ github.event.inputs.days || '7' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "::error::SUPABASE_URL 과 SUPABASE_SERVICE_ROLE_KEY 시크릿을 등록하세요."
+            exit 1
+          fi
+          case "$DAYS" in
+            ''|*[!0-9]*) echo "::error::days 는 숫자여야 합니다."; exit 1 ;;
+          esac
+          # 실패해도 요약은 남긴다. 종료 코드는 스크립트 것을 그대로 쓴다
+          status=0
+          node --import ./scripts/ts-register.mjs scripts/insights.mjs --days "$DAYS" > summary.md 2>&1 || status=$?
+          cat summary.md
+          {
+            echo "## 유입 데이터 수집"
+            echo
+            cat summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status

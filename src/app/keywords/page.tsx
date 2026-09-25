@@ -96,6 +96,7 @@ type PoolRunResult = {
 const POOL_DAYS = [7, 14, 30];
 
 const POOL_SORTS = [
+  { id: "value", label: "수익성 (검색량×단가, 흡수 2% 미만)" },
   { id: "searches", label: "검색량" },
   { id: "absorption", label: "광고 흡수율 낮은 순" },
   { id: "bid", label: "단가" },
@@ -120,7 +121,7 @@ function wonText(v: number | null): string {
 
 function PoolCard() {
   const [days, setDays] = useState(14);
-  const [sort, setSort] = useState("searches");
+  const [sort, setSort] = useState("value");
   const [rows, setRows] = useState<PoolRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);

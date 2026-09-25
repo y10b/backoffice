@@ -62,6 +62,8 @@
    */
   --chart-views: #007aff;
   --chart-earnings: #34c759;
+  /* 검색 노출. 파랑(세션)과 색상·밝기 모두 벌어지는 주황 */
+  --chart-impressions: #e67e00;
 
   /* 세그먼트 컨트롤에서 고른 칸 — 라이트는 흰 판, 다크는 한 단계 밝은 회색 (iOS 와 같다) */
   --segment-on: #ffffff;
@@ -106,6 +108,7 @@
       0 10px 30px rgba(0, 0, 0, 0.6), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
     --chart-views: #0a84ff;
     --chart-earnings: #30d158;
+    --chart-impressions: #ff9f0a;
     --segment-on: #636366;
     --segment-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
   }
@@ -1708,4 +1711,79 @@ a.entry-title:hover {
   margin: 0;
   padding: 1px 8px;
   font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ *
+ * 성과 — 검색 유입
+ * ------------------------------------------------------------------ */
+
+/* 화면 안에서 카드 묶음을 가르는 큰 제목 */
+.group-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 8px 0 12px;
+}
+
+.insight-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.insight-last {
+  font-size: 13px;
+  margin-left: auto;
+}
+
+/* 작은 일별 추이. SVG 는 폭에 맞춰 늘리고 글자는 HTML 로 뺀다 */
+.mini-chart {
+  position: relative;
+}
+
+.mini-chart svg {
+  display: block;
+  width: 100%;
+  height: 120px;
+  /* 가로로 훑을 때 페이지가 같이 밀리지 않게, 세로 스크롤만 브라우저에 맡긴다 */
+  touch-action: pan-y;
+}
+
+.mini-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 유입 경로 비율 막대 */
+.meter {
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 3px;
+  background: var(--fill);
+  overflow: hidden;
+}
+
+.meter > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--chart-views);
+}
+
+/* 티스토리 — 글감 큐 입력줄 */
+.queue-add {
+  margin-top: 12px;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.queue-add input {
+  flex: 1 1 auto;
+  min-width: 0;
 }

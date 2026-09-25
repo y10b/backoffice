@@ -50,6 +50,13 @@ type SettingsState = {
     clientEmail: string;
     propertyId: string;
     keyValid: boolean;
+    /** 블로그에 심은 측정 ID(G-XXXX). 백엔드가 아직 안 내려주면 없다 */
+    measurementId?: string;
+  };
+  /** 서치콘솔. GA4 와 같은 서비스 계정으로 읽는다. 백엔드가 아직 안 내려주면 없다 */
+  gsc?: {
+    configured: boolean;
+    siteUrl: string;
   };
   adsense: {
     configured: boolean;
@@ -101,6 +108,7 @@ export default function SettingsPage() {
   const [model, setModel] = useState("gemini-flash-latest");
   const [ga4Json, setGa4Json] = useState("");
   const [ga4Property, setGa4Property] = useState("");
+  const [gscSite, setGscSite] = useState("");
   const [adsenseId, setAdsenseId] = useState("");
   const [adsenseSecret, setAdsenseSecret] = useState("");
   const [kakaoKey, setKakaoKey] = useState("");
@@ -125,6 +133,7 @@ export default function SettingsPage() {
         setModel(s.gemini.model);
         if (s.openai?.model) setOpenaiModel(s.openai.model);
         setAdCustomer((prev) => prev || s.searchAd.customerId);
+        setGscSite((prev) => prev || s.gsc?.siteUrl || "");
         if (s.devlog) {
           setGhUser((prev) => prev || s.devlog.githubUser);
           setVelogUser((prev) => prev || s.devlog.velogUser);
@@ -411,7 +420,7 @@ export default function SettingsPage() {
         {state?.ga4.clientEmail && (
           <p className="hint" style={{ marginTop: 0 }}>
             서비스 계정: <span className="mono">{state.ga4.clientEmail}</span>
-            <br />이 이메일이 <strong>GA4 → 관리 → 속성 액세스 관리</strong>에 뷰어로
+            <br />이 이메일이 <strong>GA4 → 관리 → 속성 액세스 관리</strong>에 편집자로
             추가되어 있어야 조회됩니다. (계정 액세스가 아니라 <strong>속성</strong> 액세스)
           </p>
         )}
@@ -457,6 +466,58 @@ export default function SettingsPage() {
         <p className="hint">
           속성 ID 는 측정 ID(<span className="mono">G-XXXXXXX</span>)가 아니라 관리 → 속성
           설정에 있는 숫자입니다.
+          {state?.ga4.measurementId && (
+            <>
+              <br />
+              블로그에 심은 측정 ID: <span className="mono">{state.ga4.measurementId}</span>
+            </>
+          )}
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>
+          서치콘솔 (검색 유입){" "}
+          {state && (
+            <span className={`badge ${state.gsc?.configured ? "on" : ""}`}>
+              {state.gsc?.configured ? "등록됨" : "미등록"}
+            </span>
+          )}
+          <Help text="구글 검색에서 어떤 검색어로 몇 번 노출·클릭됐는지 가져옵니다. GA4 와 같은 서비스 계정을 씁니다." />
+        </h2>
+        <p className="hint" style={{ marginTop: 0 }}>
+          GA4 서비스 계정 이메일
+          {state?.ga4.clientEmail ? (
+            <>
+              (<span className="mono">{state.ga4.clientEmail}</span>)
+            </>
+          ) : null}
+          을 <strong>서치콘솔 → 설정 → 사용자 및 권한</strong>에 추가해야 조회됩니다.
+        </p>
+        <div className="row">
+          <div className="field" style={{ flex: 1, minWidth: 240 }}>
+            <label>사이트 URL (서치콘솔 속성 그대로)</label>
+            <input
+              className="mono"
+              placeholder="https://testao.tistory.com/"
+              value={gscSite}
+              onChange={(e) => setGscSite(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button
+            className="primary"
+            onClick={() => save({ gscSiteUrl: gscSite.trim() })}
+            disabled={!gscSite.trim() || gscSite.trim() === (state?.gsc?.siteUrl ?? "")}
+          >
+            저장
+          </button>
+          <TestButton target="gsc" />
+        </div>
+        <p className="hint">
+          URL 접두어 속성이면 끝 슬래시까지 똑같이, 도메인 속성이면{" "}
+          <span className="mono">sc-domain:예시.com</span> 형태로 적습니다.
         </p>
       </div>
 

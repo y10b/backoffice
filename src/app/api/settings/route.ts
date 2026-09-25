@@ -29,7 +29,7 @@ export async function GET() {
     "naver_client_id", "naver_client_secret",
     "gemini_api_key", "gemini_model",
     "openai_api_key", "openai_model",
-    "ga4_service_account", "ga4_property_id",
+    "ga4_service_account", "ga4_property_id", "ga4_measurement_id", "gsc_site_url",
     "adsense_client_id", "adsense_client_secret",
     "adsense_refresh_token", "adsense_account",
     "kakao_rest_api_key",
@@ -69,6 +69,13 @@ export async function GET() {
       clientEmail: gaEmail,
       propertyId: gaProp.value,
       keyValid: Boolean(gaEmail),
+      // 계산기 이벤트·태그 확인용. 속성 ID(숫자)와 다르다
+      measurementId: s.ga4_measurement_id || process.env.GA4_MEASUREMENT_ID || "",
+    },
+    // 서치콘솔은 GA4 와 같은 서비스 계정을 쓴다. 속성 주소만 따로 받는다
+    gsc: {
+      configured: Boolean(gaKey.value && (s.gsc_site_url || process.env.GSC_SITE_URL)),
+      siteUrl: s.gsc_site_url || process.env.GSC_SITE_URL || "",
     },
     adsense: {
       configured: Boolean(adsenseId.value && adsenseSecret.value),
@@ -141,6 +148,7 @@ const TEXT_FIELDS: Record<string, string> = {
   openaiModel: "openai_model",
   ga4ServiceAccount: "ga4_service_account",
   ga4PropertyId: "ga4_property_id",
+  gscSiteUrl: "gsc_site_url",
   adsenseClientId: "adsense_client_id",
   adsenseClientSecret: "adsense_client_secret",
   kakaoRestApiKey: "kakao_rest_api_key",
@@ -227,6 +235,16 @@ export async function POST(req: Request) {
     warnings.push(
       "GA4 속성 ID 는 숫자입니다. 측정 ID(G-XXXXXXX)가 아니라 관리 → 속성 설정에 있는 숫자 ID 를 넣으세요.",
     );
+  }
+
+  // URL 접두어 속성은 끝 슬래시까지 서치콘솔에 등록된 것과 같아야 한다. 도메인 속성은 sc-domain:
+  if (typeof body.gscSiteUrl === "string" && body.gscSiteUrl.trim()) {
+    const v = body.gscSiteUrl.trim();
+    if (!/^sc-domain:/.test(v) && !/^https?:\/\/.+\/$/.test(v)) {
+      warnings.push(
+        "서치콘솔 속성 주소는 https://example.tistory.com/ 처럼 끝 슬래시까지, 또는 sc-domain:example.com 형식입니다. '연결 테스트'로 확인하세요.",
+      );
+    }
   }
 
   return NextResponse.json({ ok: true, warnings });

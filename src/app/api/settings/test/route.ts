@@ -4,6 +4,7 @@ import { blogDocCount, openApiCreds, searchTrend } from "@/lib/openapi";
 import { fetchGa4Report } from "@/lib/ga4";
 import { devlogCreds, velogWhoAmI } from "@/lib/devlog";
 import { openaiPing } from "@/lib/openai";
+import { gscPing } from "@/lib/gsc";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +45,15 @@ export async function POST(req: Request) {
         ? `정상 — 최근 7일 조회수 ${r.totals.views.toLocaleString()}회`
         : "연결은 정상입니다. 다만 수집된 데이터가 아직 없습니다 (태그 설치 직후면 몇 시간 걸립니다).",
     });
+  }
+
+  if (target === "gsc") {
+    try {
+      const r = await gscPing();
+      return NextResponse.json({ ok: true, message: `정상 — ${r.siteUrl} (${r.permissionLevel})` });
+    } catch (e) {
+      return NextResponse.json({ ok: false, message: (e as Error).message });
+    }
   }
 
   if (target === "github") {

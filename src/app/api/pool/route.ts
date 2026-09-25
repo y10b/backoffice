@@ -5,7 +5,7 @@ import { listKeywordPool, type PoolSort } from "@/lib/keywordPool";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SORTS: PoolSort[] = ["searches", "absorption", "bid", "seen", "long"];
+const SORTS: PoolSort[] = ["searches", "absorption", "bid", "seen", "long", "value"];
 
 /**
  * 키워드 풀 조회. `?days=14&sort=searches&limit=300` (티스토리 시드로 모은 것뿐이다)
