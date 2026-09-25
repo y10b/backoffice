@@ -1787,3 +1787,63 @@ a.entry-title:hover {
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/* ------------------------------------------------------------------ *
+ * 티스토리 카테고리 배지 — 재편 기준 넷(세금·신고 / 보험·연금 / 지원금·수당 / 기타)만
+ * 색으로 구분한다. 옛 카테고리·미분류는 기본 .badge 회색이라 "아직 안 옮긴 글"이 눈에 띈다.
+ *
+ * <span class="badge cat-tax">세금·신고</span>
+ * ------------------------------------------------------------------ */
+
+.badge.cat-tax {
+  background: rgba(0, 122, 255, 0.14);
+  color: #0060d0;
+}
+.badge.cat-insurance {
+  background: rgba(52, 199, 89, 0.15);
+  color: #248a3d;
+}
+.badge.cat-support {
+  background: rgba(255, 149, 0, 0.15);
+  color: #c93400;
+}
+.badge.cat-etc {
+  background: rgba(175, 82, 222, 0.14);
+  color: #8944ab;
+}
+
+@media (prefers-color-scheme: dark) {
+  .badge.cat-tax {
+    background: rgba(10, 132, 255, 0.22);
+    color: #409cff;
+  }
+  .badge.cat-insurance {
+    background: rgba(48, 209, 88, 0.18);
+    color: #30d158;
+  }
+  .badge.cat-support {
+    background: rgba(255, 159, 10, 0.18);
+    color: #ffb340;
+  }
+  .badge.cat-etc {
+    background: rgba(191, 90, 242, 0.2);
+    color: #da8fff;
+  }
+}
+
+/* 칸이 많아 폰 폭을 넘는 세그먼트 — 줄이지 않고 가로로 민다 */
+.segment.scroll {
+  display: flex;
+  width: fit-content;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.segment.scroll::-webkit-scrollbar {
+  display: none;
+}
+.segment.scroll button,
+.segment.scroll button:hover:not(:disabled) {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}

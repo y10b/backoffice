@@ -117,7 +117,24 @@ export type DraftInput = {
     visuals?: { type: string; title: string; html: string }[];
   };
   auto?: boolean;
+  /** 들어갈 카테고리 추정 (tistory.ts classifyCategory) */
+  category?: string;
+  /** 기존 글 보강이면 그 글 URL */
+  rewriteOf?: string;
 };
+
+/**
+ * posts.category · rewrite_of 가 아직 없는 DB(20260925050000 적용 전).
+ * 42703 은 Postgres "없는 컬럼", PGRST204 는 PostgREST 스키마 캐시에 없는 컬럼이다.
+ * 이때는 새 컬럼만 빼고 다시 한다 — 마이그레이션 순서 때문에 매일 초안·목록이 죽지 않게.
+ */
+function missingColumn(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return (
+    (error.code === "42703" || error.code === "PGRST204") &&
+    /category|rewrite_of/.test(error.message ?? "")
+  );
+}
 
 /**
  * 초안 저장. `/api/generate` 와 `/api/autowrite` 가 같은 INSERT 를 각자 들고 있으면
@@ -125,42 +142,44 @@ export type DraftInput = {
  */
 export async function insertDraft(input: DraftInput): Promise<number> {
   const { draft } = input;
-  const { data, error } = await supabase()
-    .from("posts")
-    .insert({
-      channel: input.channel ?? CHANNEL,
-      main_keyword: input.mainKeyword,
-      sub_keyword: input.subKeyword,
-      title: draft.title,
-      body_html: draft.bodyHtml,
-      body_markdown: draft.bodyMarkdown,
-      tags: draft.tags ?? [],
-      meta_desc: draft.metaDescription,
-      faq: draft.faq ?? [],
-      json_ld: draft.jsonLd ?? "",
-      sources: draft.sources ?? [],
-      visuals: draft.visuals ?? [],
-      auto_generated: Boolean(input.auto),
-      status: "draft",
-    })
-    .select("id")
-    .single();
-  if (error) throw new Error(`초안 저장 실패: ${error.message}`);
+  const base = {
+    channel: input.channel ?? CHANNEL,
+    main_keyword: input.mainKeyword,
+    sub_keyword: input.subKeyword,
+    title: draft.title,
+    body_html: draft.bodyHtml,
+    body_markdown: draft.bodyMarkdown,
+    tags: draft.tags ?? [],
+    meta_desc: draft.metaDescription,
+    faq: draft.faq ?? [],
+    json_ld: draft.jsonLd ?? "",
+    sources: draft.sources ?? [],
+    visuals: draft.visuals ?? [],
+    auto_generated: Boolean(input.auto),
+    status: "draft",
+  };
+  const insert = (row: Record<string, unknown>) =>
+    supabase().from("posts").insert(row).select("id").single();
+  let { data, error } = await insert({
+    ...base,
+    category: input.category ?? "",
+    rewrite_of: input.rewriteOf ?? "",
+  });
+  if (missingColumn(error)) ({ data, error } = await insert(base));
+  if (error || !data) throw new Error(`초안 저장 실패: ${error?.message ?? "응답 없음"}`);
   return Number(data.id);
 }
 
 /** 글 목록. 본문은 빼서 목록 응답이 무거워지지 않게 한다 */
 export async function listPosts(limit = 200) {
-  const q = supabase()
-    .from("posts")
-    .select(
-      "id, channel, main_keyword, sub_keyword, title, meta_desc, tags, status, posted_naver, posted_tistory, created_at, updated_at",
-    );
-  const { data, error } = await q
-    .order("updated_at", { ascending: false })
-    .limit(limit);
+  const cols =
+    "id, channel, main_keyword, sub_keyword, title, meta_desc, tags, status, posted_naver, posted_tistory, created_at, updated_at";
+  const run = (columns: string) =>
+    supabase().from("posts").select(columns).order("updated_at", { ascending: false }).limit(limit);
+  let { data, error } = await run(`${cols}, category, rewrite_of`);
+  if (missingColumn(error)) ({ data, error } = await run(cols));
   if (error) throw new Error(`글 목록 조회 실패: ${error.message}`);
-  return data ?? [];
+  return (data ?? []) as unknown as Record<string, unknown>[];
 }
 
 export async function getPost(id: number) {

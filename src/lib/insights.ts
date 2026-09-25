@@ -8,6 +8,7 @@
  *  | /api/insights/sync| 화면 버튼   | 같은 함수를 지금 돌린다                  |
  *  | /api/insights     | 화면        | 최근 N일 집계                            |
  *  | dailyPost         | 초안 만들 때| topicSignals 로 다음 키워드 후보         |
+ *  | tistory.ts        | 올라간 글   | pageTotals 로 글별 조회·노출             |
  *
  * 왜 표에 쌓나: 글감 신호는 "노출은 되는데 5~30위에 머무는 검색어"다. 이건 몇 주치를
  * 합쳐야 보이고, 초안 생성·키워드 수집·홈 화면이 각자 구글 API 를 부르면 호출도 늘고
@@ -19,6 +20,7 @@ import { kstDate, listPosts, supabase } from "./db";
 import { queryGsc } from "./gsc";
 import { ga4Creds, isoDate, normalizePath, num, runReport, type RunReportResponse } from "./ga4";
 import { GA4_READONLY_SCOPE, getAccessToken } from "./google-auth";
+import { syncTistoryPosts } from "./tistory";
 
 /** 서치콘솔은 2~3일 늦게 확정된다. 매번 이만큼은 다시 덮어야 잠정치가 확정치로 바뀐다 */
 export const DEFAULT_SYNC_DAYS = 7;
@@ -264,6 +266,8 @@ export type SyncResult = {
   search: number;
   traffic: number;
   events: number;
+  /** 사이트맵에서 읽은 티스토리 글 수 (tistory_posts) */
+  tistory: number;
   range: [string, string];
   /** 실패한 쪽의 오류. 나머지는 저장됐다 */
   errors: string[];
@@ -299,7 +303,20 @@ export async function syncInsights(o: { days?: number } = {}): Promise<SyncResul
     run("GA4 이벤트", "event_daily", "date,event_name,page_path", () => fetchEvents(from, to)),
   ]);
 
-  return { days, search, traffic, events, range: [from, to], errors };
+  /*
+   * 올라간 글 목록도 같은 아침에 새로 읽는다. 구글 API 와 무관하고 블로그 페이지를 도는 것이라
+   * 위 셋이 끝난 뒤 따로 — 실패해도 위 결과는 이미 저장됐다.
+   */
+  let tistory = 0;
+  try {
+    const t = await syncTistoryPosts();
+    tistory = t.total;
+    if (t.failed) errors.push(`[티스토리] 글 ${t.failed}개를 읽지 못했습니다`);
+  } catch (e) {
+    errors.push(`[티스토리] ${(e as Error).message}`);
+  }
+
+  return { days, search, traffic, events, tistory, range: [from, to], errors };
 }
 
 /* ------------------------------------------------------------------ *
@@ -517,6 +534,66 @@ export async function getInsights(o: { days?: number } = {}): Promise<Insights> 
     .sort((a, b) => b.count - a.count);
 
   return { lastDate, totals, daily, queries, opportunities, sources, pages, events: eventList };
+}
+
+export type PageTotal = {
+  views: number;
+  sessions: number;
+  clicks: number;
+  impressions: number;
+  /** 노출 가중 평균 순위. 노출이 없으면 null */
+  position: number | null;
+};
+
+/**
+ * 최근 N일 글 경로(pathKey)별 합계 — GA4 조회·세션과 서치콘솔 노출·클릭·순위.
+ * getInsights 의 pages 와 같은 방식이지만 상위 200 으로 자르지 않고 필요한 열만 읽는다
+ * (올라간 글 목록은 조회가 0 인 글까지 전부 붙여야 한다).
+ */
+export async function pageTotals(days = 90): Promise<Map<string, PageTotal>> {
+  const { from, to } = range(clampInsightDays(days));
+  const [search, traffic] = await Promise.all([
+    selectAll<Pick<SearchRow, "page" | "clicks" | "impressions" | "position">>(
+      "search_daily",
+      "page, clicks, impressions, position",
+      from,
+      to,
+    ),
+    selectAll<Pick<TrafficRow, "page_path" | "views" | "sessions">>(
+      "traffic_daily",
+      "page_path, views, sessions",
+      from,
+      to,
+    ),
+  ]);
+  type Acc = PageTotal & { posWeighted: number };
+  const by = new Map<string, Acc>();
+  const at = (path: string) => {
+    let a = by.get(path);
+    if (!a) {
+      a = { views: 0, sessions: 0, clicks: 0, impressions: 0, position: null, posWeighted: 0 };
+      by.set(path, a);
+    }
+    return a;
+  };
+  // traffic_daily.page_path 는 저장할 때 이미 pathKey 로 맞춰 넣었다 — 옛 행 대비로 한 번 더 태운다
+  for (const r of traffic) {
+    const a = at(pathKey(r.page_path));
+    a.views += Number(r.views);
+    a.sessions += Number(r.sessions);
+  }
+  for (const r of search) {
+    const a = at(pathKey(r.page));
+    const imp = Number(r.impressions);
+    a.clicks += Number(r.clicks);
+    a.impressions += imp;
+    a.posWeighted += Number(r.position) * imp;
+  }
+  const out = new Map<string, PageTotal>();
+  for (const [path, { posWeighted, ...a }] of by) {
+    out.set(path, { ...a, position: a.impressions ? round(posWeighted / a.impressions, 1) : null });
+  }
+  return out;
 }
 
 /**

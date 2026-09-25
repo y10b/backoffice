@@ -1,5 +1,6 @@
 /**
- * 유입 데이터 수집 — 서치콘솔·GA4·GA4 이벤트를 최근 N일(KST 어제까지) 다시 쓴다.
+ * 유입 데이터 수집 — 서치콘솔·GA4·GA4 이벤트를 최근 N일(KST 어제까지) 다시 쓰고,
+ * 티스토리 사이트맵에서 올라간 글 목록(tistory_posts)도 새로 읽는다.
  * 화면의 /api/insights/sync 와 같은 함수(src/lib/insights.ts syncInsights)를 부른다.
  *
  *   node --import ./scripts/ts-register.mjs scripts/insights.mjs [--days 7] [--verbose]
@@ -25,7 +26,7 @@ try {
   if (verbose) console.log(JSON.stringify(r, null, 2));
   else {
     console.log(`- 기간 ${r.range[0]} ~ ${r.range[1]} (${r.days}일)`);
-    console.log(`- 검색 ${r.search} · 유입 ${r.traffic} · 이벤트 ${r.events}`);
+    console.log(`- 검색 ${r.search} · 유입 ${r.traffic} · 이벤트 ${r.events} · 티스토리 글 ${r.tistory}`);
     // 오류 문구에는 검색어가 실리지 않는다 (권한·API 설정 안내뿐)
     for (const e of r.errors) console.error(`- 실패: ${e.slice(0, 300)}`);
   }

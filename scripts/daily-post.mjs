@@ -20,7 +20,8 @@ try {
   console.log(
     verbose
       ? JSON.stringify(r, null, 2)
-      : `- 1편 · ${r.source} · 키워드 "${r.mainKeyword}" (검색 ${num(r.searches)} · 흡수 ${r.absorption ?? "?"}%)`,
+      : `- 1편 · ${r.source} · 키워드 "${r.mainKeyword}" (검색 ${num(r.searches)} · 흡수 ${r.absorption ?? "?"}%)` +
+          ` · ${r.category}${r.rewriteOf ? " (기존 글 보강)" : ""}`,
   );
 } catch (e) {
   console.error(`- 실패: ${String(e.message ?? e).slice(0, 300)}`);
