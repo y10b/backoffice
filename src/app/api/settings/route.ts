@@ -34,6 +34,7 @@ export async function GET() {
     "adsense_refresh_token", "adsense_account",
     "kakao_rest_api_key",
     "github_pat", "github_user", "velog_user", "velog_token", "velog_refresh_token", "devlog_blocked_owners",
+    "devlog_repos", "devlog_author_emails",
     "seeds_tistory",
   ]);
 
@@ -132,6 +133,9 @@ export async function GET() {
       velogFromEnv: velog.fromEnv,
       velogRefreshSet: Boolean(s.velog_refresh_token || process.env.VELOG_REFRESH_TOKEN),
       blockedOwners: s.devlog_blocked_owners || process.env.DEVLOG_BLOCKED_OWNERS || "bambitcorporation",
+      // 비어 있으면 접근 가능한 레포 전체(차단 소유자 제외)를 수집한다
+      repos: s.devlog_repos ?? "",
+      authorEmails: s.devlog_author_emails ?? "",
     },
   });
 }
@@ -174,6 +178,14 @@ export async function POST(req: Request) {
    * "기본값으로 돌아가기"라는 뜻이다 (seedPool 이 빈 설정을 기본값으로 읽는다).
    */
   if (typeof body.seedsTistory === "string") await setSetting("seeds_tistory", body.seedsTistory.trim());
+  /*
+   * 수집 레포·커밋 이메일도 빈 값을 저장한다. 레포 목록을 비우는 것은 "전체 레포로 돌아가기",
+   * 이메일을 비우는 것은 "GitHub 로그인만으로 거르기"라는 뜻이다.
+   */
+  if (typeof body.devlogRepos === "string") await setSetting("devlog_repos", body.devlogRepos.trim());
+  if (typeof body.devlogAuthorEmails === "string") {
+    await setSetting("devlog_author_emails", body.devlogAuthorEmails.trim());
+  }
 
   if (
     typeof body.searchAdCustomerId === "string" &&

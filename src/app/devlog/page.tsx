@@ -51,8 +51,8 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const TASKS: { id: "collect" | "draft" | "publish" | "sync"; label: string; help: string }[] = [
-  { id: "collect", label: "오늘 커밋 수집", help: "오늘(KST) 내 커밋을 레포별로 모아 아래 개발 로그에 쌓습니다. 회사 레포는 설정의 차단 목록으로 걸러집니다. 매일 21시에 자동으로 돕니다." },
-  { id: "draft", label: "초안 만들기", help: "최근 7일 로그 중 글감 점수 2 이상에서 가장 큰 덩어리 하나를 골라 초안을 씁니다. 커밋이 없으면 만들지 않습니다. 매일 22시 30분에 자동으로 돕니다." },
+  { id: "collect", label: "오늘 커밋 수집", help: "오늘(KST) 내 커밋을 설정의 '수집할 레포'에서 레포·날짜별로 모아 아래 개발 로그에 쌓습니다. GitHub 계정 또는 설정의 커밋 이메일로 내 커밋을 가려내고, 회사 레포는 차단 목록으로 걸러집니다. 매일 21시에 자동으로 돕니다." },
+  { id: "draft", label: "초안 만들기", help: "아직 글이 되지 않은 개발 로그 전체를 프로젝트(샥·안아수달·화물)×주 단위로 묶고, 점수가 가장 높은 묶음 하나로 완성 초안을 씁니다. 점수가 같으면 오래된 주부터. 커밋 3개 미만 묶음은 쓰지 않고, 모델이 실패하면 글감을 남겨 두고 다음에 다시 시도합니다. 매일 22시 30분에 자동으로 돕니다." },
   { id: "publish", label: "승인된 글 발행", help: "상태가 '발행 승인'인 글을 velog 에 올립니다. 본문에 TODO 가 남아 있거나 200자 미만이면 올리지 않습니다. 매일 7시에 자동으로 돕니다." },
   { id: "sync", label: "velog 동기화", help: "velog 에 올라간 공개 글을 되돌려 채우고 좋아요·댓글 수를 갱신합니다. 손으로 올린 글도 여기 이력에 들어옵니다. 매일 22시에 자동으로 돕니다." },
 ];
@@ -63,7 +63,7 @@ function summarize(task: string, r: any): string {
     if (!found.length) return `${r.date}: 커밋 없음. 아무것도 만들지 않았습니다.`;
     return `${r.date}: ${found.map((f) => `${f.repo.split("/")[1]} ${f.commits}개(점수 ${f.score})`).join(", ")} — 새로 ${r.inserted} · 갱신 ${r.updated ?? 0}`;
   }
-  if (task === "draft") return r.made ? `초안 생성: ${r.title} (${r.repo} · 커밋 ${r.commits}개 · ${r.ai ? "모델 작성" : "뼈대만"})` : r.reason;
+  if (task === "draft") return r.made ? `초안 생성: ${r.title} (${r.source ?? r.repo})` : r.reason;
   if (task === "publish") {
     const p = r.published?.length ?? 0;
     const f = r.failed?.length ?? 0;

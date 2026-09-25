@@ -2,6 +2,7 @@
  * 개발 로그 갈래를 터미널·깃액션에서 돌린다. 화면·크론 라우트와 같은 함수를 부른다.
  *
  *   node --import ./scripts/ts-register.mjs scripts/devlog.mjs collect [YYYY-MM-DD]
+ *   node --import ./scripts/ts-register.mjs scripts/devlog.mjs collect-range <from> [to]   소급 수집 (to 기본 오늘)
  *   node --import ./scripts/ts-register.mjs scripts/devlog.mjs draft | publish | sync
  *   ... --verbose   결과 JSON 전체 (레포 이름·제목 포함 — 공개 로그에서는 쓰지 않는다)
  *
@@ -15,10 +16,10 @@ import { isTask, runTask } from "../src/lib/devlog.ts";
 
 const args = process.argv.slice(2);
 const verbose = args.includes("--verbose");
-const [task, date] = args.filter((a) => !a.startsWith("--"));
+const [task, date, to] = args.filter((a) => !a.startsWith("--"));
 
 if (!isTask(task)) {
-  console.error("사용법: devlog.mjs <collect|draft|publish|sync> [date] [--verbose]");
+  console.error("사용법: devlog.mjs <collect|collect-range|draft|publish|sync> [date] [to] [--verbose]");
   process.exit(1);
 }
 
@@ -26,9 +27,11 @@ function summary(r) {
   switch (task) {
     case "collect":
       return `- ${r.date} · 레포 ${r.found.length}개 · 새로 ${r.inserted} · 갱신 ${r.updated} · 그대로 ${r.skipped}`;
+    case "collect-range":
+      return `- ${r.from}~${r.to} · 레포 ${r.repos.length}개 · 날짜 ${r.repos.reduce((n, x) => n + x.days, 0)} · 커밋 ${r.repos.reduce((n, x) => n + x.commits, 0)} · 새로 ${r.inserted} · 갱신 ${r.updated} · 그대로 ${r.skipped} · 실패 ${r.errors.length}`;
     case "draft":
       return r.made
-        ? `- 초안 1편 (${r.ai ? "모델 작성" : "뼈대만"} · 커밋 ${r.commits}개)`
+        ? `- 초안 1편 (커밋 ${r.commits}개${r.retried ? " · 재요청" : ""}${r.todoStripped ? " · TODO 줄 삭제" : ""})`
         : `- 초안 없음 — ${r.reason}`;
     case "publish":
       return `- 발행 ${r.published.length} · 실패 ${r.failed.length}`;
@@ -38,7 +41,7 @@ function summary(r) {
 }
 
 try {
-  const result = await runTask(task, { date });
+  const result = await runTask(task, { date, to });
   console.log(verbose ? JSON.stringify(result, null, 2) : summary(result));
   // 발행 실패는 시끄럽게 — 액션이 빨갛게 뜬다. 사유는 글에 남아 있다
   if (task === "publish" && result.failed?.length) process.exit(1);

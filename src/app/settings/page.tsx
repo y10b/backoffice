@@ -43,6 +43,8 @@ type SettingsState = {
     velogFromEnv: boolean;
     velogRefreshSet: boolean;
     blockedOwners: string;
+    repos?: string;
+    authorEmails?: string;
   };
   ga4: {
     configured: boolean;
@@ -118,6 +120,8 @@ export default function SettingsPage() {
   const [velogUser, setVelogUser] = useState("");
   const [velogRefresh, setVelogRefresh] = useState("");
   const [blocked, setBlocked] = useState("");
+  const [devlogRepos, setDevlogRepos] = useState("");
+  const [devlogEmails, setDevlogEmails] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("gpt-5.5");
   const [seedsTistory, setSeedsTistory] = useState("");
@@ -138,6 +142,8 @@ export default function SettingsPage() {
           setGhUser((prev) => prev || s.devlog.githubUser);
           setVelogUser((prev) => prev || s.devlog.velogUser);
           setBlocked((prev) => prev || s.devlog.blockedOwners);
+          setDevlogRepos((prev) => prev || s.devlog.repos || "");
+          setDevlogEmails((prev) => prev || s.devlog.authorEmails || "");
         }
         // 저장한 값을 보여준다. 빈 값이면 placeholder 에 기본값이 보인다.
         // 다른 카드를 저장해 load 가 다시 돌 때 고치던 내용을 덮지 않게 비어 있을 때만 채운다
@@ -874,6 +880,33 @@ export default function SettingsPage() {
           </div>
         </div>
         <div className="row" style={{ marginTop: 10 }}>
+          <div className="field" style={{ flex: 2, minWidth: 260 }}>
+            <label>
+              수집할 레포
+              <Help text="owner/name 을 줄바꿈이나 쉼표로 구분해 넣습니다. 여기 있는 레포만 커밋을 모읍니다. 비우면 접근 가능한 레포 전체(차단 소유자 제외)를 봅니다." />
+            </label>
+            <textarea
+              className="mono"
+              rows={5}
+              placeholder={"themuselab/syak\ny10b/bigpicture_truck"}
+              value={devlogRepos}
+              onChange={(e) => setDevlogRepos(e.target.value)}
+            />
+          </div>
+          <div className="field" style={{ flex: 1, minWidth: 260 }}>
+            <label>
+              내 커밋 이메일
+              <Help text="GitHub 계정에 연결되지 않은 이메일로 찍힌 커밋도 내 것으로 칩니다. 쉼표로 구분합니다. GitHub 사용자와 일치하는 커밋은 이메일과 상관없이 잡힙니다." />
+            </label>
+            <input
+              className="mono"
+              placeholder="me@example.com, mac@host.local"
+              value={devlogEmails}
+              onChange={(e) => setDevlogEmails(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
           <button
             className="primary"
             onClick={() =>
@@ -884,6 +917,8 @@ export default function SettingsPage() {
                 velogToken,
                 velogRefreshToken: velogRefresh,
                 devlogBlockedOwners: blocked,
+                // 불러오기 전에 누르면 빈 값이 저장돼 목록이 날아간다. 불러온 뒤에만 보낸다
+                ...(state?.devlog ? { devlogRepos, devlogAuthorEmails: devlogEmails } : {}),
               }).then(() => {
                 setGhPat("");
                 setVelogToken("");
@@ -891,7 +926,8 @@ export default function SettingsPage() {
               })
             }
             disabled={
-              !ghPat.trim() && !ghUser.trim() && !velogUser.trim() && !velogToken.trim() && !velogRefresh.trim() && !blocked.trim()
+              !ghPat.trim() && !ghUser.trim() && !velogUser.trim() && !velogToken.trim() && !velogRefresh.trim() && !blocked.trim() &&
+              !devlogRepos.trim() && !devlogEmails.trim()
             }
           >
             저장

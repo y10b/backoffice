@@ -725,14 +725,11 @@ export async function listDevLogs(limit = 60): Promise<DevLog[]> {
   return (data ?? []) as DevLog[];
 }
 
-/** 아직 초안에 쓰이지 않은, 기준일 이후의 로그 */
-export async function listUnconsumedDevLogs(fromDate: string): Promise<DevLog[]> {
-  const { data, error } = await supabase()
-    .from("dev_logs")
-    .select("*")
-    .gte("date", fromDate)
-    .eq("consumed", false)
-    .order("score", { ascending: false });
+/** 아직 초안에 쓰이지 않은 로그. 기준일을 주면 그 이후만 */
+export async function listUnconsumedDevLogs(fromDate?: string): Promise<DevLog[]> {
+  let q = supabase().from("dev_logs").select("*").eq("consumed", false);
+  if (fromDate) q = q.gte("date", fromDate);
+  const { data, error } = await q.order("date", { ascending: true }).limit(5000);
   if (error) throw new Error(`개발 로그 조회 실패: ${error.message}`);
   return (data ?? []) as DevLog[];
 }
