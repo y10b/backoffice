@@ -135,6 +135,9 @@ function VisitInner() {
     sources: { title: string; uri: string }[];
   } | null>(null);
   const [researchFailed, setResearchFailed] = useState(false);
+  /* 초안 고쳐 쓰기 — 어느 자리를 어떻게 */
+  const [reviseTarget, setReviseTarget] = useState("전체");
+  const [reviseRequest, setReviseRequest] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -253,10 +256,11 @@ function VisitInner() {
     }
   }
 
-  async function generate() {
+  /** revision 을 주면 지금 초안을 그 요청대로 고쳐 쓴다. 없으면 검색부터 새로 쓴다 */
+  async function generate(revision?: { target: string; request: string }) {
     if (!id) return;
     setError("");
-    setBusy("가게·메뉴를 검색하고 본문을 쓰는 중… 30초쯤 걸립니다");
+    setBusy(revision ? "요청한 부분을 고쳐 쓰는 중…" : "가게·메뉴를 검색하고 본문을 쓰는 중… 30초쯤 걸립니다");
     try {
       const res = await fetch("/api/visit/generate", {
         method: "POST",
@@ -265,13 +269,22 @@ function VisitInner() {
           id,
           situation,
           interview: { company, mealTime, memorable, revisit, downside },
+          revision,
         }),
       });
       const d = await res.json();
       if (!d.ok) throw new Error(d.error ?? "생성에 실패했습니다.");
       setDraft(d.post);
-      setResearch(d.research ? { postId: d.post.id, ...d.research } : null);
-      setResearchFailed(!d.research);
+      // 고쳐 쓰기는 조사를 다시 하지 않는다. 앞서 받은 조사 결과를 그대로 둔다
+      if (!d.revised) {
+        setResearch(d.research ? { postId: d.post.id, ...d.research } : null);
+        setResearchFailed(!d.research);
+      } else {
+        setReviseRequest("");
+        // 소제목이 바뀌었을 수 있다. 없어진 이름이 선택된 채 남지 않게 되돌린다
+        setReviseTarget("전체");
+        flash("요청대로 고쳐 썼습니다");
+      }
       load();
     } catch (e) {
       setError((e as Error).message);
@@ -299,6 +312,12 @@ function VisitInner() {
   // 이 화면에서 분석한 글일 때만 사진이 있다. 다른 초안에 엉뚱한 사진이 붙으면 안 된다
   const draftPhotos = draft && photos?.postId === draft.id ? photos.urls : undefined;
   const draftResearch = draft && research?.postId === draft.id ? research : null;
+  // 고칠 자리 후보 — 본문의 소제목들. 모델이 준 마크다운 그대로라 # 을 떼기만 한다
+  const sections = (draft?.body_markdown ?? "")
+    .split("\n")
+    .filter((l) => /^#{1,4}\s/.test(l))
+    .map((l) => l.replace(/^#+\s*/, "").trim())
+    .filter(Boolean);
 
   return (
     <div className="main">
@@ -523,7 +542,7 @@ function VisitInner() {
             </div>
           </div>
 
-          <button className="primary" onClick={generate} disabled={Boolean(busy) || !memorable.trim()}>
+          <button className="primary" onClick={() => generate()} disabled={Boolean(busy) || !memorable.trim()}>
             본문 생성
           </button>
         </div>
@@ -535,7 +554,7 @@ function VisitInner() {
           <h2>4. 초안</h2>
           {analysis && (
             <div className="row" style={{ marginBottom: 10 }}>
-              <button onClick={generate} disabled={Boolean(busy) || !memorable.trim()}>
+              <button onClick={() => generate()} disabled={Boolean(busy) || !memorable.trim()}>
                 다시 쓰기
               </button>
               <span className="hint">
@@ -603,6 +622,40 @@ function VisitInner() {
             className="preview"
             dangerouslySetInnerHTML={{ __html: withPhotos(draft.body_html ?? "", draftPhotos) }}
           />
+
+          {draft.body_markdown && (
+            <div className="field" style={{ marginTop: 12 }}>
+              <label>
+                고쳐 쓰기
+                <Help text="고칠 자리를 고르고 어떻게 바꿀지 적으면 그 부분만 고쳐 씁니다. 다른 소제목은 그대로 둡니다. 사진·답변에 없는 사실은 요청해도 지어내지 않습니다." />
+              </label>
+              <div className="row">
+                <select value={reviseTarget} onChange={(e) => setReviseTarget(e.target.value)}>
+                  <option value="전체">글 전체</option>
+                  <option value="제목">제목</option>
+                  {sections.map((sec) => (
+                    <option key={sec} value={sec}>
+                      {sec}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <textarea
+                rows={2}
+                placeholder="어느 부분을 어떻게 고칠까요? 예) 도입을 더 짧고 궁금하게 / 국물 얘기를 더 자세히 / 너무 칭찬만 해서 아쉬운 점도 넣어줘"
+                value={reviseRequest}
+                onChange={(e) => setReviseRequest(e.target.value)}
+              />
+              <div className="row">
+                <button
+                  onClick={() => generate({ target: reviseTarget, request: reviseRequest.trim() })}
+                  disabled={Boolean(busy) || !reviseRequest.trim() || !memorable.trim()}
+                >
+                  이대로 고쳐 쓰기
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="row">
             <button

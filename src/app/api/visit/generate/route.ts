@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getVisitPost, updateVisitPost } from "@/lib/db";
-import { generateVisitDraft, researchVisit, type Interview, type PhotoAnalysis } from "@/lib/visit";
+import { generateVisitDraft, researchVisit, type Interview, type PhotoAnalysis, type Revision } from "@/lib/visit";
 import type { Place } from "@/lib/kakao";
 
 export const runtime = "nodejs";
@@ -47,7 +47,21 @@ export async function POST(req: Request) {
 
     const analysis = post.analysis as unknown as PhotoAnalysis;
     const place = (post.place as unknown as Place) ?? null;
-    const research = await researchVisit({ placeQuery: post.place_query, place, analysis });
+
+    /*
+     * 수정 요청이면 지금 초안을 고쳐 쓴다. 조사는 다시 하지 않는다 — 조사 결과는 이미
+     * 이전 초안에 녹아 있고, 고칠 때마다 Gemini 를 부르면 쿼터만 준다.
+     */
+    const request = String(body.revision?.request ?? "").trim();
+    const revision: Revision | null =
+      request && post.body_markdown
+        ? {
+            previous: String(post.body_markdown),
+            target: String(body.revision?.target ?? "전체").trim() || "전체",
+            request,
+          }
+        : null;
+    const research = revision ? null : await researchVisit({ placeQuery: post.place_query, place, analysis });
 
     const draft = await generateVisitDraft({
       placeQuery: post.place_query,
@@ -57,6 +71,7 @@ export async function POST(req: Request) {
       interview,
       situation,
       research,
+      revision,
     });
 
     const saved = await updateVisitPost(id, {
@@ -79,7 +94,11 @@ export async function POST(req: Request) {
       draft,
       // 저장하지 않는다. 화면에서 어떤 정보가 들어갔는지 확인하는 용도다
       research,
-      warnings: research ? [] : ["검색 조사에 실패해 사진과 답변만으로 썼습니다. Gemini 키·쿼터를 확인하세요."],
+      revised: Boolean(revision),
+      warnings:
+        research || revision
+          ? []
+          : ["검색 조사에 실패해 사진과 답변만으로 썼습니다. Gemini 키·쿼터를 확인하세요."],
     });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
