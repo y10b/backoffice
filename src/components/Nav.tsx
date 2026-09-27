@@ -101,6 +101,19 @@ export const NAV_GROUPS: NavGroup[] = [
         color: "#30b0c7",
         icon: svg(<path d="M5 7l5 5-5 5M13 17h6" />),
       },
+      // 부수입 갈래. 시즌 주제 → 프롬프트 → 누끼 → 판매용 파일. 생성·업로드는 사람이 한다
+      {
+        href: "/stock",
+        label: "AI 스톡 이미지",
+        color: "#af52de",
+        icon: svg(
+          <>
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+            <circle cx="9" cy="10" r="1.8" />
+            <path d="M20.5 15.5l-5-5-9 9" />
+          </>,
+        ),
+      },
       // 제휴 수익 갈래. 블로그 글과 수명·손질 방식이 달라 티스토리 글과 따로 둔다
       {
         href: "/threads",
