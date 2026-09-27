@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getVisitPost, updateVisitPost } from "@/lib/db";
-import { generateVisitDraft, type Interview, type PhotoAnalysis } from "@/lib/visit";
+import { generateVisitDraft, researchVisit, type Interview, type PhotoAnalysis } from "@/lib/visit";
 import type { Place } from "@/lib/kakao";
 
 export const runtime = "nodejs";
@@ -10,8 +10,10 @@ export const maxDuration = 120;
 /**
  * 3단계 — 인터뷰 답을 받아 본문을 쓴다.
  *
- * 사실은 1단계에서 이미 다 모였다. 여기서 더해지는 건 사람만 아는 것 — 누구랑 갔고,
- * 뭐가 기억에 남고, 또 갈 건지. 네 줄이지만 이 글에서 유일하게 대체 불가능한 정보다.
+ * 사진에서 읽은 사실은 1단계에서 모였다. 여기서 두 가지가 더해진다.
+ *  - 사람만 아는 것 — 누구랑 갔고, 뭐가 기억에 남고, 또 갈 건지
+ *  - 검색으로 찾는 것 — 가게 소개, 메뉴가 어떤 음식인지, 위치. Gemini 가 조사하고
+ *    GPT 는 그 결과를 받아 글만 쓴다
  */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
@@ -43,13 +45,18 @@ export async function POST(req: Request) {
     // 화면이 상황을 고쳐 보냈으면 그것을 쓴다. 안 보냈으면 분석 때 넣은 값 그대로
     const situation = typeof body.situation === "string" ? body.situation.trim() : post.situation;
 
+    const analysis = post.analysis as unknown as PhotoAnalysis;
+    const place = (post.place as unknown as Place) ?? null;
+    const research = await researchVisit({ placeQuery: post.place_query, place, analysis });
+
     const draft = await generateVisitDraft({
       placeQuery: post.place_query,
       visitedOn: post.visited_on,
-      analysis: post.analysis as unknown as PhotoAnalysis,
-      place: (post.place as unknown as Place) ?? null,
+      analysis,
+      place,
       interview,
       situation,
+      research,
     });
 
     const saved = await updateVisitPost(id, {
@@ -66,7 +73,14 @@ export async function POST(req: Request) {
       status: "drafted",
     });
 
-    return NextResponse.json({ ok: true, post: saved, draft });
+    return NextResponse.json({
+      ok: true,
+      post: saved,
+      draft,
+      // 저장하지 않는다. 화면에서 어떤 정보가 들어갔는지 확인하는 용도다
+      research,
+      warnings: research ? [] : ["검색 조사에 실패해 사진과 답변만으로 썼습니다. Gemini 키·쿼터를 확인하세요."],
+    });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
   }

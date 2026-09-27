@@ -1185,6 +1185,12 @@ pre {
   color-scheme: light;
 }
 
+.preview img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
 .preview h1 {
   font-size: 22px;
   margin: 0 0 18px;

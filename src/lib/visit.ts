@@ -12,20 +12,23 @@
  *  |-------------|-----------------------------------------------|
  *  | 사진        | 메뉴와 가격, 음식 종류, 좌석 형태, 방문 동선    |
  *  | 카카오 로컬 | 정확한 상호·주소·업종                          |
+ *  | 검색 조사   | 가게 소개, 대표 메뉴가 어떤 음식인지, 동네·위치 |
  *  | 사람        | 누구랑, 어땠는지, 또 갈 건지 (30초 인터뷰)      |
  *
- * 셋 중 어디에도 없는 것은 **쓰지 않는다.** 안 시킨 메뉴의 맛, 사장님과의 대화,
+ * 넷 중 어디에도 없는 것은 **쓰지 않는다.** 안 시킨 메뉴의 맛, 사장님과의 대화,
  * 웨이팅 시간 — AI 가 후기를 쓸 때 반사적으로 지어내는 것들이라 프롬프트에 목록으로
  * 박아뒀다. 지어낸 방문기는 표시광고법 문제이기 전에 그 가게에 실제 피해를 준다.
  *
  * 사진 원본은 저장하지 않는다. 분석 결과만 남긴다 — 발행은 사용자가 휴대폰에서 직접
  * 하므로 서버가 원본을 들고 있을 이유가 없고, 무료 티어 용량도 아낀다.
  *
- * 모델은 OpenAI(GPT)다. 사용자가 채널별로 모델을 나눴다 — 네이버 후기 갈래는 GPT,
- * 티스토리 본문은 Gemini. 그래서 여기만 openai.ts 를 쓴다.
+ * 글은 OpenAI(GPT)가 쓴다. 사용자가 채널별로 모델을 나눴다 — 네이버 후기 갈래는 GPT,
+ * 티스토리 본문은 Gemini. 다만 검색 조사는 Gemini 가 한다. 구글 검색 그라운딩이
+ * 붙어 있어 가게·메뉴 정보를 실제 웹에서 찾아오고, GPT 는 그 결과를 받아 쓰기만 한다.
  */
 
 import { openaiJson } from "./openai";
+import { DEFAULT_MODEL, geminiCall, parseGrounding, type ResearchResult } from "./gemini";
 import { markdownToHtml } from "./markdown";
 import { searchPlaces, type Place } from "./kakao";
 
@@ -215,6 +218,73 @@ export async function checkPlace(query: string): Promise<PlaceCheck> {
 }
 
 /* ------------------------------------------------------------------ *
+ * 검색 조사 — 기억이 비는 자리를 공개 정보로 채운다
+ *
+ * 오래전 방문이라 사람은 세부를 기억하지 못한다. 그렇다고 본문에 "기억이 안 나요"
+ * 라고 쓰면 읽는 사람에게 무성의해 보인다. 가게 소개, 대표 메뉴가 어떤 음식인지,
+ * 어느 역 근처인지는 검색하면 나오는 정보라 사람의 기억이 필요 없다.
+ *
+ * 조사는 Gemini(구글 검색 그라운딩)가 하고, 결과를 평문 그대로 GPT 프롬프트에 넣는다.
+ * 실패해도 글은 나와야 하므로 오류는 삼키고 null 을 돌려준다.
+ * ------------------------------------------------------------------ */
+
+export type ResearchInput = {
+  placeQuery: string;
+  place: Place | null;
+  analysis: PhotoAnalysis;
+};
+
+export function buildVisitResearchPrompt(o: ResearchInput): string {
+  const { place, analysis: a } = o;
+  const who = place
+    ? `${place.name} (${place.address}, ${place.category})`
+    : o.placeQuery;
+  const menu = a.menu.map((m) => m.name);
+  const food = a.photos.filter((p) => p.kind === "음식").map((p) => p.caption);
+
+  return [
+    "아래 음식점의 방문 후기를 쓰려 합니다. 구글 검색으로 이 가게와 메뉴에 대한 공개 정보를 조사하세요. 글은 쓰지 마세요.",
+    `가게: ${who}`,
+    menu.length ? `메뉴판·영수증에서 읽은 메뉴: ${menu.join(", ")}` : null,
+    food.length ? `사진에 찍힌 음식: ${food.join(" / ")}` : null,
+    "",
+    "조사할 것:",
+    "- 가게 소개: 어떤 곳으로 알려져 있는지, 대표 메뉴, 매장 특징(좌석·분위기·혼밥 여부 등)",
+    "- 메뉴: 위 메뉴와 사진 속 음식이 어떤 음식인지, 보통 어떤 구성·맛으로 소개되는지",
+    "- 위치: 가까운 지하철역·동네, 찾아가는 법, 주차",
+    "- 최근 알려진 메뉴 가격이 있으면 '몇 년 기준'인지와 함께",
+    "",
+    "- 이 가게에 대한 정보인지 확실하지 않으면 적지 말 것. 같은 이름의 다른 지점과 섞지 말 것.",
+    "- 검색으로 확인되지 않은 항목은 '확인되지 않음'이라고 적을 것. 추정으로 채우지 말 것.",
+    "- 영업시간·휴무일은 자주 바뀌므로 조사하지 말 것.",
+    "- 출력은 마크다운 불릿만. 서론·결론 없이 한 줄씩.",
+  ]
+    // 빈 문자열은 문단 구분이라 남기고, 재료가 없는 줄(null)만 뺀다
+    .filter((l) => l !== null)
+    .join("\n");
+}
+
+export async function researchVisit(o: ResearchInput & { retries?: number }): Promise<ResearchResult | null> {
+  try {
+    const r = parseGrounding(
+      await geminiCall(
+        DEFAULT_MODEL,
+        {
+          contents: [{ role: "user", parts: [{ text: buildVisitResearchPrompt(o) }] }],
+          // 그라운딩은 responseSchema 와 같이 못 쓴다. 평문으로 받는다
+          tools: [{ google_search: {} }],
+          generationConfig: { temperature: 0.2 },
+        },
+        { retries: o.retries },
+      ),
+    );
+    return r.text ? r : null;
+  } catch {
+    return null;
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * 2단계 — 인터뷰
  *
  * 사실은 전부 자동으로 채워지므로 사람에게 물을 것은 감상뿐이다. 휴대폰에서
@@ -326,6 +396,8 @@ export type GenerateVisitOptions = {
   interview: Interview;
   /** 이 글의 상황 한 줄. "이 블로그 첫 글", "여수 여행 2일차" 등 */
   situation?: string;
+  /** Gemini 검색 조사 결과. 없으면 사진·카카오·인터뷰만으로 쓴다 */
+  research?: ResearchResult | null;
   retries?: number;
 };
 
@@ -340,8 +412,25 @@ export function buildVisitPrompt(o: GenerateVisitOptions): string {
     ? `  상호: ${place.name}\n  주소: ${place.address}\n  업종: ${place.category}`
     : `  (카카오에서 확인되지 않음 — 사용자가 입력한 "${o.placeQuery}" 만 있다)`;
 
+  const researchBlock = o.research?.text
+    ? `${o.research.text}
+
+이 정보는 **검색으로 찾은 공개 정보**다. 가게 소개, 메뉴가 어떤 음식인지, 위치·찾아가는
+길을 설명하는 데 적극적으로 쓴다. 다만 사용자가 직접 겪은 일처럼 쓰지 않는다.
+  좋음: "여기는 돼지국밥으로 알려진 곳이에요", "신림역 3번 출구에서 5분 거리예요"
+  나쁨: "사장님이 20년째 하신다고 직접 말씀해 주셨어요"
+"확인되지 않음"으로 적힌 항목은 쓰지 않는다. 검색으로 찾은 가격은 "최근 기준"임을 밝히고,
+사진에서 읽은 가격과 다르면 사진 쪽을 방문 당시 가격으로 쓴다.`
+    : "  (조사 결과 없음)";
+
   return `네이버 블로그에 올릴 **방문 후기**를 쓴다. 사용자가 실제로 다녀온 곳이고,
-사진이 그 증거다. 오래전 방문이라 세부는 기억하지 못하므로 아래 재료로만 쓴다.
+사진이 그 증거다. 아래 재료로만 쓴다.
+
+# 기억이 비는 자리
+오래전 방문이라 사용자는 세부를 다 기억하지 못한다. 그렇다고 **"기억이 안 나요",
+"잘 기억나지 않지만", "기억이 가물가물" 같은 말은 쓰지 마라.** 읽는 사람에게 무성의해
+보인다. 사용자 답변에 없는 부분은 아래 "검색 조사" 의 공개 정보와 사진에 보이는 것으로
+채운다. 그래도 채울 게 없으면 그 이야기를 아예 꺼내지 않는다.
 
 # 페르소나
 ${PERSONA}
@@ -356,6 +445,9 @@ ${o.visitedOn}
 
 # 가게 (카카오 로컬 — 공개 정보)
 ${placeBlock}
+
+# 검색 조사 (Gemini — 구글 검색)
+${researchBlock}
 
 # 사진에서 확인된 것
 ${a.observations.map((s) => `  - ${s}`).join("\n") || "  (없음)"}
@@ -379,14 +471,14 @@ ${a.uncertain.map((s) => `  - ${s}`).join("\n") || "  (없음)"}
 
 # 절대 지어내지 마라
 다음은 위 재료에 근거가 없으면 **쓰지 않는다.** 하나라도 쓰면 이 글은 실패다.
-  - 주문하지 않은 메뉴의 맛 평가
+  - 주문하지 않은 메뉴의 맛 평가 (어떤 음식인지 소개하는 건 검색 조사에 있으면 된다)
   - 사장님·직원과의 대화, 서비스로 받은 것
   - 웨이팅 시간, 음식이 나온 속도
-  - 재료 원산지, 조리법, 가게 역사, 몇 년 됐는지
+  - 재료 원산지, 조리법, 가게 역사 — 검색 조사에 있을 때만, 찾아본 정보라는 말투로
   - 다른 손님의 반응, 매장이 붐볐는지
-  - 위 "메뉴와 가격"에 없는 가격. 근거가 없으면 **가격을 아예 언급하지 마라**
+  - "메뉴와 가격"에도 검색 조사에도 없는 가격. 근거가 없으면 **가격을 아예 언급하지 마라**
 
-가격을 쓸 때는 "방문 당시 기준"임을 밝힌다. 지금 가격은 달라졌을 수 있다.
+사진에서 읽은 가격은 "방문 당시 기준"임을 밝힌다. 지금 가격은 달라졌을 수 있다.
 
 꼭 필요한데 근거가 애매한 문장은 본문에 쓰지 말고 needsCheck 배열에 넣어라.
 사용자가 직접 판단한다.

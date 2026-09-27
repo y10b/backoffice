@@ -43,10 +43,10 @@ export async function copyRichHtml(html: string): Promise<"rich" | "plain"> {
  *
  * 스마트에디터는 `<h2>` 같은 제목 태그를 자주 버린다(특히 앱). 대신 굵게와 글자 크기는
  * 살린다. 그래서 소제목을 "굵고 큰 문단"으로, 굵게는 `<b>` 로 바꾸고, 문단 사이에 빈 줄을
- * 둔다. 사진 자리(`[사진 N]`)는 한 줄로 두어 나중에 사진으로 갈아끼우기 쉽게 한다.
+ * 둔다. 사진을 넘기면 사진 자리(`[사진 N]`)를 실제 사진으로 바꾼다.
  */
-export function toNaverHtml(html: string, title?: string): string {
-  let out = html
+export function toNaverHtml(html: string, title?: string, photos?: string[]): string {
+  let out = withPhotos(html, photos)
     .replace(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi, '<p><b><span style="font-size:19px">$1</span></b></p><p><br></p>')
     .replace(/<h[4-6][^>]*>([\s\S]*?)<\/h[4-6]>/gi, "<p><b>$1</b></p>")
     .replace(/<strong>/gi, "<b>")
@@ -61,9 +61,27 @@ export function toNaverHtml(html: string, title?: string): string {
   return out;
 }
 
+/**
+ * 본문의 `[사진 N]` 자리를 실제 사진으로 바꾼다. photos[N-1] 이 N번 사진이다.
+ *
+ * 사진은 data URL 로 넣는다. 로컬 주소는 네이버 서버가 가져갈 수 없지만 data URL 은
+ * 붙여넣는 순간 에디터가 자기 서버로 다시 올린다. 없는 번호는 자리 표시를 그대로 둔다 —
+ * 사진이 빠진 걸 알아채고 손으로 넣을 수 있어야 한다.
+ */
+export function withPhotos(html: string, photos?: string[]): string {
+  if (!photos?.length) return html;
+  const img = (n: string) => {
+    const src = photos[Number(n) - 1];
+    return src ? `<img src="${src}" alt="사진 ${n}">` : null;
+  };
+  return html
+    .replace(/<p>\s*\[사진\s*(\d+)\]\s*<\/p>/g, (m, n) => (img(n) ? `<p>${img(n)}</p>` : m))
+    .replace(/\[사진\s*(\d+)\]/g, (m, n) => img(n) ?? m);
+}
+
 /** 네이버용으로 변환해 서식 복사한다 */
-export async function copyForNaver(html: string, title?: string): Promise<"rich" | "plain"> {
-  return copyRichHtml(toNaverHtml(html, title));
+export async function copyForNaver(html: string, title?: string, photos?: string[]): Promise<"rich" | "plain"> {
+  return copyRichHtml(toNaverHtml(html, title, photos));
 }
 
 function isTouch(): boolean {

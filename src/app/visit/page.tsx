@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Help from "@/components/Help";
-import { copyForNaver, copyText, toNaverHtml } from "@/lib/clipboard";
+import { copyForNaver, copyText, toNaverHtml, withPhotos } from "@/lib/clipboard";
 
 /**
  * 네이버 방문 후기 — 사진에서 글로.
@@ -56,6 +56,11 @@ const STATUS_LABEL: Record<string, string> = {
 /** 사진 긴 변을 이 크기로 줄여 보낸다 */
 const MAX_EDGE = 1024;
 const MAX_PHOTOS = 15;
+/**
+ * 본문에 넣을 사진의 긴 변. 네이버 본문 폭(약 900px)보다 조금 크게 둔다.
+ * 15장이 한 번에 클립보드로 가므로 원본 크기로는 못 넣는다.
+ */
+const BLOG_EDGE = 1280;
 
 /**
  * 사진을 줄여 base64 로 만든다.
@@ -64,14 +69,14 @@ const MAX_PHOTOS = 15;
  * 해상도를 쓰지 않으므로 긴 변 1024px, JPEG 0.8 로 줄인다 — 메뉴판 글씨는 이 크기로도
  * 읽힌다. 브라우저에 렌더 엔진이 이미 있으니 서버로 원본을 보낼 이유가 없다.
  */
-async function shrink(file: File): Promise<{ mimeType: string; data: string }> {
+async function shrink(file: File, edge = MAX_EDGE): Promise<{ mimeType: string; data: string }> {
   const bitmap = await createImageBitmap(file).catch(() => {
     throw new Error(
       `${file.name} 을(를) 읽지 못했습니다. HEIC 라면 아이폰 설정 → 카메라 → 포맷을 "높은 호환성"으로 두거나, 사진 앱에서 JPEG 로 내보내주세요.`,
     );
   });
 
-  const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  const scale = Math.min(1, edge / Math.max(bitmap.width, bitmap.height));
   const w = Math.round(bitmap.width * scale);
   const h = Math.round(bitmap.height * scale);
 
@@ -115,6 +120,18 @@ function VisitInner() {
   const [draft, setDraft] = useState<VisitPost | null>(null);
   /* 아이폰에서 버튼 복사가 평문으로만 붙을 때 쓰는 수동 선택 영역 */
   const [manualCopy, setManualCopy] = useState(false);
+  /*
+   * 본문 [사진 N] 자리에 넣을 사진(data URL). 서버에 저장하지 않으므로 이 화면에서 분석한
+   * 글에만 있다. 지난 초안을 열면 비어 있고, 그때는 자리 표시가 그대로 복사된다.
+   */
+  const [photos, setPhotos] = useState<{ postId: number; urls: string[] } | null>(null);
+  /* 본문을 쓰기 전에 Gemini 가 검색으로 찾은 것. 저장하지 않아 방금 생성한 글에만 있다 */
+  const [research, setResearch] = useState<{
+    postId: number;
+    text: string;
+    sources: { title: string; uri: string }[];
+  } | null>(null);
+  const [researchFailed, setResearchFailed] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -168,6 +185,9 @@ function VisitInner() {
     setWarnings([]);
     setDraft(null);
     setFiles([]);
+    setPhotos(null);
+    setResearch(null);
+    setResearchFailed(false);
     setPlaceQuery("");
     setVisitedOn("");
     setSituation("");
@@ -180,9 +200,12 @@ function VisitInner() {
     setBusy("사진을 읽는 중… 장수에 따라 20~40초 걸립니다");
     try {
       const photos = [];
+      const urls: string[] = [];
       for (let i = 0; i < files.length; i++) {
         const { mimeType, data } = await shrink(files[i]);
         photos.push({ index: i + 1, mimeType, data });
+        const blog = await shrink(files[i], BLOG_EDGE);
+        urls.push(`data:${blog.mimeType};base64,${blog.data}`);
       }
 
       const res = await fetch("/api/visit/analyze", {
@@ -194,6 +217,7 @@ function VisitInner() {
       if (!d.ok) throw new Error(d.error ?? "분석에 실패했습니다.");
 
       setId(d.id);
+      setPhotos({ postId: d.id, urls });
       setAnalysis(d.analysis);
       setPlace(d.place);
       // 분석 단계에서 이미 행이 생긴다. 목록을 바로 갱신해야 "지난 초안"에 보인다
@@ -210,7 +234,7 @@ function VisitInner() {
   async function generate() {
     if (!id) return;
     setError("");
-    setBusy("본문을 쓰는 중…");
+    setBusy("가게·메뉴를 검색하고 본문을 쓰는 중… 30초쯤 걸립니다");
     try {
       const res = await fetch("/api/visit/generate", {
         method: "POST",
@@ -224,6 +248,8 @@ function VisitInner() {
       const d = await res.json();
       if (!d.ok) throw new Error(d.error ?? "생성에 실패했습니다.");
       setDraft(d.post);
+      setResearch(d.research ? { postId: d.post.id, ...d.research } : null);
+      setResearchFailed(!d.research);
       load();
     } catch (e) {
       setError((e as Error).message);
@@ -247,6 +273,10 @@ function VisitInner() {
       setError((e as Error).message);
     }
   }
+
+  // 이 화면에서 분석한 글일 때만 사진이 있다. 다른 초안에 엉뚱한 사진이 붙으면 안 된다
+  const draftPhotos = draft && photos?.postId === draft.id ? photos.urls : undefined;
+  const draftResearch = draft && research?.postId === draft.id ? research : null;
 
   return (
     <div className="main">
@@ -493,6 +523,34 @@ function VisitInner() {
             </div>
           )}
 
+          {researchFailed && (
+            <div className="alert warn">
+              검색 조사에 실패해 사진과 답변만으로 썼습니다. Gemini 키·쿼터를 확인하고 다시
+              생성하면 가게·메뉴 정보가 채워집니다.
+            </div>
+          )}
+          {draftResearch && (
+            <details style={{ marginBottom: 12 }}>
+              <summary>
+                검색 조사 (Gemini) — 출처 {draftResearch.sources.length}건
+              </summary>
+              <pre className="hint" style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>
+                {draftResearch.text}
+              </pre>
+              {draftResearch.sources.length > 0 && (
+                <ul className="hint" style={{ paddingLeft: 18 }}>
+                  {draftResearch.sources.map((src, i) => (
+                    <li key={`${src.uri}-${i}`}>
+                      <a href={src.uri} target="_blank" rel="noreferrer">
+                        {src.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </details>
+          )}
+
           <h3>제목 3안</h3>
           {draft.titles?.map((t, i) => (
             <div className="row" key={i}>
@@ -510,14 +568,14 @@ function VisitInner() {
           <h3>본문</h3>
           <div
             className="preview"
-            dangerouslySetInnerHTML={{ __html: draft.body_html ?? "" }}
+            dangerouslySetInnerHTML={{ __html: withPhotos(draft.body_html ?? "", draftPhotos) }}
           />
 
           <div className="row">
             <button
               className="primary"
               onClick={() =>
-                copyForNaver(draft.body_html ?? "").then((mode) =>
+                copyForNaver(draft.body_html ?? "", undefined, draftPhotos).then((mode) =>
                   flash(
                     mode === "rich"
                       ? "서식 유지로 복사됨 — 네이버 에디터에 붙여넣으면 소제목·굵게가 살아납니다"
@@ -530,7 +588,7 @@ function VisitInner() {
             </button>
             <button
               onClick={() =>
-                copyForNaver(draft.body_html ?? "", draft.title || draft.titles?.[0] || "").then((mode) =>
+                copyForNaver(draft.body_html ?? "", draft.title || draft.titles?.[0] || "", draftPhotos).then((mode) =>
                   flash(mode === "rich" ? "제목 + 본문을 서식 유지로 복사됨" : "제목 + 본문을 평문으로 복사됨"),
                 )
               }
@@ -569,7 +627,7 @@ function VisitInner() {
                 id="naver-manual-copy"
                 className="preview"
                 style={{ maxHeight: 360 }}
-                dangerouslySetInnerHTML={{ __html: toNaverHtml(draft.body_html ?? "", draft.title || draft.titles?.[0] || "") }}
+                dangerouslySetInnerHTML={{ __html: toNaverHtml(draft.body_html ?? "", draft.title || draft.titles?.[0] || "", draftPhotos) }}
               />
             </div>
           )}
@@ -591,6 +649,11 @@ function VisitInner() {
                 사진 업로드 순서
                 <Help text="본문의 [사진 N] 자리와 같은 번호입니다. 이 순서대로 올리세요." />
               </h3>
+              <p className="hint">
+                {draftPhotos
+                  ? "본문 복사에 사진이 함께 들어갑니다. 빠진 사진만 이 순서를 보고 채우세요."
+                  : "사진은 저장하지 않아 지난 초안에는 없습니다. [사진 N] 자리에 이 순서대로 직접 넣으세요."}
+              </p>
               <ol>
                 {draft.photo_order.map((p) => (
                   <li key={p.index}>
