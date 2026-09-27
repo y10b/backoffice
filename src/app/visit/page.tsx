@@ -35,6 +35,9 @@ type VisitPost = {
   posted_at?: string | null;
   created_at: string;
   updated_at?: string;
+  /* 단건 조회에만 온다. 지난 초안을 다시 쓸 때 2·3단계를 되살리는 데 쓴다 */
+  analysis?: Analysis | null;
+  interview?: Partial<Record<"company" | "mealTime" | "memorable" | "revisit" | "downside", string>> | null;
 };
 
 type Analysis = {
@@ -147,13 +150,32 @@ function VisitInner() {
     load();
   }, [load]);
 
-  /** 지난 초안 하나를 4단계 자리에 띄운다. 목록의 "열기"와 ?post=ID 진입이 같이 쓴다 */
+  /**
+   * 지난 초안 하나를 띄운다. 목록의 "열기"와 ?post=ID 진입이 같이 쓴다.
+   *
+   * 4단계만 띄우면 다시 쓸 길이 없다. 사진 분석과 인터뷰 답은 DB 에 남아 있으니 2·3단계도
+   * 되살려서, 답을 고치거나 그대로 "다시 쓰기"를 누를 수 있게 한다. 사진 원본은 저장하지
+   * 않으므로 1단계와 본문 속 사진만은 돌아오지 않는다.
+   */
   const openPost = useCallback(async (postId: number) => {
     try {
       const d = await (await fetch(`/api/visit?id=${postId}`)).json();
       if (d.post) {
-        setDraft(d.post);
+        const p = d.post as VisitPost;
+        setDraft(p);
         setId(postId);
+        setAnalysis(p.analysis ?? null);
+        setPlace(p.place);
+        setWarnings(p.warnings ?? []);
+        setPlaceQuery(p.place_query ?? "");
+        setVisitedOn(p.visited_on ?? "");
+        setSituation(p.situation ?? "");
+        const iv = p.interview ?? {};
+        if (iv.company) setCompany(iv.company);
+        if (iv.mealTime) setMealTime(iv.mealTime);
+        setMemorable(iv.memorable ?? "");
+        if (iv.revisit) setRevisit(iv.revisit);
+        setDownside(iv.downside ?? "");
       } else if (d.error) {
         setError(d.error);
       }
@@ -511,6 +533,17 @@ function VisitInner() {
       {draft && (
         <div className="card">
           <h2>4. 초안</h2>
+          {analysis && (
+            <div className="row" style={{ marginBottom: 10 }}>
+              <button onClick={generate} disabled={Boolean(busy) || !memorable.trim()}>
+                다시 쓰기
+              </button>
+              <span className="hint">
+                위 3단계 답을 고친 뒤 누르면 그 답으로, 그대로 누르면 같은 답으로 새로 씁니다.
+                검색 조사도 다시 합니다. 지금 본문은 덮어씁니다.
+              </span>
+            </div>
+          )}
 
           {draft.needs_check?.length > 0 && (
             <div className="alert">
