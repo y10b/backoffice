@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Help from "@/components/Help";
 import { copyText } from "@/lib/clipboard";
-import { removeBackground, splitElements, splitGrid, type Raster } from "@/lib/cutout";
+import { removeBackground, splitByGutters, splitElements, splitGrid, type Raster } from "@/lib/cutout";
 import { canvasToBlob, fileToRaster, rasterToCanvas, slug } from "@/lib/canvasImage";
 import { sheetPrompt, STOCK_STYLES, type StockStyle } from "@/lib/stockPrompt";
 import { makeZip } from "@/lib/zip";
@@ -40,7 +40,12 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
   const [style, setStyle] = useState<StockStyle>("sticker");
 
   const [files, setFiles] = useState<File[]>([]);
-  const [mode, setMode] = useState<"grid" | "auto">("grid");
+  /*
+   * gutter: 빈 줄을 찾아 격자를 알아낸다(기본). 칸 수를 몰라도 되고 삐뚤어도 된다.
+   * grid:   입력한 칸 수로 똑같이 자른다. 요소끼리 붙어 빈 줄이 없을 때.
+   * blob:   떨어진 덩어리 하나를 요소 하나로. 격자 없이 흩뿌려졌을 때.
+   */
+  const [mode, setMode] = useState<"gutter" | "grid" | "blob">("gutter");
   const [holes, setHoles] = useState(false);
   const [tolerance, setTolerance] = useState(30);
   const [pieces, setPieces] = useState<Piece[]>([]);
@@ -75,6 +80,16 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
               ...(g.uniform ? [] : ["배경이 단색이 아님"]),
             ],
           }));
+        } else if (mode === "gutter") {
+          const r = removeBackground(src, { tolerance, holes });
+          cut = splitByGutters(r.image, pad).map((g) => ({
+            image: g.image,
+            warnings: r.uniform ? [] : ["배경이 단색이 아님"],
+          }));
+          // 하나만 나왔으면 요소끼리 붙어 빈 줄이 없는 것이다. 다른 방식을 권한다
+          if (cut.length <= 1 && rows * cols > 1) {
+            cut.forEach((c) => c.warnings.push("빈 줄을 못 찾음 — '균등 격자' 로 나눠 보세요"));
+          }
         } else {
           const r = removeBackground(src, { tolerance, holes });
           const gap = Math.round(Math.min(src.width, src.height) * 0.01);
@@ -147,7 +162,7 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
       <div className="card">
         <h2>
           1. 시트 프롬프트
-          <Help text="아이템 하나를 여러 변형으로 격자에 그리게 합니다. ChatGPT 에 붙여 넣고, 받은 시트를 아래 2번에 올리세요. 격자가 흐트러지면 '자동' 으로 나누면 됩니다." />
+          <Help text="아이템 하나를 여러 변형으로 격자에 그리게 합니다. ChatGPT 에 붙여 넣고, 받은 시트를 아래 2번에 올리세요. 격자가 조금 흐트러져도 자동 격자가 빈 줄을 찾아 나눕니다." />
         </h2>
         <div className="row">
           <div className="field" style={{ flex: 2, minWidth: 180 }}>
@@ -197,7 +212,7 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
       <div className="card">
         <h2>
           2. 나누고 누끼 따기
-          <Help text="격자: 칸을 그대로 잘라 칸마다 누끼를 땁니다. 조각이 여러 개로 그려진 요소도 한 칸이면 하나로 남습니다. 자동: 떨어진 덩어리를 요소로 봅니다. 모델이 격자를 안 지켰을 때 쓰세요." />
+          <Help text="자동 격자(기본): 요소 사이의 빈 줄을 찾아 칸을 스스로 알아냅니다. 칸 수를 몰라도 되고 줄이 삐뚤어도 됩니다. 균등: 입력한 칸 수로 똑같이 자릅니다 — 요소끼리 붙어 빈 줄이 없을 때. 덩어리: 떨어진 덩어리 하나를 요소 하나로 봅니다 — 격자 없이 흩뿌려졌을 때." />
         </h2>
         <div className="field">
           <label>시트 이미지</label>
@@ -213,11 +228,14 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
         </div>
         <div className="row" style={{ alignItems: "center" }}>
           <div className="seg">
-            <button className={mode === "grid" ? "on" : ""} onClick={() => setMode("grid")}>
-              격자 {rows}×{cols}
+            <button className={mode === "gutter" ? "on" : ""} onClick={() => setMode("gutter")}>
+              자동 격자
             </button>
-            <button className={mode === "auto" ? "on" : ""} onClick={() => setMode("auto")}>
-              자동
+            <button className={mode === "grid" ? "on" : ""} onClick={() => setMode("grid")}>
+              균등 {rows}×{cols}
+            </button>
+            <button className={mode === "blob" ? "on" : ""} onClick={() => setMode("blob")}>
+              덩어리
             </button>
           </div>
           <label className="check-inline">

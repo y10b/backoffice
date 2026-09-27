@@ -337,3 +337,89 @@ export function splitGrid(img: Raster, rows: number, cols: number, pad: number, 
   }
   return out;
 }
+
+/**
+ * 한 줄로 늘어선 투영값에서 "내용이 있는 구간" 을 찾는다.
+ *
+ * - `noise` 이하는 빈 줄로 본다 (안티앨리어싱 찌꺼기, 먼지)
+ * - 빈 줄이 `minGap` 보다 짧으면 요소 안의 틈(떨어져 그린 반짝이, 김)이라 보고 잇는다
+ * - 다른 구간의 중앙값의 1/4 도 안 되는 가는 구간은 이웃에 붙인다
+ */
+function bands(profile: Int32Array | number[], noise: number, minGap: number): [number, number][] {
+  const out: [number, number][] = [];
+  let start = -1;
+  for (let i = 0; i <= profile.length; i++) {
+    const on = i < profile.length && profile[i] > noise;
+    if (on && start < 0) start = i;
+    if (!on && start >= 0) {
+      const last = out[out.length - 1];
+      if (last && start - last[1] < minGap) last[1] = i;
+      else out.push([start, i]);
+      start = -1;
+    }
+  }
+  if (out.length < 2) return out;
+
+  const sizes = out.map(([a, b]) => b - a).sort((x, y) => x - y);
+  const med = sizes[Math.floor(sizes.length / 2)];
+  const merged: [number, number][] = [];
+  for (const b of out) {
+    if (b[1] - b[0] >= med / 4) {
+      merged.push([...b]);
+      continue;
+    }
+    // 가는 구간 — 더 가까운 이웃에 붙인다. 앞에 있는 게 없으면 뒤에 붙도록 남겨 둔다
+    const prev = merged[merged.length - 1];
+    if (prev) prev[1] = b[1];
+    else merged.push([...b]);
+  }
+  // 맨 앞이 가는 구간으로 남았으면 다음 구간과 합친다
+  if (merged.length > 1 && merged[0][1] - merged[0][0] < med / 4) {
+    merged[1][0] = merged[0][0];
+    merged.shift();
+  }
+  return merged;
+}
+
+export type GutterPiece = {
+  image: Raster;
+  /** 몇 번째 행, 몇 번째 열에서 나왔는지 (0부터) */
+  row: number;
+  col: number;
+};
+
+/**
+ * 빈 줄(여백)을 찾아 격자를 스스로 알아낸다. 칸 수를 몰라도 되고, 칸이 고르지 않아도 된다.
+ *
+ * 배경을 걷어낸 이미지에서 가로줄마다 보이는 픽셀 수를 세면, 요소 행 사이의 여백은 0 이
+ * 된다 — 그 사이가 행 경계다. 행마다 같은 방법을 세로로 한 번 더 하면 열 경계가 나온다.
+ * 행마다 열을 따로 찾으므로 줄마다 요소 개수나 위치가 달라도 맞게 잘린다.
+ *
+ * 빈 줄이 하나도 없으면(요소끼리 붙어 있으면) 그 행은 통째로 한 조각이 된다. 그때는
+ * 균등 격자나 덩어리 나누기를 쓴다.
+ */
+export function splitByGutters(img: Raster, pad: number): GutterPiece[] {
+  const { data, width: w, height: h } = img;
+  const on = (x: number, y: number) => data[(y * w + x) * 4 + 3] > 16;
+  // 이미지 긴 변의 1% 보다 좁은 틈은 요소 안의 틈으로 본다
+  const minGap = Math.max(3, Math.round(Math.max(w, h) * 0.01));
+
+  const rowProfile = new Int32Array(h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (on(x, y)) rowProfile[y]++;
+  const rows = bands(rowProfile, Math.max(1, Math.round(w * 0.002)), minGap);
+
+  const out: GutterPiece[] = [];
+  rows.forEach(([y0, y1], ri) => {
+    const colProfile = new Int32Array(w);
+    for (let y = y0; y < y1; y++) for (let x = 0; x < w; x++) if (on(x, y)) colProfile[x]++;
+    const cols = bands(colProfile, Math.max(1, Math.round((y1 - y0) * 0.002)), minGap);
+
+    cols.forEach(([x0, x1], ci) => {
+      const cell = cropPadded(img, { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, 0);
+      const box = opaqueBox(cell);
+      if (!box) return;
+      out.push({ image: cropPadded(cell, box, pad), row: ri, col: ci });
+    });
+  });
+  return out;
+}
