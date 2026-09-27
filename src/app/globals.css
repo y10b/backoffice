@@ -1853,3 +1853,94 @@ a.entry-title:hover {
   flex: 0 0 auto;
   white-space: nowrap;
 }
+
+/* ------------------------------------------------------------------ *
+ * 방문 후기 · 제철 트렌드
+ * ------------------------------------------------------------------ */
+
+/* 잠깐 떴다 사라지는 알림. 스크롤한 자리에서도 보이게 화면 아래에 띄운다 */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 50;
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 86%, transparent);
+  color: var(--surface);
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+/* iOS 세그먼트 컨트롤. 객관식 한 문항 */
+.seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--fill);
+}
+
+.seg button {
+  min-height: 32px;
+  padding: 0 12px;
+  background: transparent;
+  color: var(--text);
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.seg button.on {
+  background: var(--surface);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* 제목 후보. 누르면 고른다 */
+.title-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+button.title-pick {
+  justify-content: flex-start;
+  min-height: 42px;
+  padding: 8px 12px;
+  white-space: normal;
+  text-align: left;
+  word-break: keep-all;
+  background: transparent;
+  color: var(--text);
+  font-weight: 500;
+  border: var(--hair) solid var(--border);
+}
+
+button.title-pick.on {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  font-weight: 600;
+}
+
+/* 행 전체가 눌리는 목록. "열기" 버튼을 따로 두지 않는다 */
+button.entry-button {
+  min-height: 0;
+  padding: 12px 8px;
+  margin: 0 -8px;
+  width: calc(100% + 16px);
+  background: transparent;
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+  white-space: normal;
+  border-radius: var(--radius-sm);
+}
+
+button.entry-button.current {
+  background: var(--accent-dim);
+}

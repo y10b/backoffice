@@ -69,6 +69,13 @@ export const NAV_GROUPS: NavGroup[] = [
           <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />,
         ),
       },
+      // 방문 후기의 앞단. 뜨는 음식을 보고 먹으러 갈 집을 찾는다 — 글은 다녀온 뒤에 쓴다
+      {
+        href: "/eat",
+        label: "제철 트렌드",
+        color: "#ff9f0a",
+        icon: svg(<path d="M3 17l6-6 4 4 8-8M14 7h7v7" />),
+      },
       // 키워드가 아니라 사진에서 출발하는 갈래. 방향이 반대라 글 작성과 섞지 않는다
       {
         href: "/visit",

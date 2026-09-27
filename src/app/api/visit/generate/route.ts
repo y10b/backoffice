@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getVisitPost, updateVisitPost } from "@/lib/db";
 import { generateVisitDraft, researchVisit, type Interview, type PhotoAnalysis, type Revision } from "@/lib/visit";
 import type { Place } from "@/lib/kakao";
+import { visitKeywords } from "@/lib/foodTrend";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,7 +62,13 @@ export async function POST(req: Request) {
             request,
           }
         : null;
-    const research = revision ? null : await researchVisit({ placeQuery: post.place_query, place, analysis });
+    // 조사와 키워드 검색수는 서로 기다릴 이유가 없다. 고쳐 쓰기면 둘 다 건너뛴다
+    const [research, keywords] = revision
+      ? [null, []]
+      : await Promise.all([
+          researchVisit({ placeQuery: post.place_query, place, analysis }),
+          visitKeywords({ placeQuery: post.place_query, place, analysis }),
+        ]);
 
     const draft = await generateVisitDraft({
       placeQuery: post.place_query,
@@ -72,6 +79,7 @@ export async function POST(req: Request) {
       situation,
       research,
       revision,
+      keywords,
     });
 
     const saved = await updateVisitPost(id, {
@@ -94,6 +102,7 @@ export async function POST(req: Request) {
       draft,
       // 저장하지 않는다. 화면에서 어떤 정보가 들어갔는지 확인하는 용도다
       research,
+      keywords,
       revised: Boolean(revision),
       warnings:
         research || revision

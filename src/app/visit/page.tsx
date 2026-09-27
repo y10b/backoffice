@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import Help from "@/components/Help";
 import { copyForNaver, copyText, toNaverHtml, withPhotos } from "@/lib/clipboard";
@@ -98,7 +99,11 @@ function VisitInner() {
   const [posts, setPosts] = useState<VisitPost[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState("");
+  /*
+   * 돌고 있는 작업. key 로 그 버튼에만 원을 돌리고, msg 는 버튼 옆에 적는다.
+   * 화면 맨 위 띠로 알리면 스크롤한 자리에서 안 보인다.
+   */
+  const [busy, setBusy] = useState<{ key: string; msg: string } | null>(null);
 
   /* 1단계 입력 */
   const [files, setFiles] = useState<File[]>([]);
@@ -135,6 +140,8 @@ function VisitInner() {
     sources: { title: string; uri: string }[];
   } | null>(null);
   const [researchFailed, setResearchFailed] = useState(false);
+  /* 제목에 넣으라고 넘긴 검색 키워드. 조사와 같은 이유로 방금 생성한 글에만 있다 */
+  const [keywords, setKeywords] = useState<{ postId: number; list: { keyword: string; searches: number }[] } | null>(null);
   /* 초안 고쳐 쓰기 — 어느 자리를 어떻게 */
   const [reviseTarget, setReviseTarget] = useState("전체");
   const [reviseRequest, setReviseRequest] = useState("");
@@ -179,6 +186,7 @@ function VisitInner() {
         setMemorable(iv.memorable ?? "");
         if (iv.revisit) setRevisit(iv.revisit);
         setDownside(iv.downside ?? "");
+        window.scrollTo({ top: 0, behavior: "smooth" });
       } else if (d.error) {
         setError(d.error);
       }
@@ -198,6 +206,12 @@ function VisitInner() {
     openPost(n);
   }, [postParam, openPost]);
 
+  // 제철 트렌드에서 "다녀왔어요" 로 오면 가게 이름을 채워 둔다
+  const placeParam = params.get("place");
+  useEffect(() => {
+    if (placeParam) setPlaceQuery(placeParam);
+  }, [placeParam]);
+
   function flash(msg: string) {
     setNotice(msg);
     setTimeout(() => setNotice(""), 2500);
@@ -213,16 +227,18 @@ function VisitInner() {
     setPhotos(null);
     setResearch(null);
     setResearchFailed(false);
+    setKeywords(null);
     setPlaceQuery("");
     setVisitedOn("");
     setSituation("");
     setMemorable("");
     setDownside("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function analyze() {
     setError("");
-    setBusy("사진을 읽는 중… 장수에 따라 20~40초 걸립니다");
+    setBusy({ key: "analyze", msg: "사진을 읽는 중… 장수에 따라 20~40초" });
     try {
       const photos = [];
       const urls: string[] = [];
@@ -245,14 +261,13 @@ function VisitInner() {
       setPhotos({ postId: d.id, urls });
       setAnalysis(d.analysis);
       setPlace(d.place);
-      // 분석 단계에서 이미 행이 생긴다. 목록을 바로 갱신해야 "지난 초안"에 보인다
-      load();
       setWarnings(d.warnings ?? []);
+      // 분석 단계에서 이미 행이 생긴다. 목록을 바로 갱신해야 "지난 초안"에 보인다
       load();
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy("");
+      setBusy(null);
     }
   }
 
@@ -260,7 +275,11 @@ function VisitInner() {
   async function generate(revision?: { target: string; request: string }) {
     if (!id) return;
     setError("");
-    setBusy(revision ? "요청한 부분을 고쳐 쓰는 중…" : "가게·메뉴를 검색하고 본문을 쓰는 중… 30초쯤 걸립니다");
+    setBusy(
+      revision
+        ? { key: "revise", msg: "요청한 부분을 고쳐 쓰는 중…" }
+        : { key: "generate", msg: "가게·메뉴·키워드를 찾고 본문을 쓰는 중… 30초쯤" },
+    );
     try {
       const res = await fetch("/api/visit/generate", {
         method: "POST",
@@ -275,10 +294,12 @@ function VisitInner() {
       const d = await res.json();
       if (!d.ok) throw new Error(d.error ?? "생성에 실패했습니다.");
       setDraft(d.post);
-      // 고쳐 쓰기는 조사를 다시 하지 않는다. 앞서 받은 조사 결과를 그대로 둔다
+      // 고쳐 쓰기는 조사·키워드를 다시 하지 않는다. 앞서 받은 결과를 그대로 둔다
       if (!d.revised) {
         setResearch(d.research ? { postId: d.post.id, ...d.research } : null);
         setResearchFailed(!d.research);
+        setKeywords(d.keywords?.length ? { postId: d.post.id, list: d.keywords } : null);
+        flash("초안을 썼습니다");
       } else {
         setReviseRequest("");
         // 소제목이 바뀌었을 수 있다. 없어진 이름이 선택된 채 남지 않게 되돌린다
@@ -289,11 +310,12 @@ function VisitInner() {
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy("");
+      setBusy(null);
     }
   }
 
-  async function patch(postId: number, body: Record<string, unknown>) {
+  async function patch(postId: number, body: Record<string, unknown>, key = "") {
+    if (key) setBusy({ key, msg: "" });
     try {
       const res = await fetch("/api/visit", {
         method: "PATCH",
@@ -306,12 +328,27 @@ function VisitInner() {
       load();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      if (key) setBusy(null);
     }
+  }
+
+  function copyBody() {
+    if (!draft) return;
+    copyForNaver(draft.body_html ?? "", undefined, draftPhotos).then((mode) =>
+      flash(
+        mode === "rich"
+          ? "본문 복사됨 — 네이버 에디터 본문에 붙여넣으세요"
+          : "이 브라우저는 서식 복사를 막아 평문으로 복사됐습니다. 아래 '아이폰에서 안 붙으면' 을 써보세요",
+      ),
+    );
   }
 
   // 이 화면에서 분석한 글일 때만 사진이 있다. 다른 초안에 엉뚱한 사진이 붙으면 안 된다
   const draftPhotos = draft && photos?.postId === draft.id ? photos.urls : undefined;
   const draftResearch = draft && research?.postId === draft.id ? research : null;
+  const draftKeywords = draft && keywords?.postId === draft.id ? keywords.list : [];
+  const draftTitle = draft ? draft.title || draft.titles?.[0] || "" : "";
   // 고칠 자리 후보 — 본문의 소제목들. 모델이 준 마크다운 그대로라 # 을 떼기만 한다
   const sections = (draft?.body_markdown ?? "")
     .split("\n")
@@ -319,21 +356,23 @@ function VisitInner() {
     .map((l) => l.replace(/^#+\s*/, "").trim())
     .filter(Boolean);
 
+  const isBusy = Boolean(busy);
+  /** 이 버튼이 도는 중이면 원을 돌린다 */
+  const spin = (key: string) => busy?.key === key && <span className="spinner" />;
+  /** 이 버튼이 도는 중이면 옆에 무슨 일인지 적는다 */
+  const busyNote = (key: string) =>
+    busy?.key === key && busy.msg ? <span className="hint">{busy.msg}</span> : null;
+
   return (
     <div className="main">
       <h1 className="page-title">네이버 방문 후기</h1>
       <p className="page-desc">
         이미 다녀온 가게의 사진에서 시작합니다. 사진이 사실을 채우고, 네 문항이 감상을
-        채웁니다. 발행은 네이버 앱에서 직접 하세요.
+        채웁니다. 어디 갈지 고민이면 <Link href="/eat">제철 트렌드</Link>에서 찾아보세요.
       </p>
 
       {error && <div className="alert">{error}</div>}
-      {notice && <div className="badge">{notice}</div>}
-      {busy && (
-        <div className="alert">
-          <span className="spinner" /> {busy}
-        </div>
-      )}
+      {notice && <div className="toast">{notice}</div>}
 
       {/* ---------------- 1단계 ---------------- */}
       <div className="card">
@@ -352,8 +391,7 @@ function VisitInner() {
           />
           {files.length > 0 && (
             <p className="hint" style={{ marginTop: 6 }}>
-              {files.length}장 선택됨. 올릴 때 긴 변 {MAX_EDGE}px 로 줄여 보냅니다 — 원본은
-              서버에 저장하지 않습니다.
+              {files.length}장 선택됨. 원본은 서버에 저장하지 않습니다.
             </p>
           )}
         </div>
@@ -392,124 +430,72 @@ function VisitInner() {
           />
         </div>
 
-        <button
-          className="primary"
-          onClick={analyze}
-          disabled={Boolean(busy) || !files.length || !placeQuery.trim() || !visitedOn.trim()}
-        >
-          사진 분석
-        </button>
+        <div className="row" style={{ alignItems: "center" }}>
+          <button
+            className="primary"
+            onClick={analyze}
+            disabled={isBusy || !files.length || !placeQuery.trim() || !visitedOn.trim()}
+          >
+            {spin("analyze")}
+            {analysis ? "사진 다시 분석" : "사진 분석"}
+          </button>
+          {busyNote("analyze")}
+        </div>
       </div>
 
-      {/* ---------------- 2단계 ---------------- */}
+      {/* ---------------- 2·3단계 — 분석 요약 + 인터뷰 ---------------- */}
       {analysis && (
         <div className="card">
-          <h2>2. 사진에서 읽은 것</h2>
+          <h2>
+            2. 인터뷰
+            <Help text="사실은 사진이 채웠습니다. 여기서 더해지는 건 사람만 아는 것 — 이게 없으면 사실 나열이 되고, 그게 AI 글의 전형입니다." />
+          </h2>
 
           {warnings.map((w, i) => (
-            <div className="alert" key={i}>
+            <div className="alert warn" key={i}>
               {w}
             </div>
           ))}
 
-          {place && (
-            <p className="hint">
-              <strong>{place.name}</strong> · {place.address} · {place.category}
-            </p>
-          )}
-
-          <div className="split">
-            <div>
-              <h3>사진</h3>
-              <ul>
-                {analysis.photos.map((p) => (
-                  <li key={p.index}>
-                    <span className="tag">{p.kind}</span> {p.caption}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <h3>메뉴 {analysis.menu.length === 0 && <span className="dim">(근거 없음)</span>}</h3>
-              <ul>
-                {analysis.menu.map((m, i) => (
-                  <li key={i}>
-                    {m.name} —{" "}
-                    {m.price ? (
-                      <span className="num">{m.price.toLocaleString()}원</span>
-                    ) : (
-                      <span className="dim">가격 못 읽음</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-
-          {analysis.observations.length > 0 && (
-            <>
-              <h3>확인된 사실</h3>
-              <ul>
-                {analysis.observations.map((o, i) => (
-                  <li key={i}>{o}</li>
-                ))}
-              </ul>
-            </>
-          )}
-
-          {analysis.uncertain.length > 0 && (
-            <>
-              <h3>
-                확신 못 한 것
-                <Help text="본문에 쓰지 않습니다. 사실이 아닐 수 있어서입니다." />
-              </h3>
-              <ul className="dim">
-                {analysis.uncertain.map((u, i) => (
-                  <li key={i}>{u}</li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* ---------------- 3단계 ---------------- */}
-      {analysis && (
-        <div className="card">
-          <h2>
-            3. 30초 인터뷰
-            <Help text="사실은 사진이 다 채웠습니다. 여기서 더해지는 건 사람만 아는 것 — 이게 없으면 사실 나열이 되고, 그게 AI 글의 전형입니다." />
-          </h2>
+          {/* 사진에서 읽은 것은 한 줄로 요약하고 자세한 건 접어 둔다. 확인만 하면 되는 정보다 */}
+          <p className="hint">
+            {place ? (
+              <>
+                <strong>{place.name}</strong> · {place.category?.split(">").pop()?.trim()} ·{" "}
+              </>
+            ) : null}
+            사진 {analysis.photos.length}장 · 메뉴{" "}
+            {analysis.menu.length
+              ? analysis.menu
+                  .slice(0, 4)
+                  .map((m) => (m.price ? `${m.name} ${m.price.toLocaleString()}원` : m.name))
+                  .join(", ") + (analysis.menu.length > 4 ? " 외" : "")
+              : "근거 없음(가격을 쓰지 않습니다)"}
+          </p>
+          <details style={{ marginBottom: 12 }}>
+            <summary>사진에서 읽은 것 자세히</summary>
+            <ul>
+              {analysis.photos.map((p) => (
+                <li key={p.index}>
+                  <span className="tag">{p.kind}</span> {p.caption}
+                </li>
+              ))}
+            </ul>
+            {analysis.uncertain.length > 0 && (
+              <>
+                <p className="hint">확신 못 한 것 — 본문에 쓰지 않습니다</p>
+                <ul className="dim">
+                  {analysis.uncertain.map((u, i) => (
+                    <li key={i}>{u}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </details>
 
           <div className="row">
-            <div className="field">
-              <label>누구랑 갔어요?</label>
-              <div className="row">
-                {["혼자", "친구", "가족", "연인", "회식"].map((v) => (
-                  <button
-                    key={v}
-                    className={company === v ? "primary" : ""}
-                    onClick={() => setCompany(v)}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="field">
-              <label>언제요?</label>
-              <div className="row">
-                {["점심", "저녁", "그 외"].map((v) => (
-                  <button
-                    key={v}
-                    className={mealTime === v ? "primary" : ""}
-                    onClick={() => setMealTime(v)}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <Choice label="누구랑 갔어요?" options={["혼자", "친구", "가족", "연인", "회식"]} value={company} onChange={setCompany} />
+            <Choice label="언제요?" options={["점심", "저녁", "그 외"]} value={mealTime} onChange={setMealTime} />
           </div>
 
           <div className="field">
@@ -522,47 +508,29 @@ function VisitInner() {
           </div>
 
           <div className="row">
-            <div className="field">
-              <label>또 갈 거예요?</label>
-              <div className="row">
-                {["응", "아니", "근처 오면"].map((v) => (
-                  <button
-                    key={v}
-                    className={revisit === v ? "primary" : ""}
-                    onClick={() => setRevisit(v)}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <Choice label="또 갈 거예요?" options={["응", "아니", "근처 오면"]} value={revisit} onChange={setRevisit} />
             <div className="field" style={{ flex: 1, minWidth: 220 }}>
               <label>아쉬웠던 점 (선택)</label>
               <input value={downside} onChange={(e) => setDownside(e.target.value)} />
             </div>
           </div>
 
-          <button className="primary" onClick={() => generate()} disabled={Boolean(busy) || !memorable.trim()}>
-            본문 생성
-          </button>
+          {/* 처음 쓰기와 다시 쓰기는 같은 일이다. 버튼 하나로 둔다 */}
+          <div className="row" style={{ alignItems: "center" }}>
+            <button className="primary" onClick={() => generate()} disabled={isBusy || !memorable.trim()}>
+              {spin("generate")}
+              {draft ? "처음부터 다시 쓰기" : "본문 쓰기"}
+            </button>
+            {busyNote("generate") ??
+              (draft && <span className="hint">답을 고쳤으면 이걸로. 검색부터 새로 하고 지금 본문을 덮어씁니다.</span>)}
+          </div>
         </div>
       )}
 
-      {/* ---------------- 4단계 ---------------- */}
+      {/* ---------------- 3단계 — 초안 ---------------- */}
       {draft && (
         <div className="card">
-          <h2>4. 초안</h2>
-          {analysis && (
-            <div className="row" style={{ marginBottom: 10 }}>
-              <button onClick={() => generate()} disabled={Boolean(busy) || !memorable.trim()}>
-                다시 쓰기
-              </button>
-              <span className="hint">
-                위 3단계 답을 고친 뒤 누르면 그 답으로, 그대로 누르면 같은 답으로 새로 씁니다.
-                검색 조사도 다시 합니다. 지금 본문은 덮어씁니다.
-              </span>
-            </div>
-          )}
+          <h2>3. 초안</h2>
 
           {draft.needs_check?.length > 0 && (
             <div className="alert">
@@ -574,48 +542,37 @@ function VisitInner() {
               </ul>
             </div>
           )}
-
           {researchFailed && (
             <div className="alert warn">
-              검색 조사에 실패해 사진과 답변만으로 썼습니다. Gemini 키·쿼터를 확인하고 다시
-              생성하면 가게·메뉴 정보가 채워집니다.
+              검색 조사에 실패해 사진과 답변만으로 썼습니다. Gemini 키·쿼터를 확인하고 다시 쓰면
+              가게·메뉴 정보가 채워집니다.
             </div>
-          )}
-          {draftResearch && (
-            <details style={{ marginBottom: 12 }}>
-              <summary>
-                검색 조사 (Gemini) — 출처 {draftResearch.sources.length}건
-              </summary>
-              <pre className="hint" style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>
-                {draftResearch.text}
-              </pre>
-              {draftResearch.sources.length > 0 && (
-                <ul className="hint" style={{ paddingLeft: 18 }}>
-                  {draftResearch.sources.map((src, i) => (
-                    <li key={`${src.uri}-${i}`}>
-                      <a href={src.uri} target="_blank" rel="noreferrer">
-                        {src.title}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
           )}
 
-          <h3>제목 3안</h3>
-          {draft.titles?.map((t, i) => (
-            <div className="row" key={i}>
+          {draftKeywords.length > 0 && (
+            <p className="hint">
+              검색 키워드{" "}
+              {draftKeywords.map((k, i) => (
+                <span key={k.keyword} className={`tag${i === 0 ? " seed" : ""}`} title={`월 ${k.searches.toLocaleString()}회`}>
+                  {k.keyword} {k.searches.toLocaleString()}
+                </span>
+              ))}
+            </p>
+          )}
+
+          <h3>제목</h3>
+          {/* 누르면 그 제목으로 고른다. 복사는 아래 버튼 하나로 */}
+          <div className="title-picks">
+            {draft.titles?.map((t, i) => (
               <button
-                className={draft.title === t ? "primary" : ""}
-                onClick={() => patch(draft.id, { title: t })}
+                key={i}
+                className={`title-pick${draftTitle === t ? " on" : ""}`}
+                onClick={() => draftTitle !== t && patch(draft.id, { title: t })}
               >
-                {i === 0 ? "추천" : `${i + 1}안`}
+                <span className="dim">{i === 0 ? "추천" : `${i + 1}안`}</span> {t}
               </button>
-              <span style={{ flex: 1 }}>{t}</span>
-              <button onClick={() => copyText(t).then(() => flash("제목 복사됨"))}>복사</button>
-            </div>
-          ))}
+            ))}
+          </div>
 
           <h3>본문</h3>
           <div
@@ -623,69 +580,23 @@ function VisitInner() {
             dangerouslySetInnerHTML={{ __html: withPhotos(draft.body_html ?? "", draftPhotos) }}
           />
 
-          {draft.body_markdown && (
-            <div className="field" style={{ marginTop: 12 }}>
-              <label>
-                고쳐 쓰기
-                <Help text="고칠 자리를 고르고 어떻게 바꿀지 적으면 그 부분만 고쳐 씁니다. 다른 소제목은 그대로 둡니다. 사진·답변에 없는 사실은 요청해도 지어내지 않습니다." />
-              </label>
-              <div className="row">
-                <select value={reviseTarget} onChange={(e) => setReviseTarget(e.target.value)}>
-                  <option value="전체">글 전체</option>
-                  <option value="제목">제목</option>
-                  {sections.map((sec) => (
-                    <option key={sec} value={sec}>
-                      {sec}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <textarea
-                rows={2}
-                placeholder="어느 부분을 어떻게 고칠까요? 예) 도입을 더 짧고 궁금하게 / 국물 얘기를 더 자세히 / 너무 칭찬만 해서 아쉬운 점도 넣어줘"
-                value={reviseRequest}
-                onChange={(e) => setReviseRequest(e.target.value)}
-              />
-              <div className="row">
-                <button
-                  onClick={() => generate({ target: reviseTarget, request: reviseRequest.trim() })}
-                  disabled={Boolean(busy) || !reviseRequest.trim() || !memorable.trim()}
-                >
-                  이대로 고쳐 쓰기
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="row">
-            <button
-              className="primary"
-              onClick={() =>
-                copyForNaver(draft.body_html ?? "", undefined, draftPhotos).then((mode) =>
-                  flash(
-                    mode === "rich"
-                      ? "서식 유지로 복사됨 — 네이버 에디터에 붙여넣으면 소제목·굵게가 살아납니다"
-                      : "이 브라우저는 서식 복사를 막아 평문으로 복사됐습니다. PC 에디터에서 붙여넣으면 서식이 유지됩니다",
-                  ),
-                )
-              }
-            >
-              네이버 본문 (서식 유지)
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="naver" onClick={copyBody}>
+              본문 복사
             </button>
-            <button
-              onClick={() =>
-                copyForNaver(draft.body_html ?? "", draft.title || draft.titles?.[0] || "", draftPhotos).then((mode) =>
-                  flash(mode === "rich" ? "제목 + 본문을 서식 유지로 복사됨" : "제목 + 본문을 평문으로 복사됨"),
-                )
-              }
-              title="제목을 맨 위 줄로 넣어 한 번에 붙여넣습니다. 네이버 제목 칸은 따로 채워야 합니다"
-            >
-              제목 + 본문
+            <button onClick={() => copyText(draftTitle).then(() => flash("제목 복사됨"))}>제목 복사</button>
+            <button onClick={() => copyText((draft.tags ?? []).map((t) => `#${t}`).join(" ")).then(() => flash("태그 복사됨"))}>
+              태그 {draft.tags?.length ?? 0}개 복사
             </button>
             <button className="ghost" onClick={() => setManualCopy((v) => !v)}>
               {manualCopy ? "선택 복사 닫기" : "아이폰에서 안 붙으면"}
             </button>
           </div>
+          {!draftPhotos && (
+            <p className="hint">
+              지난 초안이라 사진이 없습니다. 본문의 [사진 N] 자리에 아래 순서대로 직접 넣으세요.
+            </p>
+          )}
 
           {manualCopy && (
             <div className="field" style={{ marginTop: 10 }}>
@@ -713,57 +624,104 @@ function VisitInner() {
                 id="naver-manual-copy"
                 className="preview"
                 style={{ maxHeight: 360 }}
-                dangerouslySetInnerHTML={{ __html: toNaverHtml(draft.body_html ?? "", draft.title || draft.titles?.[0] || "", draftPhotos) }}
+                dangerouslySetInnerHTML={{ __html: toNaverHtml(draft.body_html ?? "", draftTitle, draftPhotos) }}
               />
             </div>
           )}
-          <div className="row" style={{ marginTop: 8 }}>
-            <button
-              onClick={() =>
-                copyText((draft.tags ?? []).map((t) => `#${t}`).join(" ")).then(() =>
-                  flash("태그 복사됨"),
-                )
-              }
-            >
-              태그 {draft.tags?.length ?? 0}개 복사
-            </button>
-          </div>
 
-          {draft.photo_order && draft.photo_order.length > 0 && (
-            <>
-              <h3>
-                사진 업로드 순서
-                <Help text="본문의 [사진 N] 자리와 같은 번호입니다. 이 순서대로 올리세요." />
-              </h3>
-              <p className="hint">
-                {draftPhotos
-                  ? "본문 복사에 사진이 함께 들어갑니다. 빠진 사진만 이 순서를 보고 채우세요."
-                  : "사진은 저장하지 않아 지난 초안에는 없습니다. [사진 N] 자리에 이 순서대로 직접 넣으세요."}
-              </p>
-              <ol>
-                {draft.photo_order.map((p) => (
-                  <li key={p.index}>
-                    {p.index}번 — {p.note}
-                  </li>
-                ))}
-              </ol>
-            </>
+          {draft.body_markdown && analysis && (
+            <div className="field" style={{ marginTop: 16 }}>
+              <label>
+                고쳐 쓰기
+                <Help text="고칠 자리를 고르고 어떻게 바꿀지 적으면 그 부분만 고쳐 씁니다. 다른 소제목은 그대로 둡니다. 사진·답변에 없는 사실은 요청해도 지어내지 않습니다." />
+              </label>
+              <div className="row">
+                <select value={reviseTarget} onChange={(e) => setReviseTarget(e.target.value)}>
+                  <option value="전체">글 전체</option>
+                  <option value="제목">제목</option>
+                  {sections.map((sec) => (
+                    <option key={sec} value={sec}>
+                      {sec}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <textarea
+                rows={2}
+                placeholder="어느 부분을 어떻게 고칠까요? 예) 도입을 더 짧고 궁금하게 / 국물 얘기를 더 자세히 / 아쉬운 점도 넣어줘"
+                value={reviseRequest}
+                onChange={(e) => setReviseRequest(e.target.value)}
+              />
+              <div className="row" style={{ alignItems: "center" }}>
+                <button
+                  onClick={() => generate({ target: reviseTarget, request: reviseRequest.trim() })}
+                  disabled={isBusy || !reviseRequest.trim() || !memorable.trim()}
+                >
+                  {spin("revise")}
+                  이대로 고쳐 쓰기
+                </button>
+                {busyNote("revise")}
+              </div>
+            </div>
           )}
 
-          <h3>발행 체크리스트</h3>
-          <ul className="check">
-            <li>사진을 위 순서대로 올렸는가</li>
-            <li>장소(지도)를 첨부했는가</li>
-            <li>태그 10개를 넣었는가</li>
-            <li>가격에 &quot;방문 당시&quot; 를 밝혔는가</li>
-            <li>가게가 아직 영업 중인지 확인했는가</li>
-          </ul>
+          {/* 발행 전에 한 번 보면 되는 것들. 늘 펼쳐 둘 이유가 없다 */}
+          <details style={{ marginTop: 16 }}>
+            <summary>발행 전 확인</summary>
+            {draft.photo_order && draft.photo_order.length > 0 && (
+              <>
+                <p className="hint">사진 순서 — 본문의 [사진 N] 번호와 같습니다</p>
+                <ol>
+                  {draft.photo_order.map((p) => (
+                    <li key={p.index}>
+                      {p.index}번 — {p.note}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+            <ul className="check">
+              <li>사진이 순서대로 들어갔는가</li>
+              <li>장소(지도)를 첨부했는가</li>
+              <li>태그를 넣었는가</li>
+              <li>가격에 &quot;방문 당시&quot; 를 밝혔는가</li>
+              <li>가게가 아직 영업 중인지 확인했는가</li>
+              <li>체험단·협찬이면 대가성 문구를 넣었는가</li>
+            </ul>
+          </details>
 
-          <div className="row">
-            <button className="primary" onClick={() => patch(draft.id, { status: "posted" })}>
-              올림 표시
+          {draftResearch && (
+            <details>
+              <summary>검색 조사 (Gemini) — 출처 {draftResearch.sources.length}건</summary>
+              <pre className="hint" style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>
+                {draftResearch.text}
+              </pre>
+              {draftResearch.sources.length > 0 && (
+                <ul className="hint" style={{ paddingLeft: 18 }}>
+                  {draftResearch.sources.map((src, i) => (
+                    <li key={`${src.uri}-${i}`}>
+                      <a href={src.uri} target="_blank" rel="noreferrer">
+                        {src.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </details>
+          )}
+
+          <div className="row" style={{ marginTop: 16 }}>
+            {draft.status === "posted" ? (
+              <span className="badge on">올림</span>
+            ) : (
+              <button className="primary" onClick={() => patch(draft.id, { status: "posted" }, "posted")} disabled={isBusy}>
+                {spin("posted")}
+                올렸어요
+              </button>
+            )}
+            <button className="ghost" onClick={reset}>
+              새 글 쓰기
             </button>
-            <button onClick={reset}>새 글 쓰기</button>
           </div>
         </div>
       )}
@@ -775,7 +733,11 @@ function VisitInner() {
           <p className="empty">아직 없습니다.</p>
         ) : (
           posts.map((p) => (
-            <div key={p.id} className="list-item entry">
+            <button
+              key={p.id}
+              className={`list-item entry entry-button${draft?.id === p.id ? " current" : ""}`}
+              onClick={() => openPost(p.id)}
+            >
               <div className="entry-main">
                 <div className="visit-line">
                   <strong className="entry-title">{p.place?.name || p.place_query}</strong>
@@ -792,14 +754,41 @@ function VisitInner() {
                   {[p.visited_on, p.title].filter(Boolean).join(" · ") || "—"}
                 </div>
               </div>
-              <div className="entry-side">
-                <button className="small" onClick={() => openPost(p.id)}>
-                  열기
-                </button>
-              </div>
-            </div>
+            </button>
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+/** 객관식 한 문항. 인터뷰의 세 문항이 모양이 같아 하나로 뺐다 */
+function Choice({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <div className="seg" role="radiogroup" aria-label={label}>
+        {options.map((v) => (
+          <button
+            key={v}
+            role="radio"
+            aria-checked={value === v}
+            className={value === v ? "on" : ""}
+            onClick={() => onChange(v)}
+          >
+            {v}
+          </button>
+        ))}
       </div>
     </div>
   );

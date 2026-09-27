@@ -30,6 +30,8 @@ export type Place = {
   y: string;
   /** 카카오맵 상세 페이지 */
   url: string;
+  /** 위치를 주고 찾았을 때만. 미터 */
+  distance?: number;
 };
 
 export async function kakaoKey(): Promise<string> {
@@ -43,7 +45,16 @@ export async function kakaoKey(): Promise<string> {
  * 음식점(FD6)·카페(CE7)로 좁힌다. `신림 국밥` 같은 질의에 학원이나 부동산이 섞여
  * 오는 것을 막는다. 사용자가 상호를 정확히 몰라도 되게 지역명을 함께 넣어 부르면 된다.
  */
-export async function searchPlaces(query: string, size = 5): Promise<Place[]> {
+export type Near = {
+  /** 경도 */
+  x: number;
+  /** 위도 */
+  y: number;
+  /** 반경(m). 카카오 상한은 20km */
+  radius?: number;
+};
+
+export async function searchPlaces(query: string, size = 5, near?: Near): Promise<Place[]> {
   const key = await kakaoKey();
   if (!key) {
     throw new Error(
@@ -57,7 +68,12 @@ export async function searchPlaces(query: string, size = 5): Promise<Place[]> {
    * (Request validation is failed) 이다 — 실제로 배포본에서 그렇게 터졌다.
    * 그래서 필터 없이 넉넉히 받아 음식점(FD6)·카페(CE7)만 남긴다. 둘 다 없으면 전부 돌려준다.
    */
-  const url = `${SEARCH_URL}?query=${encodeURIComponent(query.trim())}&size=${Math.min(15, size * 3)}`;
+  let url = `${SEARCH_URL}?query=${encodeURIComponent(query.trim())}&size=${Math.min(15, size * 3)}`;
+  // 위치를 주면 그 반경 안에서 가까운 순으로. "지금 여기서 갈 만한 집" 을 찾을 때 쓴다
+  if (near) {
+    const radius = Math.min(20000, Math.max(100, Math.round(near.radius ?? 2000)));
+    url += `&x=${near.x}&y=${near.y}&radius=${radius}&sort=distance`;
+  }
   const res = await fetch(url, {
     headers: { Authorization: `KakaoAK ${key}` },
   });
@@ -85,6 +101,7 @@ export async function searchPlaces(query: string, size = 5): Promise<Place[]> {
       x: String(d.x ?? ""),
       y: String(d.y ?? ""),
       url: String(d.place_url ?? ""),
+      ...(d.distance ? { distance: Number(d.distance) } : {}),
     }),
   );
 }

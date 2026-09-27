@@ -31,6 +31,7 @@ import { openaiJson } from "./openai";
 import { DEFAULT_MODEL, geminiCall, parseGrounding, type ResearchResult } from "./gemini";
 import { markdownToHtml } from "./markdown";
 import { searchPlaces, type Place } from "./kakao";
+import type { KeywordPick } from "./foodTrend";
 
 /* ------------------------------------------------------------------ *
  * 1단계 — 사진 분석
@@ -434,6 +435,8 @@ export type GenerateVisitOptions = {
   research?: ResearchResult | null;
   /** 이미 쓴 초안을 사용자 요청대로 고쳐 쓸 때 준다 */
   revision?: Revision | null;
+  /** 검색광고 월간 검색수로 고른 "지역 + 메뉴" 키워드. 많이 찾는 순 */
+  keywords?: KeywordPick[];
   retries?: number;
 };
 
@@ -445,6 +448,25 @@ export type Revision = {
   /** 어떻게 고칠지 사용자가 쓴 말 */
   request: string;
 };
+
+/**
+ * 검색 키워드 블록.
+ *
+ * 없으면 GPT 가 "지역 + 메뉴" 를 감으로 고른다. 실제 검색수를 주면 사람들이 정말 치는
+ * 표현("신림동 국밥" 이 아니라 "신림 국밥")을 제목 앞에 둔다.
+ */
+function keywordBlock(keywords?: KeywordPick[]): string {
+  if (!keywords?.length) return "";
+  const [main, ...rest] = keywords;
+  return `
+# 검색 키워드 (네이버 검색광고 — 월간 검색수)
+${keywords.map((k) => `  - ${k.keyword}: ${k.searches.toLocaleString()}회`).join("\n")}
+
+메인 키워드는 "${main.keyword}" 다. 제목 3안 모두 이 표현을 앞쪽에 그대로 넣고, 첫 문단에도
+자연스럽게 한 번 넣는다.${rest.length ? ` 나머지(${rest.map((k) => k.keyword).join(", ")})는 본문과 태그에 억지스럽지 않게 한두 번씩 녹인다.` : ""}
+키워드를 반복해 채우지 않는다. 같은 키워드는 본문에서 세 번을 넘기지 않는다.
+`;
+}
 
 /**
  * 수정 요청 블록.
@@ -565,7 +587,7 @@ ${a.uncertain.map((s) => `  - ${s}`).join("\n") || "  (없음)"}
 
 # SEO 규칙
 ${SEO_RULES}
-
+${keywordBlock(o.keywords)}
 # 문체 규칙
 ${ANTI_AI}
 
