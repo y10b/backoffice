@@ -4,19 +4,21 @@ import { useState } from "react";
 import Help from "@/components/Help";
 import { copyText } from "@/lib/clipboard";
 import { removeBackground, splitByGutters, splitElements, splitGrid, type Raster } from "@/lib/cutout";
-import { canvasToBlob, fileToRaster, rasterToCanvas, slug } from "@/lib/canvasImage";
+import { fileToRaster, slug } from "@/lib/canvasImage";
 import { sheetPrompt, STOCK_STYLES, type StockStyle } from "@/lib/stockPrompt";
+import { DEFAULT_UPSCALE } from "@/lib/upscale";
 import { makeZip } from "@/lib/zip";
+import { finishPiece, sizeLabel, upscaleFactor, UpscaleControls, type Upscaled } from "./Upscale";
 
 /**
  * 시트 나누기 — 아이템 하나를 16·25개 변형으로 한 장에 뽑고, 칸마다 누끼를 따서 ZIP 으로.
  *
  * 프롬프트 한 번에 요소가 수십 개 나오니 ChatGPT 요청 수가 크게 준다. 대신 칸 하나가 작아서
  * (1024px 시트의 5×5 면 한 칸 약 200px) 스톡 판매보다 직접 쓸 요소·아이콘 세트에 맞는다.
- * 크기가 부족한 조각은 표시한다.
+ * 크기가 부족한 조각은 표시한다. 업스케일(upscale.ts)을 켜면 칸을 2배씩 단계적으로 키운다.
  */
 
-type Piece = { id: string; url: string; png: Blob; width: number; height: number; keep: boolean; warnings: string[] };
+type Piece = Upscaled & { id: string; url: string; keep: boolean; warnings: string[] };
 
 const GRIDS = [
   { label: "9개 (3×3)", rows: 3, cols: 3 },
@@ -49,6 +51,8 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
   const [holes, setHoles] = useState(false);
   const [tolerance, setTolerance] = useState(30);
   const [pieces, setPieces] = useState<Piece[]>([]);
+  const [upscale, setUpscale] = useState<number>(DEFAULT_UPSCALE);
+  const [withOriginal, setWithOriginal] = useState(false);
   const [busy, setBusy] = useState<{ key: string; msg: string } | null>(null);
 
   const { rows, cols } = GRIDS[grid];
@@ -101,15 +105,22 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
 
         for (let i = 0; i < cut.length; i++) {
           const { image, warnings } = cut[i];
-          const png = await canvasToBlob(rasterToCanvas(image), "image/png");
+          if (upscale) {
+            setBusy({ key: "run", msg: `${fi + 1}/${files.length}장 · ${i + 1}/${cut.length}개 업스케일 중…` });
+            await new Promise((r) => setTimeout(r, 0));
+          }
+          const up = await finishPiece(image, upscale);
+          const factor = upscaleFactor(up);
           done.push({
             id: `${fi}-${i}`,
-            url: URL.createObjectURL(png),
-            png,
-            width: image.width,
-            height: image.height,
+            url: URL.createObjectURL(up.png),
+            ...up,
             keep: true,
-            warnings: [...warnings, ...(Math.max(image.width, image.height) < 300 ? ["300px 미만 — 작게만 쓰세요"] : [])],
+            warnings: [
+              ...warnings,
+              ...(Math.max(up.width, up.height) < 300 ? ["300px 미만 — 작게만 쓰세요"] : []),
+              ...(factor > 2.5 ? [`원본의 ${factor.toFixed(1)}배로 키움 — 100% 로 확인하세요`] : []),
+            ],
           });
         }
         setPieces([...done]);
@@ -133,12 +144,18 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
       const kept = pieces.filter((p) => p.keep);
       const base = slug(nameEn) === "element" ? "item" : slug(nameEn);
       const digits = String(kept.length).length;
-      const entries = await Promise.all(
-        kept.map(async (p, i) => ({
-          name: `${base}-${String(i + 1).padStart(Math.max(2, digits), "0")}.png`,
-          data: new Uint8Array(await p.png.arrayBuffer()),
-        })),
-      );
+      const entries = (
+        await Promise.all(
+          kept.map(async (p, i) => {
+            const name = `${base}-${String(i + 1).padStart(Math.max(2, digits), "0")}.png`;
+            const out = [{ name, data: new Uint8Array(await p.png.arrayBuffer()) }];
+            if (withOriginal && p.origPng !== p.png) {
+              out.push({ name: `original/${name}`, data: new Uint8Array(await p.origPng.arrayBuffer()) });
+            }
+            return out;
+          }),
+        )
+      ).flat();
       const blob = new Blob([makeZip(entries)], { type: "application/zip" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -246,6 +263,7 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
             <input type="range" min={10} max={80} value={tolerance} onChange={(e) => setTolerance(Number(e.target.value))} />
           </label>
         </div>
+        <UpscaleControls target={upscale} setTarget={setUpscale} withOriginal={withOriginal} setWithOriginal={setWithOriginal} />
         <div className="row" style={{ alignItems: "center" }}>
           <button className="primary" onClick={run} disabled={isBusy || !files.length}>
             {spin("run")}
@@ -261,9 +279,7 @@ export default function SheetTool({ flash, setError }: { flash: (m: string) => v
                 <div key={p.id} className={`cutout-item${p.keep ? "" : " off"}`}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={p.url} alt="" />
-                  <div className="hint">
-                    {p.width}×{p.height}
-                  </div>
+                  <div className="hint">{sizeLabel(p)}</div>
                   {p.warnings.map((w, i) => (
                     <div key={i} className="hint warn-text">
                       {w}

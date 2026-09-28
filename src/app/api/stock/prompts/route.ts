@@ -12,8 +12,8 @@ export async function POST(req: Request) {
   if (!topic) return NextResponse.json({ ok: false, error: "주제를 적어주세요." }, { status: 400 });
 
   const style = (body.style in STOCK_STYLES ? body.style : "flat") as StockStyle;
-  // 한 번에 너무 많으면 비슷한 것끼리 겹친다. 스팸 반려를 부른다
-  const count = Math.min(12, Math.max(1, Number(body.count) || 8));
+  // 한 번에 너무 많으면 비슷한 것끼리 겹친다(스팸 반려). 한 장 격자의 최대(4×4)까지만
+  const count = Math.min(16, Math.max(1, Number(body.count) || 8));
 
   try {
     const items = await generateStockPrompts({ topic, hints: String(body.hints ?? "").trim(), style, count });
