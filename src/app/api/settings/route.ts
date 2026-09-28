@@ -26,7 +26,7 @@ export async function GET() {
   // 설정 화면은 키를 열 개 넘게 읽는다. 하나씩 왕복하면 화면이 눈에 띄게 느려진다
   const s = await getSettings([
     "searchad_api_key", "searchad_secret_key", "searchad_customer_id",
-    "naver_client_id", "naver_client_secret",
+    "naver_client_id", "naver_client_secret", "naver_hub_key_id", "naver_hub_key",
     "gemini_api_key", "gemini_model",
     "openai_api_key", "openai_model",
     "ga4_service_account", "ga4_property_id", "ga4_measurement_id", "gsc_site_url",
@@ -42,6 +42,8 @@ export async function GET() {
   const adKey = resolve(s.searchad_api_key, "NAVER_SEARCHAD_API_KEY");
   const adSecret = resolve(s.searchad_secret_key, "NAVER_SEARCHAD_SECRET_KEY");
   const adCustomer = resolve(s.searchad_customer_id, "NAVER_SEARCHAD_CUSTOMER_ID");
+  const hubId = resolve(s.naver_hub_key_id, "NAVER_HUB_KEY_ID");
+  const hubKey = resolve(s.naver_hub_key, "NAVER_HUB_KEY");
   const clientId = resolve(s.naver_client_id, "NAVER_CLIENT_ID");
   const clientSecret = resolve(s.naver_client_secret, "NAVER_CLIENT_SECRET");
   const gemini = resolve(s.gemini_api_key, "GEMINI_API_KEY");
@@ -94,10 +96,12 @@ export async function GET() {
       customerId: adCustomer.value,
     },
     openApi: {
-      configured: Boolean(clientId.value && clientSecret.value),
-      fromEnv: clientId.fromEnv,
-      clientIdPreview: mask(clientId.value),
-      clientSecretSet: Boolean(clientSecret.value),
+      // HUB 키가 있으면 그걸 쓴다(lib/openapi). 화면도 어느 쪽이 쓰이는지 보여준다
+      configured: Boolean((hubId.value && hubKey.value) || (clientId.value && clientSecret.value)),
+      hub: Boolean(hubId.value && hubKey.value),
+      fromEnv: hubId.value ? hubId.fromEnv : clientId.fromEnv,
+      clientIdPreview: mask(hubId.value || clientId.value),
+      clientSecretSet: Boolean(hubKey.value || clientSecret.value),
     },
     gemini: {
       configured: Boolean(gemini.value),
@@ -150,6 +154,8 @@ const TEXT_FIELDS: Record<string, string> = {
   searchAdSecretKey: "searchad_secret_key",
   searchAdCustomerId: "searchad_customer_id",
   naverClientId: "naver_client_id",
+  naverHubKeyId: "naver_hub_key_id",
+  naverHubKey: "naver_hub_key",
   naverClientSecret: "naver_client_secret",
   geminiApiKey: "gemini_api_key",
   geminiModel: "gemini_model",
@@ -206,6 +212,8 @@ export async function POST(req: Request) {
     await setSetting("searchad_customer_id", "");
   }
   if (body.clearOpenApi) {
+    await setSetting("naver_hub_key_id", "");
+    await setSetting("naver_hub_key", "");
     await setSetting("naver_client_id", "");
     await setSetting("naver_client_secret", "");
   }

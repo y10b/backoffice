@@ -13,6 +13,7 @@ type SettingsState = {
   };
   openApi: {
     configured: boolean;
+    hub?: boolean;
     fromEnv: boolean;
     clientIdPreview: string;
     clientSecretSet: boolean;
@@ -336,12 +337,12 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* 네이버가 신규 발급을 막아 대부분 쓸 일이 없다. 승인된 옛 키가 있을 때만 펼친다 */}
+      {/* 2026-07-31 부터 검색·데이터랩은 NAVER API HUB(네이버 클라우드)로 옮겨 갔다 */}
       <div className="card">
-        <details className="card-fold">
+        <details className="card-fold" open>
         <summary>
-          네이버 개발자센터 (검색 API · 데이터랩)
-          <span className="status-badge hold">발급 중단</span>
+          네이버 API HUB (블로그 검색 · 검색어트렌드)
+          {state?.openApi.hub && <span className="status-badge done">HUB</span>}
           {state && (
             <Status
               configured={state.openApi.configured}
@@ -350,38 +351,24 @@ export default function SettingsPage() {
             />
           )}
         </summary>
-        <div className="alert warn" style={{ marginTop: 0 }}>
-          <strong>현재 신규 발급이 막혀 있습니다.</strong> 앱을 새로 등록해도 사용 API
-          목록에 <span className="mono">검색</span>·
-          <span className="mono">데이터랩</span> 이 없어, 호출하면{" "}
-          <span className="mono">401 Scope Status Invalid</span> 가 돌아옵니다. 기존에
-          승인된 키가 있을 때만 채우세요. 없으면 비워두면 되고, 키워드 탐색은 검색광고
-          지표만으로 동작합니다.
-        </div>
         <p className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
-          블로그 문서수(경쟁률 계산)와 검색어 트렌드에 씁니다. 하나의 Client ID/Secret 을
-          둘이 같이 씁니다. 발급처는{" "}
-          <a
-            href="https://developers.naver.com/apps/#/register"
-            target="_blank"
-            rel="noreferrer"
-          >
-            developers.naver.com
-          </a>{" "}
-          입니다.
+          블로그 문서수(경쟁률)와 검색어 트렌드에 씁니다. 2026년 7월 31일부터 신규 키는
+          개발자센터가 아니라 네이버 클라우드의 <strong>NAVER API HUB</strong> 에서 발급되고,
+          주소·헤더가 다릅니다. HUB 키(Key ID · Key)를 넣으면 그걸 쓰고, 없으면 옛 개발자센터
+          키(2027년 6월까지 유효)로 갑니다.
         </p>
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
-            <label>Client ID</label>
+            <label>Key ID (X-NCP-APIGW-API-KEY-ID)</label>
             <input
               className="mono"
-              placeholder="abcdEFGH..."
+              placeholder="2v36…"
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
             />
           </div>
           <div className="field" style={{ flex: 1, minWidth: 260 }}>
-            <label>Client Secret</label>
+            <label>Key (X-NCP-APIGW-API-KEY)</label>
             <input
               type="password"
               className="mono"
@@ -396,8 +383,8 @@ export default function SettingsPage() {
             className="primary"
             onClick={() =>
               save({
-                naverClientId: clientId,
-                naverClientSecret: clientSecret,
+                naverHubKeyId: clientId,
+                naverHubKey: clientSecret,
               }).then(() => {
                 setClientId("");
                 setClientSecret("");

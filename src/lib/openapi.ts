@@ -1,27 +1,49 @@
 import { getSettings } from "./db";
 
 /**
- * 네이버 개발자센터 오픈 API (developers.naver.com).
- * 검색 API(블로그 문서수)와 데이터랩 검색어트렌드가 같은 Client ID/Secret 을 쓴다.
+ * 네이버 검색 API(블로그 문서수)와 데이터랩 검색어트렌드.
+ *
+ * 2026-07-31 부터 신규 키는 개발자센터(openapi.naver.com)가 아니라 네이버 클라우드의
+ * NAVER API HUB 에서 발급된다. 주소·경로·헤더가 전부 다르다 — 도메인만 바꾸면 401 이다.
+ *
+ *  |             | 개발자센터(레거시, 2027-06-30 까지)        | API HUB                                         |
+ *  |-------------|-------------------------------------------|-------------------------------------------------|
+ *  | 주소        | https://openapi.naver.com                 | https://naverapihub.apigw.ntruss.com            |
+ *  | 블로그 검색 | /v1/search/blog.json                      | /search/v1/blog                                  |
+ *  | 검색어트렌드 | /v1/datalab/search                        | /search-trend/v1/search                         |
+ *  | 헤더        | X-Naver-Client-Id / X-Naver-Client-Secret | X-NCP-APIGW-API-KEY-ID / X-NCP-APIGW-API-KEY    |
+ *
+ * 설정의 `naver_hub_key_id`·`naver_hub_key` 가 있으면 HUB 를 쓰고, 없으면 레거시 키로 간다.
  */
 export const OPENAPI_ORIGIN = "https://openapi.naver.com";
+export const HUB_ORIGIN = "https://naverapihub.apigw.ntruss.com";
 
-export type OpenApiCreds = { clientId: string; clientSecret: string };
+export type OpenApiCreds = { clientId: string; clientSecret: string; hub: boolean };
 
 export async function openApiCreds(): Promise<OpenApiCreds | null> {
-  const s = await getSettings(["naver_client_id", "naver_client_secret"]);
+  const s = await getSettings(["naver_hub_key_id", "naver_hub_key", "naver_client_id", "naver_client_secret"]);
+  const hubId = s.naver_hub_key_id || process.env.NAVER_HUB_KEY_ID || "";
+  const hubKey = s.naver_hub_key || process.env.NAVER_HUB_KEY || "";
+  if (hubId && hubKey) return { clientId: hubId, clientSecret: hubKey, hub: true };
   const clientId = s.naver_client_id || process.env.NAVER_CLIENT_ID || "";
   const clientSecret = s.naver_client_secret || process.env.NAVER_CLIENT_SECRET || "";
   if (!clientId || !clientSecret) return null;
-  return { clientId, clientSecret };
+  return { clientId, clientSecret, hub: false };
 }
 
 function headers(creds: OpenApiCreds, json = false): Record<string, string> {
-  return {
-    "X-Naver-Client-Id": creds.clientId,
-    "X-Naver-Client-Secret": creds.clientSecret,
-    ...(json ? { "content-type": "application/json" } : {}),
-  };
+  const auth: Record<string, string> = creds.hub
+    ? { "X-NCP-APIGW-API-KEY-ID": creds.clientId, "X-NCP-APIGW-API-KEY": creds.clientSecret }
+    : { "X-Naver-Client-Id": creds.clientId, "X-Naver-Client-Secret": creds.clientSecret };
+  return { ...auth, ...(json ? { "content-type": "application/json" } : {}) };
+}
+
+function blogUrl(creds: OpenApiCreds): URL {
+  return creds.hub ? new URL("/search/v1/blog", HUB_ORIGIN) : new URL("/v1/search/blog.json", OPENAPI_ORIGIN);
+}
+
+function trendUrl(creds: OpenApiCreds): string {
+  return creds.hub ? `${HUB_ORIGIN}/search-trend/v1/search` : `${OPENAPI_ORIGIN}/v1/datalab/search`;
 }
 
 function errorDetail(status: number, text: string): string {
@@ -38,7 +60,7 @@ function errorDetail(status: number, text: string): string {
   const scopeDenied = /scope/i.test(msg);
   const hint =
     scopeDenied || status === 403
-      ? " 키는 유효하지만 이 애플리케이션에 해당 API 사용 권한이 없습니다. 네이버가 검색·데이터랩 API 신규 신청을 받지 않고 있어, 기존에 승인된 앱이 아니면 열 수 없습니다."
+      ? " 키는 유효하지만 이 애플리케이션에 해당 API 사용 권한이 없습니다. 개발자센터 신규 신청은 막혔으니 NAVER API HUB 키를 설정에 넣으세요."
       : status === 401
         ? " Client ID/Secret 이 잘못됐습니다."
         : status === 429
@@ -68,7 +90,7 @@ export async function blogDocCount(
   keyword: string,
   creds: OpenApiCreds,
 ): Promise<number | null> {
-  const url = new URL("/v1/search/blog.json", OPENAPI_ORIGIN);
+  const url = blogUrl(creds);
   url.searchParams.set("query", keyword);
   url.searchParams.set("display", "1");
 
@@ -141,7 +163,7 @@ export async function searchTrend(
     .slice(0, TREND_MAX_KEYWORDS);
   if (!keywords.length) return [];
 
-  const res = await fetch(`${OPENAPI_ORIGIN}/v1/datalab/search`, {
+  const res = await fetch(trendUrl(creds), {
     method: "POST",
     headers: headers(creds, true),
     cache: "no-store",
