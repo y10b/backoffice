@@ -20,6 +20,9 @@ import type { PhotoAnalysis } from "./visit";
  * 음식 목록과 동네는 설정값이다. 맛집 말고 다른 주제로 넓힐 때 목록만 바꾸면 된다.
  */
 
+/** 검색광고는 공백을 뗀 형태로 집계한다. 비교도 그렇게 한다 */
+export const bare = (s: string) => s.replace(/\s+/g, "");
+
 /**
  * 기본 음식 후보. 계절마다 오르는 것과 늘 찾는 것을 섞었다.
  * 데이터랩은 상대값이라 "오르는 중인가" 만 보면 제철이 저절로 걸러진다.
@@ -41,7 +44,24 @@ export type FoodSettings = {
   /** 가게를 찾을 동네. "신림", "관악구" 처럼 */
   area: string;
   seeds: string[];
+  /** 검색광고 연관 키워드에서 자동으로 찾은, 목록 밖 음식. 검색수 많은 순 */
+  discovered: DiscoveredFood[];
+  /** 사용자가 뺀 음식. 발견돼도 다시 넣지 않는다 */
+  excluded: string[];
 };
+
+/** 설정 `food_discovered` 의 한 칸 */
+export type DiscoveredFood = {
+  name: string;
+  /** 월간 검색수(PC+모바일). 이 음식으로 잡힌 키워드 중 가장 큰 값 */
+  searches: number;
+  firstSeen: string;
+  lastSeen: string;
+  seenCount: number;
+};
+
+/** 발견 음식 중 트렌드 비교에 끼워 넣는 개수. 데이터랩 호출이 5개당 1번 늘어난다 */
+export const DISCOVERED_IN_TRENDS = 15;
 
 export function parseFoodSeeds(raw: string): string[] {
   const seen = new Set<string>();
@@ -51,15 +71,80 @@ export function parseFoodSeeds(raw: string): string[] {
     .filter((s) => s && !seen.has(s) && seen.add(s));
 }
 
-export async function foodSettings(): Promise<FoodSettings> {
-  const s = await getSettings(["food_area", "food_seeds"]);
-  const seeds = parseFoodSeeds(s.food_seeds ?? "");
-  return { area: s.food_area ?? "", seeds: seeds.length ? seeds : DEFAULT_FOOD_SEEDS };
+function parseJson<T>(raw: string | undefined, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
 }
 
-export async function saveFoodSettings(o: Partial<FoodSettings>): Promise<void> {
+export function parseDiscovered(raw: string | undefined): DiscoveredFood[] {
+  const list = parseJson<unknown>(raw, []);
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((d): d is DiscoveredFood => typeof d?.name === "string" && d.name.trim().length > 0)
+    .map((d) => ({
+      name: d.name.trim(),
+      searches: Number(d.searches) || 0,
+      firstSeen: String(d.firstSeen ?? ""),
+      lastSeen: String(d.lastSeen ?? ""),
+      seenCount: Number(d.seenCount) || 1,
+    }))
+    .sort((a, b) => b.searches - a.searches);
+}
+
+export function parseExcluded(raw: string | undefined): string[] {
+  const list = parseJson<unknown>(raw, []);
+  return Array.isArray(list) ? list.filter((x): x is string => typeof x === "string" && x.trim() !== "") : [];
+}
+
+export async function foodSettings(): Promise<FoodSettings> {
+  const s = await getSettings(["food_area", "food_seeds", "food_discovered", "food_excluded"]);
+  const parsed = parseFoodSeeds(s.food_seeds ?? "");
+  const seeds = parsed.length ? parsed : DEFAULT_FOOD_SEEDS;
+  const excluded = parseExcluded(s.food_excluded);
+  // 목록에 들어갔거나 뺀 것은 발견 목록에서 보이지 않는다 (저장본에 남아 있어도)
+  const skip = new Set([...seeds, ...excluded].map(bare));
+  const discovered = parseDiscovered(s.food_discovered).filter((d) => !skip.has(bare(d.name)));
+  return { area: s.food_area ?? "", seeds, discovered, excluded };
+}
+
+export async function saveFoodSettings(o: { area?: string; seeds?: string[] }): Promise<void> {
   if (typeof o.area === "string") await setSetting("food_area", o.area.trim());
   if (Array.isArray(o.seeds)) await setSetting("food_seeds", o.seeds.join(", "));
+}
+
+export async function saveDiscovered(list: DiscoveredFood[]): Promise<void> {
+  await setSetting("food_discovered", JSON.stringify(list));
+}
+
+/** 발견된 음식을 사용자 목록으로 옮긴다. 발견 목록에서는 빠진다 */
+export async function adoptDiscovered(name: string): Promise<void> {
+  const s = await foodSettings();
+  const n = name.trim();
+  if (!n) return;
+  if (!s.seeds.some((x) => bare(x) === bare(n))) await saveFoodSettings({ seeds: [...s.seeds, n] });
+  const raw = await getSettings(["food_discovered"]);
+  await saveDiscovered(parseDiscovered(raw.food_discovered).filter((d) => bare(d.name) !== bare(n)));
+}
+
+/** 발견된 음식을 뺀다. 제외 목록에 올려 다시 들어오지 않게 한다 */
+export async function excludeDiscovered(name: string): Promise<void> {
+  const n = name.trim();
+  if (!n) return;
+  const raw = await getSettings(["food_discovered", "food_excluded"]);
+  const excluded = parseExcluded(raw.food_excluded);
+  if (!excluded.some((x) => bare(x) === bare(n))) {
+    await setSetting("food_excluded", JSON.stringify([...excluded, n]));
+  }
+  await saveDiscovered(parseDiscovered(raw.food_discovered).filter((d) => bare(d.name) !== bare(n)));
+}
+
+/** 트렌드 비교 대상에 끼울 발견 음식. 검색수 상위, 제외·목록 중복은 foodSettings 가 이미 뺐다 */
+export function discoveredForTrends(s: FoodSettings): string[] {
+  return s.discovered.slice(0, DISCOVERED_IN_TRENDS).map((d) => d.name);
 }
 
 /* ------------------------------------------------------------------ *
@@ -74,6 +159,8 @@ export type FoodTrend = {
   series: TrendPoint[];
   /** 월간 검색수(PC+모바일). 검색광고 자격증명이 없으면 null */
   searches: number | null;
+  /** 사용자 목록이 아니라 자동 발견 목록에서 온 음식 */
+  discovered: boolean;
 };
 
 export type FoodTrendResult = {
@@ -96,8 +183,6 @@ function chunk<T>(xs: T[], n: number): T[][] {
   return out;
 }
 
-/** 검색광고는 공백을 뗀 형태로 집계한다. 비교도 그렇게 한다 */
-const bare = (s: string) => s.replace(/\s+/g, "");
 
 /** 힌트 키워드들의 월간 검색수. 연관 키워드도 같이 돌려준다 */
 async function monthlySearches(
@@ -124,11 +209,25 @@ async function monthlySearches(
   return { exact, related, error };
 }
 
-export async function foodTrends(seeds: string[]): Promise<FoodTrendResult> {
+/**
+ * `seeds` 는 사용자 목록, `extra` 는 발견 목록. 둘 다 같은 방식으로 비교한다.
+ *
+ * 데이터랩은 한 요청(5개) 안에서 가장 높은 점을 100 으로 두는 상대값이라 묶음이 다르면
+ * 높이를 비교할 수 없다. 그래서 순위는 높이가 아니라 각 음식 **자기 곡선 안의 변화율**
+ * (trendDelta) 로만 매긴다 — 묶음을 몇 개로 나누든, 발견 음식이 어느 묶음에 끼든 같은 값이다.
+ */
+export async function foodTrends(seeds: string[], extra: string[] = []): Promise<FoodTrendResult> {
   const errors: string[] = [];
   const bySeed = new Map<string, FoodTrend>(
-    seeds.map((food) => [food, { food, delta: null, series: [], searches: null }]),
+    seeds.map((food) => [food, { food, delta: null, series: [], searches: null, discovered: false }]),
   );
+  const have = new Set(seeds.map(bare));
+  for (const food of extra) {
+    if (have.has(bare(food))) continue;
+    have.add(bare(food));
+    bySeed.set(food, { food, delta: null, series: [], searches: null, discovered: true });
+  }
+  const all = [...bySeed.keys()];
 
   const creds = await openApiCreds();
   const trendJob = (async () => {
@@ -137,7 +236,7 @@ export async function foodTrends(seeds: string[]): Promise<FoodTrendResult> {
       return;
     }
     const range = recentWeeks();
-    for (const group of chunk(seeds, TREND_MAX_KEYWORDS)) {
+    for (const group of chunk(all, TREND_MAX_KEYWORDS)) {
       try {
         const series = await searchTrend({ ...range, keywords: group, timeUnit: "week" }, creds);
         for (const s of series) {
@@ -155,7 +254,7 @@ export async function foodTrends(seeds: string[]): Promise<FoodTrendResult> {
   })();
 
   const volumeJob = (async () => {
-    const { exact, error } = await monthlySearches(seeds);
+    const { exact, error } = await monthlySearches(all);
     if (error) errors.push(`검색광고: ${error}`);
     for (const t of bySeed.values()) t.searches = exact.get(bare(t.food)) ?? null;
   })();

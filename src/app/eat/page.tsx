@@ -20,7 +20,11 @@ type Trend = {
   delta: number | null;
   series: { period: string; ratio: number }[];
   searches: number | null;
+  /** 목록 밖에서 자동으로 찾은 음식 */
+  discovered?: boolean;
 };
+
+type Discovered = { name: string; searches: number; firstSeen: string; lastSeen: string; seenCount: number };
 
 type Place = {
   name: string;
@@ -36,6 +40,8 @@ export default function EatPage() {
   const [seedsText, setSeedsText] = useState("");
   const [savedArea, setSavedArea] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [discovered, setDiscovered] = useState<Discovered[]>([]);
+  const [discoverMsg, setDiscoverMsg] = useState("");
 
   const [trends, setTrends] = useState<Trend[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
@@ -55,6 +61,7 @@ export default function EatPage() {
         setArea(d.area ?? "");
         setSavedArea(d.area ?? "");
         setSeedsText((d.seeds ?? []).join(", "));
+        setDiscovered(d.discovered ?? []);
         // 동네가 없으면 처음 온 것이다. 설정부터 열어 둔다
         if (!d.area) setShowSettings(true);
       })
@@ -69,6 +76,7 @@ export default function EatPage() {
       if (!d.ok) throw new Error(d.error ?? "트렌드 조회에 실패했습니다.");
       setTrends(d.trends ?? []);
       setErrors(d.errors ?? []);
+      if (Array.isArray(d.discovered)) setDiscovered(d.discovered);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -91,6 +99,48 @@ export default function EatPage() {
       setSavedArea(d.area ?? "");
       setSeedsText((d.seeds ?? []).join(", "));
       setShowSettings(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  /** 발견된 음식 하나를 목록에 넣거나(adopt) 뺀다(exclude) */
+  async function judge(name: string, action: "adopt" | "exclude") {
+    setError("");
+    setBusy(`${action}:${name}`);
+    try {
+      const d = await (
+        await fetch("/api/food-trend", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ [action]: name }),
+        })
+      ).json();
+      if (!d.ok) throw new Error(d.error ?? "저장에 실패했습니다.");
+      setSeedsText((d.seeds ?? []).join(", "));
+      setDiscovered(d.discovered ?? []);
+      // 빼면 오르는 순에서도 바로 지운다. 넣으면 다음 조회부터 목록 음식으로 보인다
+      if (action === "exclude") setTrends((ts) => ts.filter((t) => t.food !== name));
+      else setTrends((ts) => ts.map((t) => (t.food === name ? { ...t, discovered: false } : t)));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function discoverNow() {
+    setError("");
+    setDiscoverMsg("");
+    setBusy("discover");
+    try {
+      const d = await (await fetch("/api/food-trend/discover", { method: "POST" })).json();
+      if (!d.ok) throw new Error(d.error ?? "음식 찾기에 실패했습니다.");
+      setDiscoverMsg(`${d.found}개 찾음 · 새로 ${d.added}개 · 전체 ${d.total}개`);
+      const g = await (await fetch("/api/food-trend")).json();
+      if (g.ok) setDiscovered(g.discovered ?? []);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -171,6 +221,44 @@ export default function EatPage() {
               {spin("save")}
               저장
             </button>
+
+            <div className="field" style={{ marginTop: 20 }}>
+              <label>
+                발견된 음식
+                <Help text="매일 아침 검색광고 연관 키워드에서 목록에 없는 음식을 찾아 자동으로 비교 대상에 넣습니다. 빼기를 누르면 다시 넣지 않습니다." />
+              </label>
+              <div className="row" style={{ alignItems: "center" }}>
+                <button className="small" onClick={discoverNow} disabled={Boolean(busy)}>
+                  {spin("discover")}
+                  지금 찾기
+                </button>
+                {discoverMsg && <span className="hint">{discoverMsg}</span>}
+              </div>
+              {discovered.length === 0 ? (
+                <p className="hint">아직 찾은 음식이 없습니다.</p>
+              ) : (
+                discovered.map((d) => (
+                  <div key={d.name} className="list-item entry">
+                    <div className="entry-main">
+                      <div className="visit-line">
+                        <strong className="entry-title">{d.name}</strong>
+                        <span className="hint num">월 {d.searches.toLocaleString()}회</span>
+                      </div>
+                    </div>
+                    <div className="entry-side row">
+                      <button className="small" onClick={() => judge(d.name, "adopt")} disabled={Boolean(busy)}>
+                        {spin(`adopt:${d.name}`)}
+                        목록에 추가
+                      </button>
+                      <button className="small ghost" onClick={() => judge(d.name, "exclude")} disabled={Boolean(busy)}>
+                        {spin(`exclude:${d.name}`)}
+                        빼기
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -194,6 +282,11 @@ export default function EatPage() {
                   <div className="visit-line">
                     <strong className="entry-title">{t.food}</strong>
                     <DeltaBadge delta={t.delta} />
+                    {t.discovered && (
+                      <span className="status-badge ready" title="목록 밖에서 자동으로 찾은 음식입니다">
+                        새 후보
+                      </span>
+                    )}
                     {t.searches !== null && (
                       <span className="hint num">월 {t.searches.toLocaleString()}회</span>
                     )}
