@@ -26,6 +26,7 @@ import {
 import { DEFAULT_UPSCALE } from "@/lib/upscale";
 import SheetTool from "./SheetTool";
 import { finishPiece, sizeLabel, upscaleFactor, UpscaleControls } from "./Upscale";
+import { miriCsv, type MiriRow } from "@/lib/miriCsv";
 
 /**
  * AI 스톡 이미지 — 부수입 갈래.
@@ -358,6 +359,7 @@ export default function StockPage() {
       const entries: ZipEntry[] = [];
       const csv = ["Filename,Title,Keywords,Category,Releases"];
       const miri: string[] = [];
+      const miriRows: MiriRow[] = [];
       const skipped: string[] = [];
       const used = new Map<string, number>();
 
@@ -374,6 +376,7 @@ export default function StockPage() {
         if (withOriginal && o.origPng !== o.png) {
           entries.push({ name: `original/${name}.png`, data: new Uint8Array(await o.origPng.arrayBuffer()) });
         }
+        miriRows.push({ fileName: name, elementName: p?.titleKo ?? "", keywords: p?.keywordsKo ?? [] });
         miri.push(
           [`${name}.png`, `제목: ${p?.titleKo ?? ""}`, `태그: ${(p?.keywordsKo ?? []).join(", ")}`, "AI 생성 콘텐츠 체크: 필수"].join("\n"),
         );
@@ -395,6 +398,8 @@ export default function StockPage() {
 
       const enc = new TextEncoder();
       entries.push({ name: "miricanvas.txt", data: enc.encode(miri.join("\n\n") + "\n") });
+      // 디자인허브 "CSV 업로드" 에 그대로 넣는 파일. 유료(Premium)·PNG 요소로 채운다
+      entries.push({ name: "miricanvas.csv", data: enc.encode(miriCsv(miriRows, "Premium")) });
       if (withAdobe) entries.push({ name: "adobe.csv", data: enc.encode(csv.join("\n") + "\n") });
 
       const blob = new Blob([makeZip(entries)], { type: "application/zip" });
@@ -727,7 +732,7 @@ export default function StockPage() {
             <div className="card">
               <h2>
                 4. 받기
-                <Help text="미리캔버스: miricanvas 폴더의 PNG 를 '요소'로 올리고, miricanvas.txt 의 제목·태그를 붙여 넣으세요. Adobe Stock: adobe 폴더의 JPG 를 올린 뒤 adobe.csv 를 'Upload CSV' 로 넣으면 제목·키워드가 한 번에 들어갑니다. 원본 조각도 넣기를 켰으면 키우기 전 조각이 original 폴더에 들어갑니다." />
+                <Help text="미리캔버스: miricanvas 폴더의 PNG 를 올린 뒤 제출 예정 화면의 'CSV 업로드'에 miricanvas.csv 를 넣으면 이름·키워드·유료·PNG 요소가 한 번에 들어갑니다(AI 체크박스는 화면에서 따로 켜세요). miricanvas.txt 는 손으로 붙일 때용입니다. Adobe Stock: adobe 폴더의 JPG 를 올린 뒤 adobe.csv 를 'Upload CSV' 로 넣으면 제목·키워드가 한 번에 들어갑니다. 원본 조각도 넣기를 켰으면 키우기 전 조각이 original 폴더에 들어갑니다." />
               </h2>
               <label className="check-inline">
                 <input type="checkbox" checked={withAdobe} onChange={(e) => setWithAdobe(e.target.checked)} /> Adobe Stock 용
