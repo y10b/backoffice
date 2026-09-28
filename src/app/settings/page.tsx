@@ -336,9 +336,12 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {/* 네이버가 신규 발급을 막아 대부분 쓸 일이 없다. 승인된 옛 키가 있을 때만 펼친다 */}
       <div className="card">
-        <h2>
-          네이버 개발자센터 (검색 API · 데이터랩){" "}
+        <details className="card-fold">
+        <summary>
+          네이버 개발자센터 (검색 API · 데이터랩)
+          <span className="status-badge hold">발급 중단</span>
           {state && (
             <Status
               configured={state.openApi.configured}
@@ -346,7 +349,7 @@ export default function SettingsPage() {
               preview={state.openApi.clientIdPreview}
             />
           )}
-        </h2>
+        </summary>
         <div className="alert warn" style={{ marginTop: 0 }}>
           <strong>현재 신규 발급이 막혀 있습니다.</strong> 앱을 새로 등록해도 사용 API
           목록에 <span className="mono">검색</span>·
@@ -410,6 +413,7 @@ export default function SettingsPage() {
             삭제
           </button>
         </div>
+        </details>
       </div>
 
       <div className="card">

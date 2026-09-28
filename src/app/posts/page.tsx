@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { copyText } from "@/lib/clipboard";
 import Help from "@/components/Help";
+import StatusBadge from "@/components/StatusBadge";
 
 /** 전부 티스토리 글이다. 행에 channel·posted_naver 가 남아 있어도 보지 않는다 */
 type PostRow = {
@@ -316,7 +316,8 @@ function QueueCard() {
               </div>
               {q.note && <div className="entry-sub">{q.note}</div>}
             </div>
-            <div className="entry-side">
+            {/* 글감 큐만 예외로 행 오른쪽에 버튼을 둔다. 같은 크기 아이콘 셋 */}
+            <div className="entry-side icon-group">
               <button
                 className="small ghost"
                 onClick={() => move(i, -1)}
@@ -339,8 +340,10 @@ function QueueCard() {
                 className="small ghost danger"
                 onClick={() => commit(queue.filter((_, k) => k !== i))}
                 disabled={saving}
+                aria-label="삭제"
+                title="삭제"
               >
-                삭제
+                ✕
               </button>
             </div>
           </div>
@@ -372,7 +375,6 @@ export default function PostsPage() {
   const [posts, setPosts] = useState<PostRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState<number | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -389,26 +391,10 @@ export default function PostsPage() {
 
   useEffect(load, [load]);
 
-  async function toggle(post: PostRow) {
-    const next = !post.posted_tistory;
-    setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, posted_tistory: next } : p)));
-    await fetch(`/api/posts/${post.id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ posted_tistory: next }),
-    });
-  }
-
-  async function remove(id: number) {
-    if (!confirm("이 글을 삭제할까요? 되돌릴 수 없습니다.")) return;
-    await fetch(`/api/posts/${id}`, { method: "DELETE" });
-    load();
-  }
-
   return (
     <>
       <h1 className="page-title">티스토리</h1>
-      <p className="page-desc">키워드에서 만든 초안과 발행 여부. 발행 체크는 수동 기록용.</p>
+      <p className="page-desc">키워드에서 만든 초안과 발행 여부. 초안을 누르면 복사·발행 표시·삭제가 있습니다.</p>
 
       <QueueCard />
 
@@ -431,64 +417,24 @@ export default function PostsPage() {
           posts.map((p) => {
             const tags = tagList(p.tags);
             const posted = Boolean(p.posted_tistory);
+            // 행은 제목 + 보조 한 줄, 오른쪽 끝은 상태 배지 하나. 발행 표시·태그 복사·삭제는 상세(/write) 아래 액션 바로 옮겼다
             return (
-              <div key={p.id} className="list-item entry">
+              <Link key={p.id} href={`/write?post=${p.id}`} className="list-item entry nowrap entry-button">
                 <div className="entry-main">
-                  <Link href={`/write?post=${p.id}`} className="entry-title">
-                    {p.title || "(제목 없음)"}
-                  </Link>
-                  <div className="visit-line" style={{ marginTop: 4 }}>
+                  <div className="entry-title">{p.title || "(제목 없음)"}</div>
+                  <div className="entry-sub visit-line">
                     <CategoryBadge name={p.category} />
-                    {p.rewrite_of && (
-                      <>
-                        <span className="badge accent">기존 글 보강</span>
-                        <a
-                          href={p.rewrite_of}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="entry-sub"
-                          style={{ marginTop: 0 }}
-                        >
-                          {readableUrl(p.rewrite_of)}
-                        </a>
-                        <Help text="같은 주제의 글이 이미 있습니다. 새 글로 올리지 말고 기존 글을 열어 수정 → 본문을 이 초안으로 교체하세요. 주소가 그대로라 쌓인 순위가 유지됩니다." />
-                      </>
-                    )}
-                  </div>
-                  <div className="entry-sub">
-                    {p.main_keyword}
-                    {p.sub_keyword ? ` + ${p.sub_keyword}` : ""}
-                    {p.updated_at ? ` · ${p.updated_at.slice(0, 10)}` : ""}
+                    {p.rewrite_of && <span className="badge accent">기존 글 보강</span>}
+                    <span>
+                      {p.main_keyword}
+                      {p.sub_keyword ? ` + ${p.sub_keyword}` : ""}
+                      {p.updated_at ? ` · ${p.updated_at.slice(0, 10)}` : ""}
+                      {tags.length ? ` · 태그 ${tags.length}` : ""}
+                    </span>
                   </div>
                 </div>
-                <div className="entry-side">
-                  <button
-                    className={`small ${posted ? "tistory" : ""}`}
-                    onClick={() => toggle(p)}
-                    title={`티스토리에 올렸는지 직접 체크하는 칸입니다. 붙여넣고 발행한 뒤 눌러 기록하세요`}
-                  >
-                    {posted ? "발행함" : "안 올림"}
-                  </button>
-                  {tags.length > 0 && (
-                    <button
-                      className="small ghost"
-                      title={tags.map((t) => `#${t}`).join(" ")}
-                      onClick={() =>
-                        copyText(tags.map((t) => `#${t}`).join(" ")).then(() => {
-                          // 복사는 눈에 보이는 변화가 없어서, 눌린 행만 잠깐 표시한다
-                          setCopied(p.id);
-                          setTimeout(() => setCopied((c) => (c === p.id ? null : c)), 1600);
-                        })
-                      }
-                    >
-                      {copied === p.id ? "복사됨" : `태그 ${tags.length}`}
-                    </button>
-                  )}
-                  <button className="small ghost danger" onClick={() => remove(p.id)}>
-                    삭제
-                  </button>
-                </div>
-              </div>
+                <StatusBadge tone={posted ? "done" : "draft"} label={posted ? "발행함" : "초안"} />
+              </Link>
             );
           })
         )}

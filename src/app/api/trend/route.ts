@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { TREND_MAX_KEYWORDS, openApiCreds, searchTrend, trendDelta } from "@/lib/openapi";
+import { TREND_MAX_KEYWORDS, isScopeBlocked, openApiCreds, searchTrend, trendDelta } from "@/lib/openapi";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,8 +53,13 @@ export async function POST(req: Request) {
       series: series.map((s) => ({ ...s, delta: trendDelta(s.data) })),
     });
   } catch (e) {
+    const message = (e as Error).message;
+    // 권한 거절은 고칠 수 없는 상태라 오류 문구 대신 플래그로 알린다. 화면이 추세 기능을 숨긴다
+    if (isScopeBlocked(message)) {
+      return NextResponse.json({ ok: false, openApiBlocked: true }, { status: 200 });
+    }
     return NextResponse.json(
-      { ok: false, error: `데이터랩 오류 — ${(e as Error).message}` },
+      { ok: false, error: `데이터랩 오류 — ${message}` },
       { status: 200 },
     );
   }

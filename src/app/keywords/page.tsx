@@ -20,6 +20,9 @@ type TrendingRow = {
   revenueScore: number | null;
 };
 
+/** 문서수·경쟁률은 검색 API 값이라, 그 API 를 못 쓰면 정렬 후보에서도 뺀다 */
+const OPENAPI_SORTS = ["competition", "docs"];
+
 const SORTS = [
   { id: "revenue", label: "수익 잠재력 높은 순 (애드센스)" },
   { id: "bid", label: "광고 단가 높은 순" },
@@ -320,6 +323,8 @@ export default function KeywordsPage() {
   const [trending, setTrending] = useState<TrendingRow[]>([]);
   const [trendingLoading, setTrendingLoading] = useState(false);
   const [trendingError, setTrendingError] = useState("");
+  /* 검색·데이터랩이 401 Scope 로 막힌 게 확인됐다. 이 화면에 있는 동안은 계속 숨긴다 */
+  const [openApiBlocked, setOpenApiBlocked] = useState(false);
 
   useEffect(() => {
     fetch("/api/settings")
@@ -367,6 +372,18 @@ export default function KeywordsPage() {
     [seedInput],
   );
 
+  /*
+   * 문서수·경쟁률·추세 기능을 보일지. 키가 없거나(설정 미완) 키가 있어도 네이버가 권한을
+   * 거절하면 끈다 — 신규 발급이 막혀 고칠 길이 없으니 오류 대신 기능을 숨긴다.
+   * 설정을 아직 못 읽었을 때는 꺼 둔다(체크박스가 떴다 사라지는 것보다 늦게 뜨는 편이 낫다).
+   */
+  const openApiOn = settings?.openApi?.configured === true && !openApiBlocked;
+
+  // 막힌 쪽 정렬을 골라 둔 채면 기본 정렬로 되돌린다
+  useEffect(() => {
+    if (settings && !openApiOn && OPENAPI_SORTS.includes(sort)) setSort("revenue");
+  }, [settings, openApiOn, sort]);
+
   async function run() {
     setLoading(true);
     setResult(null);
@@ -382,11 +399,13 @@ export default function KeywordsPage() {
           limit,
           minSearches,
           sort,
-          includeDocs,
-          includeTrend,
+          includeDocs: openApiOn && includeDocs,
+          includeTrend: openApiOn && includeTrend,
         }),
       });
-      setResult(await res.json());
+      const d = (await res.json()) as KeywordFetchResult;
+      if (d.openApiBlocked) setOpenApiBlocked(true);
+      setResult(d);
     } catch (e) {
       setResult({
         ok: false,
@@ -412,6 +431,10 @@ export default function KeywordsPage() {
         body: JSON.stringify({ keywords: selected.slice(0, MAX_TREND) }),
       });
       const d = await res.json();
+      if (d.openApiBlocked) {
+        setOpenApiBlocked(true);
+        return;
+      }
       if (!d.ok) {
         setTrendError(d.error ?? "추세를 가져오지 못했습니다.");
         return;
@@ -488,8 +511,12 @@ export default function KeywordsPage() {
   }, [result, filter]);
 
   const hasTrend = useMemo(
-    () => (result?.keywords ?? []).some((k) => k.trend?.length),
-    [result],
+    () => openApiOn && (result?.keywords ?? []).some((k) => k.trend?.length),
+    [result, openApiOn],
+  );
+  /* 검색·데이터랩 쪽 소스 배지는 기능이 꺼져 있으면 보이지 않는다 */
+  const shownSources = (result?.sources ?? []).filter(
+    (s) => openApiOn || (s.id !== "search" && s.id !== "datalab"),
   );
 
   const hasSerp = useMemo(
@@ -536,8 +563,7 @@ export default function KeywordsPage() {
       <h1 className="page-title">키워드 탐색</h1>
       <p className="page-desc">
         시드 키워드를 넣으면 <strong>검색광고 키워드도구</strong>로 연관 키워드와 월간
-        검색수를 가져오고, <strong>검색 API</strong>로 블로그 문서수를 세어 경쟁률을
-        계산합니다. 마음에 드는 키워드의 <strong>작성</strong> 버튼을 누르면 메인 키워드로
+        검색수·광고 단가를 가져옵니다. 마음에 드는 키워드의 <strong>작성</strong> 버튼을 누르면 메인 키워드로
         넘어가고, 옆의 <strong>⚡</strong> 는 서브 키워드 제안부터 본문까지 한 번에
         만듭니다.
       </p>
@@ -548,14 +574,6 @@ export default function KeywordsPage() {
         <div className="alert warn">
           검색광고 API 자격증명이 없습니다. <a href="/settings">설정</a>에서 API 키·비밀키·
           CUSTOMER_ID 를 먼저 등록하세요.
-        </div>
-      )}
-      {settings?.searchAd.configured && !settings.openApi.configured && (
-        <div className="alert warn">
-          검색 API·데이터랩은 네이버가 신규 신청을 받지 않아 문서수·경쟁률·추세 열은
-          비어 있습니다. 대신 <strong>광고 흡수율</strong>과 <strong>모바일 비중</strong>
-          으로 판단하세요. 승인된 키가 있다면 <a href="/settings">설정</a>에서 등록하면
-          바로 채워집니다.
         </div>
       )}
 
@@ -623,7 +641,7 @@ export default function KeywordsPage() {
               <Help text="'광고 흡수율 낮은 순' 이 블로그에 가장 유용합니다 — 광고가 안 가져가는 정보성 검색이라는 뜻입니다.&#10;애드센스를 달았다면 '수익 잠재력' 으로 두세요.&#10;정렬은 잘라내기 전 전체 후보에 적용되므로 검색량 상위에 없는 키워드도 발굴됩니다(문서수·경쟁률 정렬만 예외)." />
             </label>
             <select value={sort} onChange={(e) => setSort(e.target.value)}>
-              {SORTS.map((s) => (
+              {SORTS.filter((s) => openApiOn || !OPENAPI_SORTS.includes(s.id)).map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.label}
                 </option>
@@ -664,28 +682,38 @@ export default function KeywordsPage() {
           </button>
         </div>
 
-        <div className="row" style={{ marginTop: 12 }}>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={includeDocs}
-              onChange={(e) => setIncludeDocs(e.target.checked)}
-            />
-            블로그 문서수 · 경쟁률 함께 조회
-          </label>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={includeTrend}
-              onChange={(e) => setIncludeTrend(e.target.checked)}
-            />
-            상위 5개 검색어 추세 함께 조회
-          </label>
-        </div>
-        <p className="hint">
-          문서수는 키워드 1건당 검색 API 를 1회 호출합니다 (일 한도 25,000회). 개수를 크게
-          잡으면 그만큼 호출이 늘고 조회도 느려집니다.
-        </p>
+        {openApiOn && (
+          <>
+            <div className="row" style={{ marginTop: 12 }}>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={includeDocs}
+                  onChange={(e) => setIncludeDocs(e.target.checked)}
+                />
+                블로그 문서수 · 경쟁률 함께 조회
+              </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={includeTrend}
+                  onChange={(e) => setIncludeTrend(e.target.checked)}
+                />
+                상위 5개 검색어 추세 함께 조회
+              </label>
+            </div>
+            <p className="hint">
+              문서수는 키워드 1건당 검색 API 를 1회 호출합니다 (일 한도 25,000회). 개수를 크게
+              잡으면 그만큼 호출이 늘고 조회도 느려집니다.
+            </p>
+          </>
+        )}
+        {openApiBlocked && (
+          <p className="hint">
+            네이버가 검색·데이터랩 API 신규 발급을 막아 문서수·추세는 쓸 수 없습니다.
+            검색량·단가·광고 흡수율로 고릅니다.
+          </p>
+        )}
       </div>
 
       {result?.error && (
@@ -694,9 +722,9 @@ export default function KeywordsPage() {
       {trendError && <div className="alert warn">{trendError}</div>}
       {serpError && <div className="alert warn">{serpError}</div>}
 
-      {result && result.sources.length > 0 && (
+      {result && shownSources.length > 0 && (
         <div className="row" style={{ marginBottom: 14, gap: 8 }}>
-          {result.sources.map((s) => (
+          {shownSources.map((s) => (
             <span
               key={s.id}
               className={`badge ${s.ok ? "on" : s.skipped ? "" : "off"}`}
@@ -734,7 +762,7 @@ export default function KeywordsPage() {
                     : `선택 ${selected.length}개 경쟁 분석`}
                 </button>
               )}
-              {selected.length > 0 && (
+              {selected.length > 0 && openApiOn && (
                 <button
                   className="small"
                   onClick={loadTrend}
@@ -821,12 +849,16 @@ export default function KeywordsPage() {
                         </th>
                       </>
                     )}
-                    <th style={{ width: 100 }} className="num">
-                      문서수
-                    </th>
-                    <th style={{ width: 120 }} className="num">
-                      경쟁률
-                    </th>
+                    {openApiOn && (
+                      <>
+                        <th style={{ width: 100 }} className="num">
+                          문서수
+                        </th>
+                        <th style={{ width: 120 }} className="num">
+                          경쟁률
+                        </th>
+                      </>
+                    )}
                     {hasTrend && <th style={{ width: 110 }}>추세</th>}
                     <th style={{ width: 92 }} />
                   </tr>
@@ -906,21 +938,25 @@ export default function KeywordsPage() {
                               </>
                             );
                           })()}
-                        <td className="num">{num(k.blogDocs)}</td>
-                        <td className="num">
-                          {k.competitionRatio === null ? (
-                            "—"
-                          ) : (
-                            <>
-                              {k.competitionRatio.toLocaleString()}
-                              {level && (
-                                <span className={`grade ${level}`}>
-                                  {COMPETITION_LABEL[level]}
-                                </span>
+                        {openApiOn && (
+                          <>
+                            <td className="num">{num(k.blogDocs)}</td>
+                            <td className="num">
+                              {k.competitionRatio === null ? (
+                                "—"
+                              ) : (
+                                <>
+                                  {k.competitionRatio.toLocaleString()}
+                                  {level && (
+                                    <span className={`grade ${level}`}>
+                                      {COMPETITION_LABEL[level]}
+                                    </span>
+                                  )}
+                                </>
                               )}
-                            </>
-                          )}
-                        </td>
+                            </td>
+                          </>
+                        )}
                         {hasTrend && (
                           <td>
                             {k.trend?.length ? (
@@ -1002,8 +1038,14 @@ export default function KeywordsPage() {
             도는 주제이고, 순수 유입만 원하면 낮은 쪽이 유리합니다.{" "}
             <strong>광고</strong> 열의 숫자는 월평균 노출 광고수(0~15)로, 높으면 화면을
             광고가 덮습니다. <strong>모바일</strong> 비중이 높은 키워드가 블로그 유입에
-            유리합니다. <strong>경쟁률</strong> = 블로그 문서수 ÷ 월간 검색수 (문서수를
-            채웠을 때만). 모두 공식 지표가 아니라 경험칙이니 같은 표 안의 상대 비교로
+            유리합니다.{" "}
+            {openApiOn && (
+              <>
+                <strong>경쟁률</strong> = 블로그 문서수 ÷ 월간 검색수 (문서수를 채웠을
+                때만).{" "}
+              </>
+            )}
+            모두 공식 지표가 아니라 경험칙이니 같은 표 안의 상대 비교로
             쓰세요. 월간 검색수의 <span className="mono">9</span> 는 네이버가{" "}
             <span className="mono">{"< 10"}</span> 으로 가린 값입니다.
           </p>
@@ -1011,7 +1053,7 @@ export default function KeywordsPage() {
           <details style={{ marginTop: 12 }}>
             <summary>소스별 상세 / 원본 응답 (디버그)</summary>
             <ul className="hint" style={{ paddingLeft: 18 }}>
-              {result.sources.map((s) => (
+              {shownSources.map((s) => (
                 <li key={s.id}>
                   <strong>{s.label}</strong> — {s.message ?? "—"}
                 </li>

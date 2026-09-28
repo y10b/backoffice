@@ -4,6 +4,9 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import Help from "@/components/Help";
+import PublishSteps from "@/components/PublishSteps";
+import ActionBar from "@/components/ActionBar";
+import StatusBadge, { type StatusTone } from "@/components/StatusBadge";
 import { copyForNaver, copyText, toNaverHtml, withPhotos } from "@/lib/clipboard";
 
 /**
@@ -17,6 +20,12 @@ import { copyForNaver, copyText, toNaverHtml, withPhotos } from "@/lib/clipboard
  * 휴대폰에서 쓰는 것을 전제로 만들었다. 출퇴근길에 사진 올리고 네 문항 답하면
  * 끝나야 한다. 발행은 네이버 앱에서 직접 한다 — 자동 발행은 하지 않는다.
  */
+
+/**
+ * 네이버 블로그 글쓰기 (PC 스마트에디터). 네이버 앱 에디터는 서식을 버려서, 폰에서도
+ * 사파리로 이 주소를 열고 "데스크탑 웹사이트 요청"을 켜야 한다. 블로그 아이디가 바뀌면 여기만 고친다.
+ */
+const NAVER_EDITOR_URL = "https://blog.naver.com/PostWriteForm.naver?blogId=k-jun03";
 
 type VisitPost = {
   id: number;
@@ -55,6 +64,14 @@ const STATUS_LABEL: Record<string, string> = {
   ready: "올릴 준비",
   posted: "올림",
   dropped: "보류",
+};
+
+const STATUS_TONE: Record<string, StatusTone> = {
+  analyzed: "draft",
+  drafted: "draft",
+  ready: "ready",
+  posted: "done",
+  dropped: "hold",
 };
 
 /** 사진 긴 변을 이 크기로 줄여 보낸다 */
@@ -126,8 +143,6 @@ function VisitInner() {
 
   /* 4단계 — 결과 */
   const [draft, setDraft] = useState<VisitPost | null>(null);
-  /* 아이폰에서 버튼 복사가 평문으로만 붙을 때 쓰는 수동 선택 영역 */
-  const [manualCopy, setManualCopy] = useState(false);
   /*
    * 본문 [사진 N] 자리에 넣을 사진(data URL). 서버에 저장하지 않으므로 이 화면에서 분석한
    * 글에만 있다. 지난 초안을 열면 비어 있고, 그때는 자리 표시가 그대로 복사된다.
@@ -333,6 +348,19 @@ function VisitInner() {
     }
   }
 
+  async function removeDraft(postId: number) {
+    if (!confirm("이 초안을 삭제할까요? 되돌릴 수 없습니다.")) return;
+    setError("");
+    try {
+      const d = await (await fetch(`/api/visit?id=${postId}`, { method: "DELETE" })).json();
+      if (!d.ok) throw new Error(d.error);
+      reset();
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   function copyBody() {
     if (!draft) return;
     copyForNaver(draft.body_html ?? "", undefined, draftPhotos).then((mode) =>
@@ -530,7 +558,10 @@ function VisitInner() {
       {/* ---------------- 3단계 — 초안 ---------------- */}
       {draft && (
         <div className="card">
-          <h2>3. 초안</h2>
+          <h2>
+            3. 초안
+            <StatusBadge tone={STATUS_TONE[draft.status] ?? "draft"} label={STATUS_LABEL[draft.status] ?? draft.status} />
+          </h2>
 
           {draft.needs_check?.length > 0 && (
             <div className="alert">
@@ -580,25 +611,34 @@ function VisitInner() {
             dangerouslySetInnerHTML={{ __html: withPhotos(draft.body_html ?? "", draftPhotos) }}
           />
 
-          <div className="row" style={{ marginTop: 12 }}>
-            <button className="naver" onClick={copyBody}>
-              본문 복사
-            </button>
-            <button onClick={() => copyText(draftTitle).then(() => flash("제목 복사됨"))}>제목 복사</button>
-            <button onClick={() => copyText((draft.tags ?? []).map((t) => `#${t}`).join(" ")).then(() => flash("태그 복사됨"))}>
-              태그 {draft.tags?.length ?? 0}개 복사
-            </button>
-            <button className="ghost" onClick={() => setManualCopy((v) => !v)}>
-              {manualCopy ? "선택 복사 닫기" : "아이폰에서 안 붙으면"}
-            </button>
-          </div>
+          <h3>
+            네이버에 올리기
+            <Help text="네이버 블로그 앱 에디터는 붙여넣기에서 서식을 버립니다. 폰에서도 사파리로 PC 스마트에디터를 열어 붙이세요." />
+          </h3>
+          <PublishSteps
+            channel="naver"
+            editorUrl={NAVER_EDITOR_URL}
+            copyButtons={
+              <>
+                <button className="primary" onClick={copyBody}>
+                  본문 복사
+                </button>
+                <button onClick={() => copyText(draftTitle).then(() => flash("제목 복사됨"))}>제목 복사</button>
+                <button onClick={() => copyText((draft.tags ?? []).map((t) => `#${t}`).join(" ")).then(() => flash("태그 복사됨"))}>
+                  태그 {draft.tags?.length ?? 0}개 복사
+                </button>
+              </>
+            }
+          />
           {!draftPhotos && (
             <p className="hint">
               지난 초안이라 사진이 없습니다. 본문의 [사진 N] 자리에 아래 순서대로 직접 넣으세요.
             </p>
           )}
 
-          {manualCopy && (
+          {/* 보조 수단. 버튼 복사가 평문으로만 붙을 때만 펼친다 */}
+          <details style={{ marginTop: 10 }}>
+            <summary>아이폰에서 안 붙으면 — 직접 선택해서 복사</summary>
             <div className="field" style={{ marginTop: 10 }}>
               <label>
                 직접 선택해서 복사
@@ -627,7 +667,7 @@ function VisitInner() {
                 dangerouslySetInnerHTML={{ __html: toNaverHtml(draft.body_html ?? "", draftTitle, draftPhotos) }}
               />
             </div>
-          )}
+          </details>
 
           {draft.body_markdown && analysis && (
             <div className="field" style={{ marginTop: 16 }}>
@@ -710,19 +750,31 @@ function VisitInner() {
             </details>
           )}
 
-          <div className="row" style={{ marginTop: 16 }}>
+          <ActionBar
+            danger={
+              <button className="ghost danger" onClick={() => removeDraft(draft.id)} disabled={isBusy}>
+                삭제
+              </button>
+            }
+          >
+            <button className="ghost" onClick={reset}>
+              새 글
+            </button>
+            {draft.status !== "posted" && draft.status !== "dropped" && (
+              <button onClick={() => patch(draft.id, { status: "dropped" }, "dropped")} disabled={isBusy}>
+                {spin("dropped")}
+                보류
+              </button>
+            )}
             {draft.status === "posted" ? (
-              <span className="badge on">올림</span>
+              <StatusBadge tone="done" label="올림" />
             ) : (
               <button className="primary" onClick={() => patch(draft.id, { status: "posted" }, "posted")} disabled={isBusy}>
                 {spin("posted")}
-                올렸어요
+                올림으로 표시
               </button>
             )}
-            <button className="ghost" onClick={reset}>
-              새 글 쓰기
-            </button>
-          </div>
+          </ActionBar>
         </div>
       )}
 
@@ -735,25 +787,22 @@ function VisitInner() {
           posts.map((p) => (
             <button
               key={p.id}
-              className={`list-item entry entry-button${draft?.id === p.id ? " current" : ""}`}
+              className={`list-item entry nowrap entry-button${draft?.id === p.id ? " current" : ""}`}
               onClick={() => openPost(p.id)}
             >
               <div className="entry-main">
-                <div className="visit-line">
-                  <strong className="entry-title">{p.place?.name || p.place_query}</strong>
-                  <span className={`badge${p.status === "posted" ? " on" : ""}`}>
-                    {STATUS_LABEL[p.status] ?? p.status}
-                  </span>
-                  {p.warnings?.length > 0 && (
-                    <span className="tag" title={p.warnings.join("\n")}>
-                      확인 {p.warnings.length}
-                    </span>
-                  )}
-                </div>
+                <div className="entry-title">{p.place?.name || p.place_query}</div>
                 <div className="entry-sub">
-                  {[p.visited_on, p.title].filter(Boolean).join(" · ") || "—"}
+                  {[
+                    p.warnings?.length ? `확인 ${p.warnings.length}` : "",
+                    p.visited_on,
+                    p.title,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "—"}
                 </div>
               </div>
+              <StatusBadge tone={STATUS_TONE[p.status] ?? "draft"} label={STATUS_LABEL[p.status] ?? p.status} />
             </button>
           ))
         )}

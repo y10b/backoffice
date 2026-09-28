@@ -47,6 +47,15 @@ function errorDetail(status: number, text: string): string {
   return `HTTP ${status}: ${msg}${hint}`;
 }
 
+/**
+ * 키는 유효한데 앱에 검색·데이터랩 권한이 없는 경우(401 Scope Status Invalid · 403).
+ * 네이버가 신규 발급을 막아 고칠 방법이 없으니, 부르는 쪽은 오류 대신 "기능 없음"으로 다룬다.
+ */
+export function isScopeBlocked(message: string | undefined): boolean {
+  if (!message) return false;
+  return /scope/i.test(message) || /^HTTP 403\b/.test(message) || message.includes("사용 권한이 없습니다");
+}
+
 /* ------------------------------------------------------------------ *
  * 검색 API — 블로그 총 문서수
  * ------------------------------------------------------------------ */

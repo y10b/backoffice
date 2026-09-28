@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Help from "@/components/Help";
 import { copyText } from "@/lib/clipboard";
+import ActionBar from "@/components/ActionBar";
+import StatusBadge, { type StatusTone } from "@/components/StatusBadge";
 
 /**
  * 쓰레드 — 제휴 게시물 후보.
@@ -35,6 +37,13 @@ const STATUS_LABEL: Record<string, string> = {
   ready: "올릴 준비",
   posted: "올림",
   dropped: "보류",
+};
+
+const STATUS_TONE: Record<string, StatusTone> = {
+  draft: "draft",
+  ready: "ready",
+  posted: "done",
+  dropped: "hold",
 };
 
 function num(n: number | null): string {
@@ -100,6 +109,7 @@ export default function ThreadsPage() {
   }
 
   async function remove(id: number) {
+    if (!confirm("이 후보를 삭제할까요?")) return;
     setError("");
     try {
       const res = await fetch(`/api/threads?id=${id}`, { method: "DELETE" });
@@ -187,45 +197,41 @@ export default function ThreadsPage() {
         )}
 
         {shown.map((p) => (
-          <div key={p.id} className="visual-item">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <div>
-                <strong>{p.keyword}</strong>{" "}
-                <span className={`badge ${p.status === "posted" ? "on" : ""}`}>
-                  {STATUS_LABEL[p.status] ?? p.status}
-                </span>{" "}
-                <span className="hint" style={{ margin: 0 }}>
+          <div key={p.id} className="list-item" style={{ padding: 0 }}>
+            {/* 행 전체가 펼치기. 복사·삭제는 펼친 안쪽으로 옮겼다 */}
+            <button
+              className={`entry nowrap entry-button${openId === p.id ? " current" : ""}`}
+              onClick={() => toggle(p)}
+              aria-expanded={openId === p.id}
+            >
+              <div className="entry-main">
+                <div className="entry-title">{p.keyword}</div>
+                <div className="entry-sub">
                   검색 {num(p.searches)} · 단가 {num(p.bid)}원
-                </span>
+                </div>
               </div>
-              <div className="row" style={{ gap: 6 }}>
-                <button className="small ghost" onClick={() => toggle(p)}>
-                  {openId === p.id ? "접기" : "손질"}
-                </button>
-                <button
-                  className="small"
-                  onClick={() =>
-                    copyText(`${p.draft}\n\n${DISCLOSURE}`).then(() =>
-                      flash("본문 + 고지 문구를 복사했습니다."),
-                    )
-                  }
-                >
-                  복사
-                </button>
-                <button className="small ghost" onClick={() => remove(p.id)}>
-                  삭제
-                </button>
-              </div>
-            </div>
-
-            {p.angle && (
-              <p className="hint" style={{ marginTop: 6 }}>
-                {p.angle}
-              </p>
-            )}
+              <StatusBadge tone={STATUS_TONE[p.status] ?? "draft"} label={STATUS_LABEL[p.status] ?? p.status} />
+            </button>
 
             {openId === p.id && (
-              <div style={{ marginTop: 10 }}>
+              <div style={{ padding: "4px 0 12px" }}>
+                {p.angle && (
+                  <p className="hint" style={{ marginTop: 0 }}>
+                    {p.angle}
+                  </p>
+                )}
+                <div className="row" style={{ marginBottom: 10 }}>
+                  <button
+                    className="small"
+                    onClick={() =>
+                      copyText(`${draft}\n\n${DISCLOSURE}`).then(() =>
+                        flash("본문 + 고지 문구를 복사했습니다."),
+                      )
+                    }
+                  >
+                    본문 + 고지 복사
+                  </button>
+                </div>
                 {p.hooks?.length > 0 && (
                   <div className="field">
                     <label>
@@ -290,9 +296,25 @@ export default function ThreadsPage() {
                   </div>
                 )}
 
-                <div className="row" style={{ marginTop: 10 }}>
+                <ActionBar
+                  danger={
+                    <button className="ghost danger" onClick={() => remove(p.id)}>
+                      삭제
+                    </button>
+                  }
+                >
+                  {p.status !== "dropped" && p.status !== "posted" && (
+                    <button
+                      className="ghost"
+                      onClick={async () => {
+                        if (await patch(p.id, { status: "dropped" })) flash("보류했습니다.");
+                      }}
+                    >
+                      보류
+                    </button>
+                  )}
                   <button
-                    className="primary"
+                    className={p.status === "posted" ? "primary" : ""}
                     onClick={async () => {
                       if (await patch(p.id, { draft, affiliate_url: link }))
                         flash("저장했습니다.");
@@ -300,24 +322,18 @@ export default function ThreadsPage() {
                   >
                     저장
                   </button>
-                  <button
-                    className="small"
-                    onClick={async () => {
-                      if (await patch(p.id, { draft, affiliate_url: link, status: "posted" }))
-                        flash("올림으로 표시했습니다.");
-                    }}
-                  >
-                    올림으로 표시
-                  </button>
-                  <button
-                    className="small ghost"
-                    onClick={async () => {
-                      if (await patch(p.id, { status: "dropped" })) flash("보류했습니다.");
-                    }}
-                  >
-                    보류
-                  </button>
-                </div>
+                  {p.status !== "posted" && (
+                    <button
+                      className="primary"
+                      onClick={async () => {
+                        if (await patch(p.id, { draft, affiliate_url: link, status: "posted" }))
+                          flash("올림으로 표시했습니다.");
+                      }}
+                    >
+                      올림으로 표시
+                    </button>
+                  )}
+                </ActionBar>
               </div>
             )}
           </div>

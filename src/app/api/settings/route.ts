@@ -36,6 +36,7 @@ export async function GET() {
     "github_pat", "github_user", "velog_user", "velog_token", "velog_refresh_token", "devlog_blocked_owners",
     "devlog_repos", "devlog_author_emails",
     "seeds_tistory",
+    "tistory_url",
   ]);
 
   const adKey = resolve(s.searchad_api_key, "NAVER_SEARCHAD_API_KEY");
@@ -117,6 +118,10 @@ export async function GET() {
       configured: Boolean(kakao.value),
       fromEnv: kakao.fromEnv,
       apiKeyPreview: mask(kakao.value),
+    },
+    // 티스토리 블로그 주소. 비어 있으면 화면이 기본 블로그(testao)의 에디터를 연다
+    tistory: {
+      url: s.tistory_url ?? "",
     },
     // 티스토리 시드. 저장값이 비면 코드 기본값(default)으로 돈다. 화면은 빈 칸에 default 를 흐리게 보여주면 된다
     seeds: {

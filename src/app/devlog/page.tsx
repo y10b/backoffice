@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Help from "@/components/Help";
+import ActionBar from "@/components/ActionBar";
+import StatusBadge, { type StatusTone } from "@/components/StatusBadge";
 
 /**
  * 개발 로그 — 깃 이력에서 velog 글을 만들고, 승인한 것만 올린다.
@@ -49,6 +51,20 @@ const STATUS_LABEL: Record<string, string> = {
   published: "발행됨",
   dropped: "보류",
 };
+
+const STATUS_TONE: Record<string, StatusTone> = {
+  draft: "draft",
+  approved: "ready",
+  publishing: "ready",
+  published: "done",
+  dropped: "hold",
+};
+
+/** 발행에 실패해 사유가 남은 글은 상태와 상관없이 빨강으로 보인다 */
+function badgeOf(p: PostRow): { tone: StatusTone; label: string } {
+  if (p.error && p.status !== "published") return { tone: "error", label: "발행 실패" };
+  return { tone: STATUS_TONE[p.status] ?? "draft", label: STATUS_LABEL[p.status] ?? p.status };
+}
 
 const TASKS: { id: "collect" | "draft" | "publish" | "sync"; label: string; help: string }[] = [
   { id: "collect", label: "오늘 커밋 수집", help: "오늘(KST) 내 커밋을 설정의 '수집할 레포'에서 레포·날짜별로 모아 아래 개발 로그에 쌓습니다. GitHub 계정 또는 설정의 커밋 이메일로 내 커밋을 가려내고, 회사 레포는 차단 목록으로 걸러집니다. 매일 21시에 자동으로 돕니다." },
@@ -254,39 +270,46 @@ export default function DevlogPage() {
           </div>
         )}
 
-        {shown.map((p) => (
-          <div key={p.id} className="list-item">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <strong>{p.title || "(제목 없음)"}</strong>{" "}
-                <span className={`badge ${p.status === "published" ? "on" : p.status === "approved" ? "accent" : ""}`}>
-                  {STATUS_LABEL[p.status] ?? p.status}
-                </span>
-                {p.from_private && <span className="badge off" style={{ marginLeft: 4 }}>비공개 레포</span>}
-                <div className="hint" style={{ margin: "2px 0 0" }}>
-                  {p.source}
-                  {p.status === "published" && ` · 좋아요 ${p.likes} · 댓글 ${p.comments}`}
+        {shown.map((p) => {
+          const badge = badgeOf(p);
+          const approvable = p.status !== "published" && p.status !== "approved";
+          return (
+          <div key={p.id} className="list-item" style={{ padding: 0 }}>
+            {/* 행 전체가 펼치기. 오른쪽 끝은 상태 배지 하나 */}
+            <button
+              className={`entry nowrap entry-button${openId === p.id ? " current" : ""}`}
+              onClick={() => open(p)}
+              aria-expanded={openId === p.id}
+            >
+              <div className="entry-main">
+                <div className="entry-title">{p.title || "(제목 없음)"}</div>
+                <div className="entry-sub">
+                  {[
+                    p.from_private ? "비공개 레포" : "",
+                    p.source,
+                    p.status === "published" ? `좋아요 ${p.likes} · 댓글 ${p.comments}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </div>
-                {p.error && <div className="hint" style={{ color: "var(--danger-text)" }}>발행 실패: {p.error}</div>}
               </div>
-              <div className="row" style={{ gap: 6 }}>
-                {p.url && (
-                  <a href={p.url} target="_blank" rel="noreferrer" className="link-btn">
-                    velog ↗
-                  </a>
-                )}
-                <button className="small ghost" onClick={() => open(p)}>
-                  {openId === p.id ? "접기" : "열기"}
-                </button>
-              </div>
-            </div>
+              <StatusBadge tone={badge.tone} label={badge.label} />
+            </button>
 
             {openId === p.id && (
-              <div style={{ marginTop: 10 }}>
+              <div style={{ padding: "4px 0 12px" }}>
+                {p.error && <div className="alert error">발행 실패: {p.error}</div>}
                 {p.from_private && (
                   <div className="alert warn">
                     비공개 레포에서 나온 초안입니다. 공개해도 되는 내용인지 확인하세요.
                   </div>
+                )}
+                {p.url && (
+                  <p className="hint" style={{ marginTop: 0 }}>
+                    <a href={p.url} target="_blank" rel="noreferrer">
+                      velog 에서 보기 ↗
+                    </a>
+                  </p>
                 )}
                 <div className="field">
                   <label>제목</label>
@@ -311,25 +334,21 @@ export default function DevlogPage() {
                   <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="Next.js, 자동화" />
                 </div>
 
-                <div className="row" style={{ marginTop: 10 }}>
-                  <button
-                    className="primary"
-                    onClick={async () => {
-                      if (await patch(p.id, edited())) flash("저장했습니다.");
-                    }}
-                  >
-                    저장
-                  </button>
-                  {p.status !== "published" && p.status !== "approved" && (
+                <ActionBar
+                  danger={
+                    <button className="ghost danger" onClick={() => remove(p.id)}>
+                      삭제
+                    </button>
+                  }
+                >
+                  {p.status !== "published" && p.status !== "dropped" && (
                     <button
+                      className="ghost"
                       onClick={async () => {
-                        if (await patch(p.id, { ...edited(), status: "approved" }))
-                          flash("발행 승인. 다음 아침 7시에 올라갑니다.");
+                        if (await patch(p.id, { status: "dropped" })) flash("보류했습니다.");
                       }}
-                      disabled={todo > 0 || body.trim().length < 200}
-                      title={todo > 0 ? "TODO 를 먼저 채우세요" : undefined}
                     >
-                      발행 승인
+                      보류
                     </button>
                   )}
                   {(p.status === "approved" || p.status === "publishing") && (
@@ -341,24 +360,33 @@ export default function DevlogPage() {
                       승인 취소
                     </button>
                   )}
-                  {p.status !== "published" && (
+                  <button
+                    className={approvable ? "" : "primary"}
+                    onClick={async () => {
+                      if (await patch(p.id, edited())) flash("저장했습니다.");
+                    }}
+                  >
+                    저장
+                  </button>
+                  {approvable && (
                     <button
-                      className="ghost"
+                      className="primary"
                       onClick={async () => {
-                        if (await patch(p.id, { status: "dropped" })) flash("보류했습니다.");
+                        if (await patch(p.id, { ...edited(), status: "approved" }))
+                          flash("발행 승인. 다음 아침 7시에 올라갑니다.");
                       }}
+                      disabled={todo > 0 || body.trim().length < 200}
+                      title={todo > 0 ? "TODO 를 먼저 채우세요" : undefined}
                     >
-                      보류
+                      발행 승인
                     </button>
                   )}
-                  <button className="ghost danger" onClick={() => remove(p.id)}>
-                    삭제
-                  </button>
-                </div>
+                </ActionBar>
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="card">

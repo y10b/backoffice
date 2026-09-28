@@ -66,6 +66,11 @@ export type KeywordFetchResult = {
   keywords: Keyword[];
   sources: SourceStatus[];
   error?: string;
+  /**
+   * 검색·데이터랩 API 가 401 Scope Status Invalid 로 막혔다. 네이버가 신규 발급을 막아 생기는
+   * 영구 상태라 오류로 올리지 않고, 화면이 문서수·경쟁률·추세 열을 숨기게만 알린다.
+   */
+  openApiBlocked?: boolean;
 };
 
 export type Post = {

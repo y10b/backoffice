@@ -7,6 +7,7 @@ import {
 import {
   TREND_MAX_KEYWORDS,
   blogDocCounts,
+  isScopeBlocked,
   openApiCreds,
   searchTrend,
   trendDelta,
@@ -178,6 +179,16 @@ export async function researchKeywords(
 
   const creds = await openApiCreds();
   const openApiConfigured = creds !== null;
+  /** 검색·데이터랩 권한이 막힌 게 확인되면 true. 이후 호출은 건너뛴다 */
+  let openApiBlocked = false;
+  const blockedSource = (id: "search" | "datalab", label: string): SourceStatus => ({
+    id,
+    label,
+    configured: true,
+    ok: false,
+    skipped: true,
+    message: "네이버가 검색·데이터랩 API 신규 발급을 막아 쓸 수 없습니다.",
+  });
 
   /* 2. 블로그 문서수 → 경쟁률 */
   if (!o.includeDocs || !creds) {
@@ -196,6 +207,8 @@ export async function researchKeywords(
       keywords.map((k) => k.keyword),
       creds,
     );
+    // 하나도 못 받았고 권한 거절이면 기능이 없는 것이다. 오류로 올리지 않는다
+    if (!counts.size && isScopeBlocked(error)) openApiBlocked = true;
     for (const k of keywords) {
       const docs = counts.get(k.keyword);
       if (docs === undefined) continue;
@@ -205,22 +218,29 @@ export async function researchKeywords(
           ? Math.round((docs / k.totalSearches) * 100) / 100
           : null;
     }
-    sources.push({
-      id: "search",
-      label: "검색 API (블로그 문서수)",
-      configured: true,
-      ok: counts.size > 0,
-      skipped: false,
-      message: error
-        ? `${counts.size}/${keywords.length}건 조회 · 일부 실패: ${error}`
-        : `${counts.size}건 조회`,
-    });
+    sources.push(
+      openApiBlocked
+        ? blockedSource("search", "검색 API (블로그 문서수)")
+        : {
+            id: "search",
+            label: "검색 API (블로그 문서수)",
+            configured: true,
+            ok: counts.size > 0,
+            skipped: false,
+            message: error
+              ? `${counts.size}/${keywords.length}건 조회 · 일부 실패: ${error}`
+              : `${counts.size}건 조회`,
+          },
+    );
   }
 
   /* 3. 데이터랩 추세 (상위 5개만 — API 그룹 제한) */
   const sorted = sortKeywords(keywords, o.sort).map((k, i) => ({ ...k, rank: i + 1 }));
 
-  if (!o.includeTrend || !creds) {
+  if (o.includeTrend && creds && openApiBlocked) {
+    // 같은 키라 검색 API 가 막혔으면 데이터랩도 막혀 있다. 부르지 않는다
+    sources.push(blockedSource("datalab", "데이터랩 검색어트렌드"));
+  } else if (!o.includeTrend || !creds) {
     sources.push({
       id: "datalab",
       label: "데이터랩 검색어트렌드",
@@ -251,14 +271,20 @@ export async function researchKeywords(
         message: `상위 ${series.length}개 최근 26주 추세`,
       });
     } catch (e) {
-      sources.push({
-        id: "datalab",
-        label: "데이터랩 검색어트렌드",
-        configured: true,
-        ok: false,
-        skipped: false,
-        message: (e as Error).message,
-      });
+      const message = (e as Error).message;
+      if (isScopeBlocked(message)) {
+        openApiBlocked = true;
+        sources.push(blockedSource("datalab", "데이터랩 검색어트렌드"));
+      } else {
+        sources.push({
+          id: "datalab",
+          label: "데이터랩 검색어트렌드",
+          configured: true,
+          ok: false,
+          skipped: false,
+          message,
+        });
+      }
     }
   }
 
@@ -267,6 +293,7 @@ export async function researchKeywords(
     seeds,
     keywords: sorted,
     sources,
+    ...(openApiBlocked ? { openApiBlocked: true } : {}),
     error: sorted.length
       ? undefined
       : "조건에 맞는 키워드가 없습니다. 최소 검색수를 낮춰보세요.",

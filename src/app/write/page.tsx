@@ -1,10 +1,13 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { markdownToHtml, countChars } from "@/lib/markdown";
 import Help from "@/components/Help";
-import { copyForNaver, copyRichHtml, copyText } from "@/lib/clipboard";
+import { copyText } from "@/lib/clipboard";
+import PublishSteps from "@/components/PublishSteps";
+import ActionBar from "@/components/ActionBar";
+import StatusBadge from "@/components/StatusBadge";
 import type { StoredImage } from "@/lib/images";
 import { applyVisuals, type Visual } from "@/lib/visuals";
 import { downloadHtmlAsPng } from "@/lib/htmlImage";
@@ -20,6 +23,9 @@ type AutoPhase = 0 | 1 | 2 | 3;
  * (제안 호출은 보통 10~20초, 본문 생성이 나머지를 먹는다)
  */
 const SUGGEST_ESTIMATE_SEC = 18;
+
+/** 티스토리 새 글 에디터. 설정의 tistory_url 이 오면 그 블로그 주소로 바꿔 쓴다 */
+const TISTORY_EDITOR_URL = "https://testao.tistory.com/manage/newpost";
 
 /**
  * 저장된 시각 자료를 배열로 되돌린다.
@@ -50,6 +56,7 @@ function occurrences(haystack: string, needle: string): number {
 
 function WritePageInner() {
   const params = useSearchParams();
+  const router = useRouter();
 
   const [mainKeyword, setMainKeyword] = useState("");
   const [subKeyword, setSubKeyword] = useState("");
@@ -72,6 +79,10 @@ function WritePageInner() {
   const autoStarted = useRef(false);
 
   const [postId, setPostId] = useState<number | null>(null);
+  /* 발행 표시(수동 기록)와 기존 글 보강 주소. 저장된 초안을 열 때만 온다 */
+  const [posted, setPosted] = useState(false);
+  const [rewriteOf, setRewriteOf] = useState("");
+  const [editorUrl, setEditorUrl] = useState(TISTORY_EDITOR_URL);
   const [title, setTitle] = useState("");
   const [metaDesc, setMetaDesc] = useState("");
   const [tags, setTags] = useState<string[]>([]);
@@ -182,6 +193,8 @@ function WritePageInner() {
           setMetaDesc(p.meta_desc);
           setMarkdown(p.body_markdown);
           setVisuals(parseStoredVisuals(p.visuals));
+          setPosted(Boolean(p.posted_tistory));
+          setRewriteOf(p.rewrite_of ?? "");
           // jsonb 라 배열로 온다. 예전 저장분이 문자열일 수 있어 양쪽을 받는다
           setTags(
             Array.isArray(p.tags)
@@ -198,6 +211,22 @@ function WritePageInner() {
         });
     }
   }, [params]);
+
+  // 블로그 주소를 바꿨으면 그 블로그 에디터로 연다. 못 읽으면 기본값 그대로
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((d) => {
+        const raw = String(d?.tistory?.url ?? "").trim();
+        if (!/^https?:\/\//i.test(raw)) return;
+        try {
+          setEditorUrl(`${new URL(raw).origin}/manage/newpost`);
+        } catch {
+          /* 기본값 유지 */
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // 자리표시자를 실제 자료로 바꿔야 미리보기가 발행본과 같아진다
   const html = useMemo(
@@ -396,13 +425,33 @@ function WritePageInner() {
     }
   }
 
+  /** 티스토리에 올렸는지 직접 기록한다 (목록에 있던 토글을 옮겨 왔다) */
+  async function togglePosted() {
+    if (!postId) return;
+    const next = !posted;
+    setPosted(next);
+    await fetch(`/api/posts/${postId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ posted_tistory: next }),
+    });
+    flash(next ? "발행함으로 표시했습니다." : "발행 표시를 뺐습니다.");
+  }
+
+  async function removePost() {
+    if (!postId) return;
+    if (!confirm("이 글을 삭제할까요? 되돌릴 수 없습니다.")) return;
+    await fetch(`/api/posts/${postId}`, { method: "DELETE" });
+    router.push("/posts");
+  }
+
   const hasDraft = Boolean(markdown.trim());
 
   return (
     <>
       <h1 className="page-title">글 작성</h1>
       <p className="page-desc">
-        메인 키워드 + 서브 키워드로 초안을 만들고, 네이버·티스토리에 각각 맞는 형식으로
+        메인 키워드 + 서브 키워드로 초안을 만들고, 티스토리 에디터에 붙일 HTML 로
         복사합니다. <strong>자동 작성</strong> 은 서브 키워드 제안부터 본문까지 한 번에
         돌리고, 아래 수동 버튼은 자동이 실패했을 때 단계별로 다시 밟는 용도입니다.
       </p>
@@ -644,71 +693,60 @@ function WritePageInner() {
 
           <div className="card">
             <h2>
-            복사
-            <Help text="네이버와 티스토리는 붙여넣기 방식이 다릅니다.&#10;· 네이버 — 스마트에디터 본문에 그대로 ⌘V (소제목·굵게가 살아납니다)&#10;· 티스토리 — 에디터를 HTML 모드로 바꾼 뒤 ⌘V" />
-          </h2>
-            <div className="row">
-              <button onClick={() => copyText(title).then(() => flash("제목 복사됨"))}>
-                제목
-              </button>
-              <button
-                className="naver"
-                onClick={() =>
-                  copyForNaver(html).then((mode) =>
-                    flash(
-                      mode === "rich"
-                        ? "네이버용 서식 복사됨 — 스마트에디터에 그대로 붙여넣으세요"
-                        : "이 브라우저는 서식 복사를 막아 평문으로 복사했습니다",
-                    ),
-                  )
-                }
-              >
-                네이버 본문 (서식 유지)
-              </button>
-              <button
-                className="tistory"
-                onClick={() =>
-                  // 구조화 데이터가 있으면 본문 뒤에 붙여 한 번에 넣게 한다.
-                  // 따로 복사시키면 붙여넣기를 빠뜨려 스키마가 통째로 사라진다.
-                  copyText(jsonLd ? `${html}\n\n${jsonLd}` : html).then(() =>
-                    flash(
+              티스토리에 올리기
+              {postId && (
+                <StatusBadge tone={posted ? "done" : "draft"} label={posted ? "발행함" : "초안"} />
+              )}
+              <Help text="티스토리 앱 에디터는 붙여넣기에서 서식을 버립니다. 폰에서도 사파리로 PC 에디터를 열어 HTML 모드에 붙이세요." />
+            </h2>
+            <PublishSteps
+              channel="tistory"
+              editorUrl={editorUrl}
+              rewriteOf={rewriteOf || undefined}
+              copyButtons={
+                <>
+                  <button
+                    className="primary"
+                    onClick={() =>
+                      // 구조화 데이터가 있으면 본문 뒤에 붙여 한 번에 넣게 한다.
+                      // 따로 복사시키면 붙여넣기를 빠뜨려 스키마가 통째로 사라진다.
+                      copyText(jsonLd ? `${html}\n\n${jsonLd}` : html).then(() =>
+                        flash(
+                          jsonLd
+                            ? "티스토리용 HTML + 구조화 데이터 복사됨"
+                            : "티스토리용 HTML 복사됨",
+                        ),
+                      )
+                    }
+                    title={
                       jsonLd
-                        ? "티스토리용 HTML + 구조화 데이터 복사됨"
-                        : "티스토리용 HTML 복사됨",
-                    ),
-                  )
-                }
-                title={
-                  jsonLd
-                    ? "본문 HTML 뒤에 JSON-LD(Article·FAQPage)가 함께 복사됩니다"
-                    : "구조화 데이터가 없어 본문만 복사됩니다"
-                }
-              >
-                티스토리 본문 (HTML{jsonLd ? " + 스키마" : ""})
-              </button>
-              <button
-                onClick={() => copyText(markdown).then(() => flash("마크다운 복사됨"))}
-              >
-                마크다운
-              </button>
-              <button
-                onClick={() =>
-                  copyText(tags.map((t) => `#${t}`).join(" ")).then(() =>
-                    flash("태그 복사됨"),
-                  )
-                }
-              >
-                태그
-              </button>
-              <button className="ghost" onClick={save}>
-                저장
-              </button>
-            </div>
-            <p className="hint">
-              네이버는 스마트에디터 본문에 그대로 붙여넣기(⌘V), 티스토리는 에디터를 HTML
-              모드로 바꾼 뒤 붙여넣으세요. 구조화 데이터는 티스토리에서만 동작합니다 —
-              네이버 블로그는 스크립트 태그를 지웁니다.
-            </p>
+                        ? "본문 HTML 뒤에 JSON-LD(Article·FAQPage)가 함께 복사됩니다"
+                        : "구조화 데이터가 없어 본문만 복사됩니다"
+                    }
+                  >
+                    티스토리 본문 (HTML{jsonLd ? " + 스키마" : ""})
+                  </button>
+                  <button onClick={() => copyText(title).then(() => flash("제목 복사됨"))}>
+                    제목
+                  </button>
+                  <button
+                    onClick={() =>
+                      copyText(tags.map((t) => `#${t}`).join(" ")).then(() =>
+                        flash("태그 복사됨"),
+                      )
+                    }
+                  >
+                    태그 {tags.length}
+                  </button>
+                  <button
+                    className="ghost"
+                    onClick={() => copyText(markdown).then(() => flash("마크다운 복사됨"))}
+                  >
+                    마크다운
+                  </button>
+                </>
+              }
+            />
 
             {sources.length > 0 ? (
               <details style={{ marginTop: 12 }}>
@@ -868,6 +906,32 @@ function WritePageInner() {
               </div>
             </div>
           </div>
+
+          <ActionBar
+            danger={
+              postId ? (
+                <button className="ghost danger" onClick={removePost}>
+                  삭제
+                </button>
+              ) : undefined
+            }
+          >
+            <button onClick={save}>저장</button>
+            {posted ? (
+              <button onClick={togglePosted} title="발행 표시를 뺍니다">
+                발행 취소
+              </button>
+            ) : (
+              <button
+                className="primary"
+                onClick={togglePosted}
+                disabled={!postId}
+                title={postId ? "티스토리에 붙여넣고 발행한 뒤 눌러 기록하세요" : "먼저 저장하세요"}
+              >
+                발행함으로 표시
+              </button>
+            )}
+          </ActionBar>
         </>
       )}
     </>
