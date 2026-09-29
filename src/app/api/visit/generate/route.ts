@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { getVisitPost, updateVisitPost } from "@/lib/db";
-import { generateVisitDraft, researchVisit, type Interview, type PhotoAnalysis, type Revision } from "@/lib/visit";
+import { asKind, generateVisitDraft, researchVisit, type Interview, type PhotoAnalysis, type Revision } from "@/lib/visit";
 import type { Place } from "@/lib/kakao";
-import { visitKeywords } from "@/lib/foodTrend";
+import { productKeywords, visitKeywords } from "@/lib/foodTrend";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +26,7 @@ export async function POST(req: Request) {
   const iv = (body.interview ?? {}) as Partial<Interview>;
   if (!iv.memorable?.trim()) {
     return NextResponse.json(
-      { ok: false, error: "\"제일 기억나는 것\" 은 비울 수 없습니다. 이게 없으면 사실 나열이 됩니다." },
+      { ok: false, error: "\"제일 기억나는 것(좋았던 점)\" 은 비울 수 없습니다. 이게 없으면 사실 나열이 됩니다." },
       { status: 400 },
     );
   }
@@ -41,11 +41,22 @@ export async function POST(req: Request) {
       memorable: String(iv.memorable).trim(),
       revisit: String(iv.revisit ?? "근처 오면"),
       downside: String(iv.downside ?? "").trim(),
+      waiting: String(iv.waiting ?? "모름"),
+      seat: String(iv.seat ?? "모름"),
+      sponsored: Boolean(iv.sponsored),
+      usagePeriod: String(iv.usagePeriod ?? "").trim(),
+      usageEnv: String(iv.usageEnv ?? "").trim(),
+      recommendFor: String(iv.recommendFor ?? "").trim(),
+      rebuy: String(iv.rebuy ?? "").trim(),
+      priceNote: String(iv.priceNote ?? "").trim(),
+      mood: String(iv.mood ?? "").trim(),
+      reason: String(iv.reason ?? "").trim(),
     };
 
     // 화면이 상황을 고쳐 보냈으면 그것을 쓴다. 안 보냈으면 분석 때 넣은 값 그대로
     const situation = typeof body.situation === "string" ? body.situation.trim() : post.situation;
 
+    const kind = asKind(post.kind);
     const analysis = post.analysis as unknown as PhotoAnalysis;
     const place = (post.place as unknown as Place) ?? null;
 
@@ -66,8 +77,13 @@ export async function POST(req: Request) {
     const [research, keywords] = revision
       ? [null, []]
       : await Promise.all([
-          researchVisit({ placeQuery: post.place_query, place, analysis }),
-          visitKeywords({ placeQuery: post.place_query, place, analysis }),
+          researchVisit({ placeQuery: post.place_query, place, analysis, kind }),
+          // 일상은 검색 키워드로 겨룰 글이 아니다. 장소가 확인됐을 때만 동네 키워드를 본다
+          kind === "product"
+            ? productKeywords(post.place_query)
+            : kind === "daily" && !place
+              ? Promise.resolve([])
+              : visitKeywords({ placeQuery: post.place_query, place, analysis }),
         ]);
 
     const draft = await generateVisitDraft({
@@ -77,6 +93,7 @@ export async function POST(req: Request) {
       place,
       interview,
       situation,
+      kind,
       research,
       revision,
       keywords,

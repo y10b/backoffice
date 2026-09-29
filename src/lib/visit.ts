@@ -33,6 +33,22 @@ import { markdownToHtml } from "./markdown";
 import { searchPlaces, type Place } from "./kakao";
 import type { KeywordPick } from "./foodTrend";
 
+/**
+ * 글 종류. 사진에서 출발한다는 흐름은 같고, 사진에서 읽을 것·물을 것·쓰는 법이 다르다.
+ *
+ *  | 종류       | 사진에서 읽는 것          | 사람에게 묻는 것                 |
+ *  |------------|--------------------------|----------------------------------|
+ *  | restaurant | 메뉴판·가격·음식·좌석      | 동행, 웨이팅, 좌석, 재방문        |
+ *  | product    | 패키지·구성품·라벨·가격표   | 사용 기간·환경, 장단점, 추천 대상  |
+ *  | daily      | 장소·풍경·먹은 것·산 것    | 동행, 기억나는 장면, 또 갈지       |
+ */
+export type PostKind = "restaurant" | "product" | "daily";
+export const POST_KINDS: PostKind[] = ["restaurant", "product", "daily"];
+export const KIND_LABEL: Record<PostKind, string> = { restaurant: "맛집", product: "제품 후기", daily: "일상" };
+export function asKind(v: unknown): PostKind {
+  return POST_KINDS.includes(v as PostKind) ? (v as PostKind) : "restaurant";
+}
+
 /* ------------------------------------------------------------------ *
  * 1단계 — 사진 분석
  * ------------------------------------------------------------------ */
@@ -71,49 +87,58 @@ export type PhotoAnalysis = {
  * OpenAI strict 스키마: 객체마다 additionalProperties:false, 키는 전부 required.
  * 없을 수 있는 값(못 읽은 가격, 영수증 없음)은 null 을 허용해 표현한다.
  */
-const ANALYSIS_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    photos: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          index: { type: "integer" },
-          kind: { type: "string", enum: ["외관", "내부", "메뉴판", "음식", "영수증", "기타"] },
-          caption: { type: "string" },
-        },
-        required: ["index", "kind", "caption"],
-      },
-    },
-    menu: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: { name: { type: "string" }, price: { type: ["integer", "null"] } },
-        required: ["name", "price"],
-      },
-    },
-    receipt: {
-      type: ["object", "null"],
-      additionalProperties: false,
-      properties: {
-        items: { type: "array", items: { type: "string" } },
-        total: { type: ["integer", "null"] },
-        people: { type: ["integer", "null"] },
-      },
-      required: ["items", "total", "people"],
-    },
-    observations: { type: "array", items: { type: "string" } },
-    uncertain: { type: "array", items: { type: "string" } },
-  },
-  required: ["photos", "menu", "receipt", "observations", "uncertain"],
+/** 사진 종류. 글 종류마다 찍는 것이 달라 고를 목록도 다르다 */
+const PHOTO_KINDS: Record<PostKind, string[]> = {
+  restaurant: ["외관", "내부", "메뉴판", "음식", "영수증", "기타"],
+  product: ["패키지", "구성품", "제품", "사용 장면", "라벨·스펙", "가격표·영수증", "기타"],
+  daily: ["장소", "풍경", "음식", "물건", "사람(뒷모습 등)", "기타"],
 };
 
-const ANALYSIS_PROMPT = `너는 음식점 방문 사진을 읽어 **사실만** 뽑아내는 분석기다.
+function analysisSchema(kind: PostKind) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      photos: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            index: { type: "integer" },
+            kind: { type: "string", enum: PHOTO_KINDS[kind] },
+            caption: { type: "string" },
+          },
+          required: ["index", "kind", "caption"],
+        },
+      },
+      menu: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: { name: { type: "string" }, price: { type: ["integer", "null"] } },
+          required: ["name", "price"],
+        },
+      },
+      receipt: {
+        type: ["object", "null"],
+        additionalProperties: false,
+        properties: {
+          items: { type: "array", items: { type: "string" } },
+          total: { type: ["integer", "null"] },
+          people: { type: ["integer", "null"] },
+        },
+        required: ["items", "total", "people"],
+      },
+      observations: { type: "array", items: { type: "string" } },
+      uncertain: { type: "array", items: { type: "string" } },
+    },
+    required: ["photos", "menu", "receipt", "observations", "uncertain"],
+  };
+}
+
+const RESTAURANT_ANALYSIS = `너는 음식점 방문 사진을 읽어 **사실만** 뽑아내는 분석기다.
 
 사진 순서대로 번호가 매겨져 있다. 각 사진에 대해:
 
@@ -139,7 +164,46 @@ observations 에는 **사진에서 직접 확인되는 사실**만 문장으로 
 **절대 하지 마라**: 맛 평가, 분위기 형용, 가격 추측, 사진에 없는 메뉴 언급,
 사장님이나 직원에 대한 서술, 대기 시간 추정.`;
 
-export async function analyzePhotos(photos: InputPhoto[]): Promise<PhotoAnalysis> {
+const PRODUCT_ANALYSIS = `너는 제품 후기용 사진을 읽어 **사실만** 뽑아내는 분석기다.
+
+사진 순서대로 번호가 매겨져 있다. 각 사진에 대해:
+
+1. kind 를 고른다 — 패키지 / 구성품 / 제품 / 사용 장면 / 라벨·스펙 / 가격표·영수증 / 기타
+2. caption 에 **사진에 실제로 보이는 것**을 한 줄로 쓴다 (모양·색·크기감·재질처럼 눈에 보이는 것)
+
+menu 에는 가격표·영수증·주문 화면에 **적힌 그대로** 제품명과 가격을 옮긴다. 가격의 유일한 근거다.
+못 읽으면 넣지 말고 uncertain 에 적는다. 가격을 추측하지 마라.
+receipt 는 영수증·주문 내역이 있을 때만 채운다(people 은 null).
+
+observations 에는 사진으로 확인되는 사실만: 제품명·모델명(패키지·라벨에 적힌 그대로), 구성품 목록,
+용량·크기 표기, 색상, 사용 장면의 환경(책상 위, 원룸 주방 등).
+  나쁨: "성능이 좋아 보인다", "고급스럽다" ← 평가이지 관찰이 아니다
+
+**절대 하지 마라**: 성능·효과 평가, 가격 추측, 사진에 없는 스펙, 브랜드 홍보 문구.`;
+
+const DAILY_ANALYSIS = `너는 일상 기록용 사진을 읽어 **사실만** 뽑아내는 분석기다.
+
+사진 순서대로 번호가 매겨져 있다. 각 사진에 대해:
+
+1. kind 를 고른다 — 장소 / 풍경 / 음식 / 물건 / 사람(뒷모습 등) / 기타
+2. caption 에 **사진에 실제로 보이는 것**을 한 줄로 쓴다
+
+menu 에는 메뉴판·영수증·가격표에 **적힌 그대로** 이름과 가격을 옮긴다. 없으면 빈 배열.
+receipt 는 영수증이 있을 때만.
+
+observations 에는 사진으로 확인되는 사실만: 장소의 모습, 날씨·계절감(하늘, 옷차림, 단풍 등),
+시간대 단서(밝기, 조명), 간판·안내판에 적힌 이름.
+  나쁨: "힐링되는 하루였다" ← 감상은 사람이 말한다
+
+**절대 하지 마라**: 감상·평가, 사람 얼굴 묘사, 사진에 없는 장소 언급, 가격 추측.`;
+
+const ANALYSIS_PROMPTS: Record<PostKind, string> = {
+  restaurant: RESTAURANT_ANALYSIS,
+  product: PRODUCT_ANALYSIS,
+  daily: DAILY_ANALYSIS,
+};
+
+export async function analyzePhotos(photos: InputPhoto[], kind: PostKind = "restaurant"): Promise<PhotoAnalysis> {
   if (!photos.length) throw new Error("사진이 없습니다.");
 
   /*
@@ -151,13 +215,13 @@ export async function analyzePhotos(photos: InputPhoto[]): Promise<PhotoAnalysis
    */
   const parsed = await withContext("사진 분석", () =>
     openaiJson<any>({
-      user: ANALYSIS_PROMPT,
+      user: ANALYSIS_PROMPTS[kind],
       images: photos.map((p) => ({
         mimeType: p.mimeType,
         data: p.data,
         label: `--- 사진 ${p.index} ---`,
       })),
-      schema: ANALYSIS_SCHEMA,
+      schema: analysisSchema(kind),
       schemaName: "photo_analysis",
     }),
   );
@@ -233,9 +297,12 @@ export type ResearchInput = {
   placeQuery: string;
   place: Place | null;
   analysis: PhotoAnalysis;
+  kind?: PostKind;
 };
 
 export function buildVisitResearchPrompt(o: ResearchInput): string {
+  if (o.kind === "product") return productResearchPrompt(o);
+  if (o.kind === "daily") return dailyResearchPrompt(o);
   const { place, analysis: a } = o;
   const who = place
     ? `${place.name} (${place.address}, ${place.category})`
@@ -263,6 +330,53 @@ export function buildVisitResearchPrompt(o: ResearchInput): string {
     // 빈 문자열은 문단 구분이라 남기고, 재료가 없는 줄(null)만 뺀다
     .filter((l) => l !== null)
     .join("\n");
+}
+
+/**
+ * 제품 조사. 스펙·정가·비슷한 제품은 검색으로 나오지만 "써 보니 어땠는지" 는 사람만 안다.
+ * 남의 후기 문장은 가져오지 않는다 — 요약해 넣으면 유사문서로 걸리고, 내 경험처럼 읽힌다.
+ */
+function productResearchPrompt(o: ResearchInput): string {
+  const a = o.analysis;
+  const seen = a.observations.slice(0, 6);
+  return [
+    "아래 제품의 사용 후기를 쓰려 합니다. 구글 검색으로 이 제품의 공개 정보를 조사하세요. 글은 쓰지 마세요.",
+    `제품: ${o.placeQuery}`,
+    seen.length ? `사진에서 확인된 것: ${seen.join(" / ")}` : null,
+    "",
+    "조사할 것:",
+    "- 정확한 제품명·모델명, 제조사, 출시 시기",
+    "- 공식 스펙(크기·무게·용량·소재·배터리 등 제품군에 맞는 것)과 구성품",
+    "- 공식 정가 또는 최근 판매가 범위 — '몇 년 몇 월 기준'인지와 함께",
+    "- 같은 가격대에서 자주 비교되는 제품 1~2개와 비교 포인트(스펙 차이만)",
+    "- 공식 사용·관리 방법이나 주의사항이 있으면",
+    "",
+    "- 다른 사람 후기의 감상·평가 문장은 가져오지 말 것. 사실(스펙·가격·출시)만.",
+    "- 이 제품이 맞는지 확실하지 않으면 적지 말 것. 비슷한 이름의 다른 모델과 섞지 말 것.",
+    "- 확인되지 않은 항목은 '확인되지 않음'이라고 적을 것.",
+    "- 출력은 마크다운 불릿만. 서론·결론 없이 한 줄씩.",
+  ]
+    .filter((l) => l !== null)
+    .join("\n");
+}
+
+/** 일상 조사. 장소가 확인됐을 때만 의미가 있다 — 동네 산책 같은 글은 조사할 게 거의 없다 */
+function dailyResearchPrompt(o: ResearchInput): string {
+  const who = o.place ? `${o.place.name} (${o.place.address}, ${o.place.category})` : o.placeQuery;
+  return [
+    "아래 장소·주제로 일상 기록 글을 쓰려 합니다. 구글 검색으로 공개 정보만 조사하세요. 글은 쓰지 마세요.",
+    `장소·주제: ${who}`,
+    "",
+    "조사할 것:",
+    "- 어떤 곳인지(공원·카페·전시·거리 등), 알려진 특징",
+    "- 가까운 지하철역·찾아가는 법, 주차",
+    "- 입장료·이용 요금이 있으면 '몇 년 기준'인지와 함께",
+    "- 계절마다 볼 만한 것(단풍·벚꽃 명소 여부 등)이 알려져 있으면",
+    "",
+    "- 영업시간·휴무일은 조사하지 말 것. 확인되지 않은 항목은 '확인되지 않음'.",
+    "- 다른 사람의 감상 문장은 가져오지 말 것.",
+    "- 출력은 마크다운 불릿만.",
+  ].join("\n");
 }
 
 export async function researchVisit(o: ResearchInput & { retries?: number }): Promise<ResearchResult | null> {
@@ -303,12 +417,43 @@ export type Interview = {
   revisit: string;
   /** 아쉬웠던 점. 비어도 된다 */
   downside?: string;
+  /**
+   * 없음 | 10분 내외 | 30분 이상 | 모름.
+   * 상위 맛집 후기는 웨이팅을 방문 시간대와 한 세트로 꼭 적는다. 사진으로는 알 수 없어 묻는다
+   */
+  waiting?: string;
+  /** 1인석·바 | 테이블 | 좌식 | 모름. 혼밥 글에서 가장 많이 찾는 정보다 */
+  seat?: string;
+  /** 체험단·협찬 글이면 첫머리에 대가성 문구를 넣는다(표시광고법) */
+  sponsored?: boolean;
+
+  /* ---- 제품 후기 ---- */
+  /** 1주 미만 | 1개월 | 3개월 | 6개월 이상. 내구성·익숙해진 뒤 평가의 근거다 */
+  usagePeriod?: string;
+  /** "원룸 자취방, 퇴근 후 매일" 처럼 어디서 어떻게 쓰는지. 제목 공식(제품명+사용 환경+핵심 특징)의 재료 */
+  usageEnv?: string;
+  /** 이런 사람에게 맞다 / 안 맞다 */
+  recommendFor?: string;
+  /** 응 | 아니 | 글쎄 */
+  rebuy?: string;
+  /** "쿠팡 39,000원" 처럼 산 곳과 값. 비우면 가격은 사진·조사에서만 */
+  priceNote?: string;
+  /** 산 이유와 전에 쓰던 것. 상위 제품 후기 18편 중 13편이 "산 계기" 장면으로 시작한다 */
+  reason?: string;
+
+  /* ---- 일상 ---- */
+  /** 그날 기분·한 줄 감상 */
+  mood?: string;
 };
 
 export const INTERVIEW_FIELDS = {
+  usagePeriod: ["1주 미만", "1개월", "3개월", "6개월 이상"],
+  rebuy: ["응", "아니", "글쎄"],
   company: ["혼자", "친구", "가족", "연인", "회식"],
   mealTime: ["점심", "저녁", "그 외"],
   revisit: ["응", "아니", "근처 오면"],
+  waiting: ["없음", "10분 내외", "30분 이상", "모름"],
+  seat: ["1인석·바", "테이블", "좌식", "모름"],
 } as const;
 
 /* ------------------------------------------------------------------ *
@@ -356,8 +501,9 @@ const DRAFT_SCHEMA = {
  *
  * 말투를 바꾸려면 이 문자열만 고치면 된다.
  */
-export const PERSONA = `- 20대 중반, 서울 관악구 거주, 회사원. 퇴근길·주말마다 맛집을 찾아다니는 맛집 블로거
+export const PERSONA = `- 20대 중반, 서울 관악구에서 자취하는 회사원. 관악·신림 맛집과 자취 직장인의 일상·살림템을 기록한다
 - 혼밥도 자주 하고 웨이팅은 싫어한다. 그래서 "기다릴 만한 집인지"를 꼭 짚어준다
+- 원룸 살림이라 물건은 크기·수납·가성비를 따진다
 - 말투: 친근한 존댓말 ("~했어요", "~더라구요", "~인 거 있죠")
 - 톤: 신나게 소개하되 솔직하다. 좋은 건 확실히 좋다고, 아쉬운 건 아쉽다고 쓴다
 - 맛 표현은 뭉뚱그리지 않고 구체적으로 ("겉은 바삭한데 속은 촉촉", "공기밥 하나 더 시킬 뻔")`;
@@ -381,12 +527,16 @@ const BLOGGER_STYLE = `**관찰 보고서가 아니라 다녀온 사람의 이�
     "뚝배기에 국물과 고기가 담겨 있다" → "뚝배기가 넘칠 듯이 고기가 들어 있어서 일단 사진부터 찍었어요"
     "내부는 테이블석으로 되어 있다" → "안은 테이블석이라 혼자 가도 부담 없는 분위기예요"
 
-글의 흐름 (소제목으로 나눈다):
-  1. 도입 — 왜 여기를 갔는지, 어떤 날이었는지. 첫 두 문장에서 궁금하게 만든다
-  2. 가게 정보 — 위치·찾아가는 길·매장 분위기. 검색 조사를 자연스럽게 녹인다
-  3. 메뉴 — 뭘 시켰고 왜 골랐는지. 메뉴판 가격이 있으면 여기서
-  4. 음식 — 이 글의 본론. 나왔을 때 첫인상, 비주얼, 양, 한 입 먹었을 때. 가장 길게
-  5. 총평 — 재방문 의사, 누구에게 추천하는지, 아쉬운 점. 한 줄 요약으로 끝낸다
+글의 흐름 (상위 노출 맛집 후기 16편을 실제로 열어 본 공통 구조):
+  1. 도입 2~4줄 — 가벼운 인사 한마디 + 방문 계기(퇴근길에 눈여겨봤다, 웨이팅 없는 데를 찾다가 등).
+     "오늘은 ~를 소개해드릴게요" 로만 끝내지 않는다
+  2. 정보 박스 — 도입 바로 다음. 아래 "정보 박스" 형식 그대로. 위아래를 \`---\` 구분선으로 감싼다
+  3. 외관·찾아가는 길 → 내부·좌석(1인석·바 테이블 여부)
+  4. 메뉴 — 뭘 시켰고 왜 골랐는지. 가격을 아는 메뉴는 \`수육국밥(9,500원)\` 처럼 괄호로,
+     여러 개면 \`✔️ 주문 메뉴\` 목록으로 적는다
+  5. 음식 — 이 글의 본론. 나왔을 때 첫인상, 비주얼, 양, 한 입 먹었을 때. 가장 길게
+  6. 총평 — 한 줄 총평(맛·가격·혼밥 편의), 재방문 의사, 다음에 먹어볼 메뉴,
+     "~찾는 분께 추천해요" 로 끝낸다
 
 생동감:
   - 음식은 비주얼(색, 윤기, 양, 토핑, 그릇)을 사진에 맞게 생생하게 묘사한다
@@ -395,7 +545,14 @@ const BLOGGER_STYLE = `**관찰 보고서가 아니라 다녀온 사람의 이�
     아쉬운 점, 재방문 의사)을 따른다. 사용자가 아쉽다고 한 걸 좋게 포장하지 않는다
   - 사용자가 "기억나는 것" 에 쓴 한 줄은 글의 하이라이트다. 음식 파트에서 크게 다룬다
   - 읽는 사람에게 말 걸듯 쓴다 ("이거 진짜 사진이 다 못 담아요", "혼밥러분들 여기 체크")
-  - 이모지는 소제목과 문단 끝에 가끔. 한 문단에 하나 이하`;
+  - 메뉴마다 감각 표현 2개 이상(식감·온도·간·향·소리)과 먹는 방법 1개(소스 조합, 먼저 먹을 것)
+  - 웨이팅은 방문 시간대와 한 세트로 쓴다 ("평일 저녁이었는데 대기 없이 바로 앉았어요").
+    웨이팅을 싫어하는 페르소나라 이 정보를 꼭 챙긴다. 답변이 "모름" 이면 쓰지 않는다
+  - 솔직한 아쉬운 점 1개를 장점과 균형 있게 넣는다. 답변에 없으면 사진·조사로 확인되는
+    사소한 것(좌석이 좁다 등)만, 그것도 없으면 억지로 만들지 않는다
+  - 쓸모 있는 팁 1~2개(주차, 덜 붐비는 시간, 추천 조합) — 근거가 있는 것만
+  - 이모지는 정보 박스 라벨(📍⏰🚘)과 문단 끝 감정에 가끔. 한 문단에 하나 이하
+  - 가게명은 입력된 표기 그대로 쓴다. 오타는 신뢰를 깎는다`;
 
 /** AI 티를 생성 단계에서 막는다. humanize-korean 의 A·D·E·G·H·I 카테고리를 옮긴 것 */
 const ANTI_AI = `- **문장 길이를 섞는다.** 단락마다 10자 미만 짧은 문장을 최소 1개
@@ -403,8 +560,10 @@ const ANTI_AI = `- **문장 길이를 섞는다.** 단락마다 10자 미만 짧
 - 문두 접속사(그리고/또한/하지만/그래서) 연속 사용 금지
 - "~인 것 같아요" 류 헤지는 글 전체 2회 이하
 - 이중피동("보여지는", "생각되어지는") 금지
-- 금지 표현: 결론적으로, ~를 통해, 시사하는 바가 크다, 단연 최고, 인생 맛집,
-  강력 추천, 정갈한, 눈과 입이 모두 즐거운, 오늘은 ~를 소개해드리려고 합니다`;
+- 금지 표현: 결론적으로, ~를 통해, 시사하는 바가 크다, 단연 최고, 인생 맛집, 인생 ○○,
+  강력 추천, 정갈한, 눈과 입이 모두 즐거운, 오늘은 ~를 소개해드리려고 합니다,
+  200%, 남녀노소, 장점의 총집합, 맛이 없을 수 없는 맛, 풍미를 살려준다
+- "맛있어요" 만 단독으로 반복하지 않는다. 왜 맛있었는지를 쓴다`;
 
 /**
  * 네이버 SEO 규칙.
@@ -413,13 +572,14 @@ const ANTI_AI = `- **문장 길이를 섞는다.** 단락마다 10자 미만 짧
  * 최적화가 중심이지만, 방문 후기는 **체류시간**이 전부다. 소제목·이모지·볼드를
  * 걷어내면 오히려 손해라 남긴다.
  */
-const SEO_RULES = `- 제목 28자 내외. \`지역 + 메뉴\` 핵심 키워드를 앞쪽에. 3안을 제시한다
-- 첫 문단에 지역명과 메뉴 키워드가 자연스럽게 들어가야 한다. 인사말로 시작하지 않는다
-- 공백 포함 1,500~2,500자
-- 소제목 3~5개. 각 소제목 아래 사진 1~3장
-- 사진 자리는 \`[사진 N]\` 으로 표시한다. 사진 사이에는 텍스트 2~4문장을 둔다
-- 태그 10개: 지역 3 + 메뉴 3 + 상호 1 + 상황 3
-- 마지막에 지도(장소) 첨부를 안내하는 한 줄`;
+const SEO_RULES = `- 본문 공백 제외 1,200~2,200자
+- 인용구 소제목 4~6개. 소제목은 "산더미처럼 쌓여 나온 수육" 처럼 장면을 묘사하는 문장형으로
+- 사진 자리 \`[사진 N]\` 은 가진 사진을 모두 쓴다. 사진 사이 텍스트는 1~4줄,
+  음식 구간은 사진 1장에 1~2줄로 더 촘촘하게
+- 모바일 줄바꿈: 한 줄 20자 안팎에서 줄을 바꾸고(마크다운 줄바꿈), 2~4줄마다 빈 줄로 문단을 나눈다.
+  한 문단은 3문장 이내
+- 태그 15~20개: 지역 변형(예: 신림, 신림역, 신림동, 관악구) + 메뉴 + 가게명 + 상황(혼밥, 점심, 퇴근후 등)
+- 공감·댓글·이웃추가를 부탁하지 않는다`;
 
 export type GenerateVisitOptions = {
   /** 사용자가 입력한 상호 또는 주소 */
@@ -431,6 +591,8 @@ export type GenerateVisitOptions = {
   interview: Interview;
   /** 이 글의 상황 한 줄. "이 블로그 첫 글", "여수 여행 2일차" 등 */
   situation?: string;
+  /** 글 종류. 없으면 맛집 */
+  kind?: PostKind;
   /** Gemini 검색 조사 결과. 없으면 사진·카카오·인터뷰만으로 쓴다 */
   research?: ResearchResult | null;
   /** 이미 쓴 초안을 사용자 요청대로 고쳐 쓸 때 준다 */
@@ -499,37 +661,102 @@ needsCheck 에 이유를 적는다.
 ${r.previous}`;
 }
 
-export function buildVisitPrompt(o: GenerateVisitOptions): string {
-  const { analysis: a, place, interview: iv } = o;
+/**
+ * 제목 3안 — 검색형 1 + 홈피드형 2.
+ *
+ * 네이버는 검색 결과와 홈피드(추천) 두 길로 글을 보여주고, 잘 먹히는 제목이 다르다.
+ * 검색은 키워드가 앞에 있어야 하고, 홈피드는 숫자·비교·의문·반전처럼 "눌러 보고 싶은"
+ * 제목이 올라간다. 한 글에 두 길을 다 열어 두려고 안을 나눠 낸다.
+ */
+function titleRules(kind: PostKind): string {
+  const search: Record<PostKind, string> = {
+    restaurant: `\`[지역 맛집]\` 또는 \`지역 | \` 로 시작. 지역 → 상황(혼밥·퇴근길·웨이팅 없이) → 메뉴 → 가게명 → (후기).
+    예: "[신림 맛집] 퇴근길 혼밥하기 좋은 순대국밥 OO집 솔직후기"`,
+    product: `**제품명 + 사용 환경 + 핵심 특징**. 제품명(모델명까지)을 맨 앞에 두면 검색 의도가 분명해진다.
+    사용 기간이 있으면 넣고, 끝에 \`(장단점, 가격)\` 같은 괄호 보조정보를 붙여도 된다.
+    예: "OO 무선청소기 V8 원룸 자취방 3개월 사용 후기, 제일 좋았던 건 무게 (장단점)"`,
+    daily: `장소·동네 이름을 앞에, 상황과 가게명을 뒤에. 일상 글이 검색에 걸리는 건 사실상 장소 이름뿐이다.
+    예: "샤로수길 카페 OO 퇴근 후 혼자 쉬기 좋았던 곳". 장소가 없으면 "관악 자취일기 #3" 처럼 시리즈형`,
+  };
+  return `# 제목 3안 — 1안 검색형, 2·3안 홈피드형
+1안 (검색형, 30~45자): ${search[kind]}
+2·3안 (홈피드형): 아래 공식 중 **서로 다른 둘**. 검색 키워드(지역·메뉴·제품명·장소)는 뒤쪽에라도 남긴다.
+  - 숫자형: 구체적인 숫자로 시작 ("9,500원에 수육이 이만큼", "3개월 써 보고 남은 장점 2개")
+  - 비교형: 무엇이 얼마나 달라졌는지 ("전에 쓰던 것보다 무게가 절반", "본점이랑 뭐가 다를까")
+  - 의문형: 읽는 사람이 자기는 어느 쪽인지 궁금하게 ("혼밥러에게 여기 괜찮을까?")
+  - 반전형: 예상이 빗나간 지점 ("기대 안 했는데 사이드가 주인공", "싼 데는 이유가 있었다")
+  숫자·비교·반전은 **재료(답변·사진·조사)에 있는 사실로만** 만든다. 없는 반전을 지어내면 낚시다.
+  제목 이모지는 0~1개. "인생", "역대급", "무조건" 같은 과장은 쓰지 않는다.`;
+}
 
+/** 대가성 표시. 체험단·협찬이면 첫 줄 문구, 아니면 내돈내산 태그 */
+function sponsorBlock(iv: Interview, kind: PostKind): string {
+  if (iv.sponsored) {
+    return `# 체험단·협찬 글이다
+본문 **맨 첫 줄**에 "이 글은 업체로부터 제품·서비스를 제공받아 솔직하게 작성했습니다." 를 넣는다(표시광고법).
+"내돈내산" 은 제목·태그·본문 어디에도 쓰지 않는다. 받은 것이라고 칭찬만 하지 않는다 — 아쉬운 점도 그대로 쓴다.`;
+  }
+  return kind === "daily"
+    ? ""
+    : `# 내 돈으로 산·간 것이다
+태그에 "내돈내산" 을 하나 넣는다.`;
+}
+
+const MEMORY_GAP = `# 기억이 비는 자리
+오래전 일이라 사용자는 세부를 다 기억하지 못한다. 그렇다고 **"기억이 안 나요",
+"잘 기억나지 않지만", "기억이 가물가물" 같은 말은 쓰지 마라.** 읽는 사람에게 무성의해
+보인다. 사용자 답변에 없는 부분은 아래 "검색 조사" 의 공개 정보와 사진에 보이는 것으로
+채운다. 그래도 채울 게 없으면 그 이야기를 아예 꺼내지 않는다.`;
+
+/** 사진 메모·가격 블록. 세 종류가 같은 모양이다 */
+function photoBlocks(a: PhotoAnalysis, priceLabel: string): string {
   const menuBlock = a.menu.length
     ? a.menu.map((m) => `  - ${m.name}${m.price ? ` ${m.price.toLocaleString()}원` : " (가격 못 읽음)"}`).join("\n")
-    : "  (메뉴판·영수증 사진이 없어 가격 근거가 없다)";
+    : "  (사진에서 읽은 가격 없음 — 가격 근거가 없다)";
+  return `# 사진에서 확인된 것 (분석기가 건조하게 적은 메모다. 문장을 그대로 옮기지 말고 1인칭 경험으로 바꿔 써라)
+${a.observations.map((s) => `  - ${s}`).join("\n") || "  (없음)"}
 
+# 사진 목록
+${a.photos.map((p) => `  ${p.index}. [${p.kind}] ${p.caption}`).join("\n")}
+
+# ${priceLabel} (사진에서 읽은 것)
+${menuBlock}
+${a.receipt ? `\n# 영수증\n  항목: ${a.receipt.items.join(", ")}${a.receipt.total ? `\n  총액: ${a.receipt.total.toLocaleString()}원` : ""}${a.receipt.people ? `\n  인원: ${a.receipt.people}명` : ""}` : ""}
+
+# 확신하지 못한 것 (본문에 쓰지 마라)
+${a.uncertain.map((s) => `  - ${s}`).join("\n") || "  (없음)"}`;
+}
+
+function researchText(o: GenerateVisitOptions, usage: string): string {
+  if (!o.research?.text) return "  (조사 결과 없음)";
+  return `${o.research.text}
+
+이 정보는 **검색으로 찾은 공개 정보**다. ${usage} 다만 사용자가 직접 겪은 일처럼 쓰지 않는다.
+"확인되지 않음"으로 적힌 항목은 쓰지 않는다. 검색으로 찾은 가격은 "최근 기준"임을 밝히고,
+사진에서 읽은 가격과 다르면 사진 쪽을 산·방문한 당시 가격으로 쓴다.`;
+}
+
+const OUTPUT = (tags: string) => `# 출력
+titles(3안, 위 제목 규칙 순서대로), bodyMarkdown, tags(${tags}), photoOrder(업로드 순서와 각 자리 설명),
+needsCheck 를 JSON 으로 낸다.`;
+
+export function buildVisitPrompt(o: GenerateVisitOptions): string {
+  const kind = o.kind ?? "restaurant";
+  const body = kind === "product" ? productPrompt(o) : kind === "daily" ? dailyPrompt(o) : restaurantPrompt(o);
+  return body + (o.revision ? revisionBlock(o.revision) : "");
+}
+
+function restaurantPrompt(o: GenerateVisitOptions): string {
+  const { analysis: a, place, interview: iv } = o;
   const placeBlock = place
     ? `  상호: ${place.name}\n  주소: ${place.address}\n  업종: ${place.category}`
     : `  (카카오에서 확인되지 않음 — 사용자가 입력한 "${o.placeQuery}" 만 있다)`;
-
-  const researchBlock = o.research?.text
-    ? `${o.research.text}
-
-이 정보는 **검색으로 찾은 공개 정보**다. 가게 소개, 메뉴가 어떤 음식인지, 위치·찾아가는
-길을 설명하는 데 적극적으로 쓴다. 다만 사용자가 직접 겪은 일처럼 쓰지 않는다.
-  좋음: "여기는 돼지국밥으로 알려진 곳이에요", "신림역 3번 출구에서 5분 거리예요"
-  나쁨: "사장님이 20년째 하신다고 직접 말씀해 주셨어요"
-"확인되지 않음"으로 적힌 항목은 쓰지 않는다. 검색으로 찾은 가격은 "최근 기준"임을 밝히고,
-사진에서 읽은 가격과 다르면 사진 쪽을 방문 당시 가격으로 쓴다.`
-    : "  (조사 결과 없음)";
 
   return `네이버 블로그에 올릴 **맛집 방문 후기**를 쓴다. 사용자가 실제로 다녀온 곳이고,
 사진은 사용자가 그 자리에서 직접 찍은 것이다. 이웃들이 끝까지 읽고 "여기 가봐야겠다"
 싶게 만드는 게 목표다. 사실은 아래 재료에서만 가져온다.
 
-# 기억이 비는 자리
-오래전 방문이라 사용자는 세부를 다 기억하지 못한다. 그렇다고 **"기억이 안 나요",
-"잘 기억나지 않지만", "기억이 가물가물" 같은 말은 쓰지 마라.** 읽는 사람에게 무성의해
-보인다. 사용자 답변에 없는 부분은 아래 "검색 조사" 의 공개 정보와 사진에 보이는 것으로
-채운다. 그래도 채울 게 없으면 그 이야기를 아예 꺼내지 않는다.
+${MEMORY_GAP}
 
 # 페르소나
 ${PERSONA}
@@ -549,33 +776,36 @@ ${o.visitedOn}
 ${placeBlock}
 
 # 검색 조사 (Gemini — 구글 검색)
-${researchBlock}
+${researchText(o, "가게 소개, 메뉴가 어떤 음식인지, 위치·찾아가는 길을 설명하는 데 적극적으로 쓴다.\n  좋음: \"여기는 돼지국밥으로 알려진 곳이에요\", \"신림역 3번 출구에서 5분 거리예요\"\n  나쁨: \"사장님이 20년째 하신다고 직접 말씀해 주셨어요\"")}
 
-# 사진에서 확인된 것 (분석기가 건조하게 적은 메모다. 문장을 그대로 옮기지 말고 1인칭 경험으로 바꿔 써라)
-${a.observations.map((s) => `  - ${s}`).join("\n") || "  (없음)"}
-
-# 사진 목록
-${a.photos.map((p) => `  ${p.index}. [${p.kind}] ${p.caption}`).join("\n")}
-
-# 메뉴와 가격 (사진에서 읽은 것)
-${menuBlock}
-${a.receipt ? `\n# 영수증\n  주문: ${a.receipt.items.join(", ")}${a.receipt.total ? `\n  총액: ${a.receipt.total.toLocaleString()}원` : ""}${a.receipt.people ? `\n  인원: ${a.receipt.people}명` : ""}` : ""}
+${photoBlocks(a, "메뉴와 가격")}
 
 # 사용자 답변
   동행: ${iv.company}
   시간대: ${iv.mealTime}
   기억나는 것: ${iv.memorable}
   재방문 의사: ${iv.revisit}
+  웨이팅: ${iv.waiting || "모름"}
+  좌석: ${iv.seat || "모름"}
 ${iv.downside?.trim() ? `  아쉬웠던 점: ${iv.downside}` : ""}
 
-# 확신하지 못한 것 (본문에 쓰지 마라)
-${a.uncertain.map((s) => `  - ${s}`).join("\n") || "  (없음)"}
+# 정보 박스 (도입 바로 다음에 이 형식 그대로. 값이 없는 줄은 뺀다)
+---
+📍 주소: ${place?.address || "(주소 모름 — 이 줄은 빼라)"}
+🚇 가는 길: (검색 조사에 가까운 역·출구·도보 시간이 있으면 한 줄로. 없으면 이 줄은 빼라)
+🚘 주차: (검색 조사에 있으면. 없으면 이 줄은 빼라)
+🪑 좌석: ${iv.seat && iv.seat !== "모름" ? iv.seat : "(모름 — 이 줄은 빼라)"}${iv.company === "혼자" ? " / 혼밥 가능" : ""}
+⏰ 영업시간: 방문 전 네이버 지도에서 확인해 주세요
+---
+영업시간·브레이크타임·전화번호는 지어내지 않는다. 위 문구를 그대로 둔다.
+
+${sponsorBlock(iv, "restaurant")}
 
 # 절대 지어내지 마라
 다음은 위 재료에 근거가 없으면 **쓰지 않는다.** 하나라도 쓰면 이 글은 실패다.
   - 주문하지 않은 메뉴의 맛 평가 (어떤 음식인지 소개하는 건 검색 조사에 있으면 된다)
   - 사장님·직원과의 대화, 서비스로 받은 것
-  - 웨이팅 시간, 음식이 나온 속도
+  - 사용자 답변에 없는 웨이팅 시간, 음식이 나온 속도
   - 재료 원산지, 조리법, 가게 역사 — 검색 조사에 있을 때만, 찾아본 정보라는 말투로
   - 다른 손님의 반응, 매장이 붐볐는지
   - "메뉴와 가격"에도 검색 조사에도 없는 가격. 근거가 없으면 **가격을 아예 언급하지 마라**
@@ -585,15 +815,220 @@ ${a.uncertain.map((s) => `  - ${s}`).join("\n") || "  (없음)"}
 꼭 필요한데 근거가 애매한 문장은 본문에 쓰지 말고 needsCheck 배열에 넣어라.
 사용자가 직접 판단한다.
 
+${titleRules("restaurant")}
+
 # SEO 규칙
 ${SEO_RULES}
 ${keywordBlock(o.keywords)}
 # 문체 규칙
 ${ANTI_AI}
 
-# 출력
-titles(3안), bodyMarkdown, tags(10개), photoOrder(업로드 순서와 각 자리 설명),
-needsCheck 를 JSON 으로 낸다.${o.revision ? revisionBlock(o.revision) : ""}`;
+${OUTPUT("15~20개")}`;
+}
+
+/**
+ * 제품 후기 작법.
+ *
+ * 제품 후기가 광고처럼 읽히는 순간 끝이다. 광고와 가르는 건 **사용 기간과 사용 환경**,
+ * 그리고 아쉬운 점이다. 스펙은 조사로 채우되 "체감" 은 사용자 답변에서만 가져온다.
+ */
+const PRODUCT_STYLE = `**스펙표가 아니라 써 본 사람의 이야기로 쓴다.** 사진은 사용자가 직접 찍은 것이다.
+  - 금지: "사진에 ~가 보인다", 공식 홍보 문구 옮겨 쓰기, "필수템·인생템·강력 추천"
+
+글의 흐름:
+  1. 도입 2~4줄 — 왜 샀는지, 어떤 불편이 있었는지 **구체적인 장면 하나**로. 제품명을 첫 문단에 한 번
+  2. 정보 박스 — 도입 바로 다음. 아래 형식 그대로, 위아래 \`---\`
+  3. 언박싱·구성품 — 사진 순서대로 짧게
+  4. 디자인·크기감 — 사진에 보이는 것 + 사용 환경(원룸 책상 위 등)에 놓았을 때
+  5. 실제로 써 보니 — 이 글의 본론. 사용 환경 속 장면으로. 가장 길게
+  6. 좋았던 점 / 아쉬운 점 — \`👍\` \`👎\` 라벨 목록으로 각각 2~3개. 아쉬운 점을 반드시 1개 이상.
+     단점 뒤에 곧바로 "다만 ~하면 괜찮아요" 같은 보완을 붙이지 않는다 — 광고·AI 티의 대표 신호다
+  7. 이런 분께 추천 / 비추천 — \`✔\` 목록 2~3개. 사용자 답변의 추천 대상으로
+  8. 한 줄 총평 + 재구매 의사
+
+생동감:
+  - 사용 기간을 꼭 밝힌다("3개월째 쓰는 중인데"). 기간보다 긴 내구성 판단은 하지 않는다
+  - 스펙 숫자는 생활 비교로 풀어도 된다 — 사실인 비교만("1.5kg, 생수 1.5L 한 병 무게")
+  - 사용자가 "가장 좋았던 점" 에 쓴 것이 글의 하이라이트다. 본론에서 크게 다룬다
+  - 비교는 조사된 스펙 비교만. 다른 제품을 써 본 척하지 않는다("전에 쓰던 것" 답변이 있으면 그건 쓴다)
+  - 스펙은 정보 박스에 2~3개만. 본문에 "공식몰 기준" 수치를 나열하지 않는다
+  - 금지: FAQ 블록, "첫째/둘째/마지막으로", 모든 소제목에 제품명 반복, "살 만할까?" 식 소제목`;
+
+const PRODUCT_SEO = `- 본문 공백 제외 1,500~2,500자
+- 인용구 소제목 4~6개. "원룸에 두니 딱 이 정도 크기" 처럼 장면을 묘사하는 문장형
+- 사진 자리 \`[사진 N]\` 은 가진 사진을 모두 쓴다. 사진 사이 텍스트는 1~4줄
+- 모바일 줄바꿈: 한 줄 20자 안팎, 2~4줄마다 빈 줄. 한 문단은 3문장 이내
+- 태그 10~15개: 제품명 변형(브랜드+모델, 모델만) + 제품 종류 + 사용 환경(자취템, 원룸, 직장인) + 후기류(내돈내산은 대가성 규칙대로)
+- 구매 링크는 넣지 않는다(제휴 링크를 넣을 거면 사람이 대가성 문구와 함께 넣는다)
+- 공감·댓글·이웃추가를 부탁하지 않는다`;
+
+function productPrompt(o: GenerateVisitOptions): string {
+  const { analysis: a, interview: iv } = o;
+  const price = iv.priceNote?.trim() || (a.menu.find((m) => m.price)?.price ? `${a.menu.find((m) => m.price)!.price!.toLocaleString()}원 (사진에서 읽음)` : "");
+  return `네이버 블로그에 올릴 **제품 사용 후기**를 쓴다. 사용자가 실제로 사서(또는 받아서) 써 본 제품이고,
+사진은 사용자가 직접 찍은 것이다. 읽는 사람이 "나한테 맞는 물건인지" 판단할 수 있게 하는 게 목표다.
+사실은 아래 재료에서만 가져온다.
+
+${MEMORY_GAP}
+
+# 페르소나
+${PERSONA}
+
+# 제품 후기 작법
+${PRODUCT_STYLE}
+
+# 이 글의 상황
+${o.situation?.trim() || "특별한 상황 없음. 평소 쓰는 물건 하나를 소개한다."}
+
+# 구매·사용 시점
+${o.visitedOn}
+
+# 제품 (사용자 입력)
+  ${o.placeQuery}
+
+# 검색 조사 (Gemini — 구글 검색)
+${researchText(o, "정확한 제품명·모델명, 스펙, 구성품, 정가를 정보 박스와 설명에 쓴다.")}
+
+${photoBlocks(a, "가격 (가격표·영수증)")}
+
+# 사용자 답변
+  사용 기간: ${iv.usagePeriod || "모름"}
+  사용 환경: ${iv.usageEnv?.trim() || "모름"}
+  가장 좋았던 점: ${iv.memorable}
+  아쉬운 점: ${iv.downside?.trim() || "(없음 — 사진·조사로 확인되는 사소한 것만, 없으면 억지로 만들지 않는다)"}
+  추천 대상: ${iv.recommendFor?.trim() || "(없음)"}
+  재구매 의사: ${iv.rebuy || "모름"}
+  구매가·구매처: ${iv.priceNote?.trim() || "(없음)"}
+  산 이유·전에 쓰던 것: ${iv.reason?.trim() || "(없음 — 도입은 사용 환경과 사진으로 짧게)"}
+
+# 정보 박스 (도입 바로 다음에 이 형식 그대로. 값이 없는 줄은 뺀다)
+---
+📦 제품: (조사로 확인된 정확한 제품명·모델명. 없으면 "${o.placeQuery}")
+💰 구매가: ${price || "(모름 — 이 줄은 빼라)"}
+🗓️ 사용 기간: ${iv.usagePeriod && iv.usagePeriod !== "모름" ? iv.usagePeriod : "(모름 — 이 줄은 빼라)"}
+🏠 사용 환경: ${iv.usageEnv?.trim() || "(모름 — 이 줄은 빼라)"}
+📐 주요 스펙: (조사에 있는 것 2~3개만. 없으면 이 줄은 빼라)
+---
+
+${sponsorBlock(iv, "product")}
+
+# 절대 지어내지 마라
+  - 사용자 답변에 없는 기능 사용 경험, 사용 기간보다 긴 내구성 판단
+  - 조사에 없는 스펙·가격·출시 정보
+  - 다른 제품을 써 본 경험(답변에 없으면). 비교는 스펙 비교만
+  - 화장품·식품·건강용품의 효능·효과 단정("피부가 좋아졌다", "살이 빠진다" 는 답변에 있을 때만, 개인 경험으로)
+  - 업체 홍보 문구
+
+꼭 필요한데 근거가 애매한 문장은 본문에 쓰지 말고 needsCheck 배열에 넣어라.
+
+${titleRules("product")}
+
+# SEO 규칙
+${PRODUCT_SEO}
+${keywordBlock(o.keywords)}
+# 문체 규칙
+${ANTI_AI}
+
+${OUTPUT("10~15개")}`;
+}
+
+/**
+ * 일상 작법.
+ *
+ * 일상 글은 검색보다 이웃과 홈피드로 읽힌다. 정보 밀도보다 "그날의 결" 이 중요하고,
+ * 그래서 사람만 아는 것(누구랑, 어떤 기분이었는지)이 더 크게 들어간다. 검색에 걸리는
+ * 건 장소 이름뿐이라 장소가 있으면 제목·정보 박스에 꼭 남긴다.
+ */
+const DAILY_STYLE = `**하루를 같이 걸은 것처럼** 쓴다. 사진은 사용자가 직접 찍은 것이다.
+  - 금지: "사진에 ~가 보인다", 교훈으로 끝내기("소소한 행복이 중요하다는 걸 느꼈다")
+
+글의 흐름 — 상위 일상 글 10편은 두 갈래였다. 장소가 확인됐으면 장소형, 아니면 모음형으로 쓴다.
+  장소형:
+    1. 계기 2~3줄(왜 갔는지, 어떤 날이었는지)
+    2. 정보 박스 — 아래 형식, 위아래 \`---\`
+    3. 장소별 인용구 소제목 + 장면(사진 1~2장마다 1~3줄)
+    4. 총평 — 좋았던 점 / 아쉬웠던 점 / ⭐ 한줄평
+  모음형:
+    1. 도입 1~2줄(어떤 날·어떤 주였는지)
+    2. 시간 순서대로 장면 — 사진 1~2장마다 1~3문장. 모든 사진에 설명을 달지 않아도 된다
+    3. 사용자가 "기억나는 장면" 으로 쓴 것은 조금 길게
+    4. 마무리 1~2줄 — 기분 한 줄 + 다음 계획
+
+생동감:
+  - 문장을 더 짧고 가볍게. 혼잣말 같은 짧은 문장, 가벼운 자조를 섞는다("날씨 미쳤다.", "강제 갓생 완료.")
+  - 사소한 실패·아쉬움이 있으면 살린다(답변에 있을 때만) — 평범한 하루를 읽게 만드는 건 이런 장면이다
+  - 계절·날씨·시간대 단서는 사진에 있을 때만 구체적으로
+  - 먹은 것·산 것은 짧게. 가격은 사진·답변에 있을 때만`;
+
+const DAILY_SEO = `- 본문 공백 제외 800~1,800자
+- 소제목은 0~4개. 짧은 글이면 소제목 없이 장면만 이어도 된다
+- 사진 자리 \`[사진 N]\` 은 가진 사진을 모두 쓴다. 사진 사이 텍스트는 1~3줄
+- 모바일 줄바꿈: 한 줄 20자 안팎, 2~3줄마다 빈 줄
+- 태그 10~15개: 장소명·가게명·동네(관악구카페, 샤로수길 등) + 상황(퇴근후산책, 주말일상, 직장인일상, 자취일상) + 계절.
+  검색 유입은 장소·가게 이름으로만 들어온다
+- 공감·댓글·이웃추가를 부탁하지 않는다`;
+
+function dailyPrompt(o: GenerateVisitOptions): string {
+  const { analysis: a, place, interview: iv } = o;
+  return `네이버 블로그에 올릴 **일상 기록**을 쓴다. 사용자가 실제로 보낸 하루이고,
+사진은 사용자가 직접 찍은 것이다. 이웃이 편하게 따라 읽다가 "나도 가보고 싶다" 싶게 만드는 게 목표다.
+사실은 아래 재료에서만 가져온다.
+
+${MEMORY_GAP}
+
+# 페르소나
+${PERSONA}
+
+# 일상 작법
+${DAILY_STYLE}
+
+# 이 글의 상황
+${o.situation?.trim() || "특별한 상황 없음. 평범한 하루를 기록한다."}
+
+# 날짜
+${o.visitedOn}
+
+# 장소·주제
+  ${place ? `${place.name} (${place.address}, ${place.category})` : o.placeQuery}
+
+# 검색 조사 (Gemini — 구글 검색)
+${researchText(o, "장소 소개, 찾아가는 길을 짧게 설명하는 데 쓴다.")}
+
+${photoBlocks(a, "가격 (메뉴판·영수증)")}
+
+# 사용자 답변
+  동행: ${iv.company}
+  기억나는 장면: ${iv.memorable}
+  그날 기분: ${iv.mood?.trim() || "(없음)"}
+  또 갈지: ${iv.revisit}
+${iv.downside?.trim() ? `  아쉬웠던 점: ${iv.downside}` : ""}
+
+${place ? `# 정보 박스 (장소가 확인됐다. 도입 다음에 이 형식 그대로. 값이 없는 줄은 뺀다)
+---
+📍 ${place.name}: ${place.address}
+🚇 가는 길: (검색 조사에 있으면 한 줄로. 없으면 이 줄은 빼라)
+💰 이용 요금: (검색 조사에 있으면. 없으면 이 줄은 빼라)
+---` : "# 정보 박스\n장소가 확인되지 않았다. 정보 박스는 넣지 않는다."}
+
+${sponsorBlock(iv, "daily")}
+
+# 절대 지어내지 마라
+  - 답변·사진에 없는 사건, 대화, 만난 사람
+  - 사람의 외모 묘사
+  - 사진에 없는 날씨·풍경 단정
+  - 근거 없는 가격
+
+꼭 필요한데 근거가 애매한 문장은 본문에 쓰지 말고 needsCheck 배열에 넣어라.
+
+${titleRules("daily")}
+
+# SEO 규칙
+${DAILY_SEO}
+${keywordBlock(o.keywords)}
+# 문체 규칙
+${ANTI_AI}
+
+${OUTPUT("10~15개")}`;
 }
 
 export async function generateVisitDraft(o: GenerateVisitOptions): Promise<VisitDraft> {
@@ -611,7 +1046,8 @@ export async function generateVisitDraft(o: GenerateVisitOptions): Promise<Visit
   return {
     titles: titles.length ? titles : ["(제목을 받지 못했습니다)"],
     bodyMarkdown,
-    bodyHtml: markdownToHtml(bodyMarkdown),
+    // 네이버는 짧게 끊은 줄바꿈이 곧 서식이다. 줄을 이어 붙이지 않는다
+    bodyHtml: markdownToHtml(bodyMarkdown, { lineBreaks: true }),
     tags: (d.tags ?? [])
       .map((t: unknown) => String(t).replace(/^#/, "").trim())
       .filter(Boolean),

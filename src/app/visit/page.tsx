@@ -27,8 +27,54 @@ import { copyForNaver, copyText, toNaverHtml, withPhotos } from "@/lib/clipboard
  */
 const NAVER_EDITOR_URL = "https://blog.naver.com/PostWriteForm.naver?blogId=k-jun03";
 
+/**
+ * 글 종류. 서버 visit.ts 의 PostKind 와 같은 값이다(그쪽은 서버 전용 모듈이라 여기서 import 하지 않는다).
+ * 화면 문구만 종류마다 다르고 흐름은 같다.
+ */
+type Kind = "restaurant" | "product" | "daily";
+const KIND_UI: Record<Kind, { label: string; what: string; whatHint: string; when: string; whenHint: string; photoHelp: string; price: string; memorable: string; memorableHint: string; sponsor: string }> = {
+  restaurant: {
+    label: "맛집",
+    what: "장소명 또는 주소",
+    whatHint: "신림동 OO국밥",
+    when: "방문 날짜",
+    whenHint: "2024년 가을쯤",
+    photoHelp: "메뉴판과 영수증 사진이 있으면 꼭 함께 올리세요. 본문에 가격을 쓸 수 있는 유일한 근거입니다. 없으면 가격은 아예 쓰지 않습니다.",
+    price: "메뉴",
+    memorable: "제일 기억나는 것 한 줄 *",
+    memorableHint: "국물이 생각보다 안 짜서 끝까지 먹었음",
+    sponsor: "체험단·협찬으로 간 곳이에요",
+  },
+  product: {
+    label: "제품 후기",
+    what: "제품명 (모델명까지)",
+    whatHint: "OO 무선청소기 V8",
+    when: "산 시기",
+    whenHint: "2026년 6월",
+    photoHelp: "패키지·구성품·라벨(모델명·스펙)·가격표나 주문 내역 사진이 있으면 함께 올리세요. 모델명과 가격의 근거가 됩니다. 실제로 쓰는 장면 사진이 글을 살립니다.",
+    price: "가격",
+    memorable: "가장 좋았던 점 한 줄 *",
+    memorableHint: "원룸에서 한 손으로 들고 선반 위까지 청소됨",
+    sponsor: "협찬·제공받은 제품이에요",
+  },
+  daily: {
+    label: "일상",
+    what: "장소나 주제",
+    whatHint: "관악산 둘레길 / 퇴근 후 샤로수길",
+    when: "날짜",
+    whenHint: "2026년 9월 마지막 주말",
+    photoHelp: "시간 순서대로 올리면 글도 그 순서로 이어집니다. 간판·안내판 사진이 있으면 장소 이름을 정확히 씁니다.",
+    price: "가격",
+    memorable: "제일 기억나는 장면 한 줄 *",
+    memorableHint: "해 질 때 벤치에서 한참 앉아 있었음",
+    sponsor: "협찬·초대받은 일정이에요",
+  },
+};
+const asKind = (v: unknown): Kind => (v === "product" || v === "daily" ? v : "restaurant");
+
 type VisitPost = {
   id: number;
+  kind?: string;
   place_query: string;
   visited_on: string;
   place: { name?: string; address?: string; category?: string; url?: string } | null;
@@ -47,7 +93,17 @@ type VisitPost = {
   updated_at?: string;
   /* 단건 조회에만 온다. 지난 초안을 다시 쓸 때 2·3단계를 되살리는 데 쓴다 */
   analysis?: Analysis | null;
-  interview?: Partial<Record<"company" | "mealTime" | "memorable" | "revisit" | "downside", string>> | null;
+  interview?:
+    | (Partial<
+        Record<
+          | "company" | "mealTime" | "memorable" | "revisit" | "downside" | "waiting" | "seat"
+          | "usagePeriod" | "usageEnv" | "recommendFor" | "rebuy" | "priceNote" | "mood" | "reason",
+          string
+        >
+      > & {
+        sponsored?: boolean;
+      })
+    | null;
 };
 
 type Analysis = {
@@ -123,6 +179,8 @@ function VisitInner() {
   const [busy, setBusy] = useState<{ key: string; msg: string } | null>(null);
 
   /* 1단계 입력 */
+  const [kind, setKind] = useState<Kind>("restaurant");
+  const ui = KIND_UI[kind];
   const [files, setFiles] = useState<File[]>([]);
   const [placeQuery, setPlaceQuery] = useState("");
   const [visitedOn, setVisitedOn] = useState("");
@@ -140,6 +198,19 @@ function VisitInner() {
   const [memorable, setMemorable] = useState("");
   const [revisit, setRevisit] = useState("근처 오면");
   const [downside, setDownside] = useState("");
+  /* 상위 맛집 후기가 꼭 적는 것. 사진으로는 알 수 없어 묻는다 */
+  const [waiting, setWaiting] = useState("모름");
+  const [seat, setSeat] = useState("모름");
+  const [sponsored, setSponsored] = useState(false);
+  /* 제품 후기 */
+  const [usagePeriod, setUsagePeriod] = useState("1개월");
+  const [usageEnv, setUsageEnv] = useState("");
+  const [recommendFor, setRecommendFor] = useState("");
+  const [rebuy, setRebuy] = useState("응");
+  const [priceNote, setPriceNote] = useState("");
+  const [reason, setReason] = useState("");
+  /* 일상 */
+  const [mood, setMood] = useState("");
 
   /* 4단계 — 결과 */
   const [draft, setDraft] = useState<VisitPost | null>(null);
@@ -201,6 +272,17 @@ function VisitInner() {
         setMemorable(iv.memorable ?? "");
         if (iv.revisit) setRevisit(iv.revisit);
         setDownside(iv.downside ?? "");
+        setWaiting(iv.waiting ?? "모름");
+        setSeat(iv.seat ?? "모름");
+        setSponsored(Boolean(iv.sponsored));
+        setKind(asKind(p.kind));
+        setUsagePeriod(iv.usagePeriod || "1개월");
+        setUsageEnv(iv.usageEnv ?? "");
+        setRecommendFor(iv.recommendFor ?? "");
+        setRebuy(iv.rebuy || "응");
+        setPriceNote(iv.priceNote ?? "");
+        setReason(iv.reason ?? "");
+        setMood(iv.mood ?? "");
         window.scrollTo({ top: 0, behavior: "smooth" });
       } else if (d.error) {
         setError(d.error);
@@ -248,6 +330,14 @@ function VisitInner() {
     setSituation("");
     setMemorable("");
     setDownside("");
+    setWaiting("모름");
+    setSeat("모름");
+    setSponsored(false);
+    setUsageEnv("");
+    setRecommendFor("");
+    setPriceNote("");
+    setReason("");
+    setMood("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -267,7 +357,7 @@ function VisitInner() {
       const res = await fetch("/api/visit/analyze", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ placeQuery, visitedOn, situation, photos }),
+        body: JSON.stringify({ kind, placeQuery, visitedOn, situation, photos }),
       });
       const d = await res.json();
       if (!d.ok) throw new Error(d.error ?? "분석에 실패했습니다.");
@@ -302,7 +392,10 @@ function VisitInner() {
         body: JSON.stringify({
           id,
           situation,
-          interview: { company, mealTime, memorable, revisit, downside },
+          interview: {
+            company, mealTime, memorable, revisit, downside, waiting, seat, sponsored,
+            usagePeriod, usageEnv, recommendFor, rebuy, priceNote, mood, reason,
+          },
           revision,
         }),
       });
@@ -393,10 +486,10 @@ function VisitInner() {
 
   return (
     <div className="main">
-      <h1 className="page-title">네이버 방문 후기</h1>
+      <h1 className="page-title">네이버 블로그</h1>
       <p className="page-desc">
-        이미 다녀온 가게의 사진에서 시작합니다. 사진이 사실을 채우고, 네 문항이 감상을
-        채웁니다. 어디 갈지 고민이면 <Link href="/eat">제철 트렌드</Link>에서 찾아보세요.
+        직접 다녀온 곳, 써 본 물건, 보낸 하루의 사진에서 시작합니다. 사진이 사실을 채우고,
+        몇 문항이 감상을 채웁니다. 어디 갈지 고민이면 <Link href="/eat">제철 트렌드</Link>에서 찾아보세요.
       </p>
 
       {error && <div className="alert">{error}</div>}
@@ -405,9 +498,18 @@ function VisitInner() {
       {/* ---------------- 1단계 ---------------- */}
       <div className="card">
         <h2>
-          1. 사진과 장소
-          <Help text="메뉴판과 영수증 사진이 있으면 꼭 함께 올리세요. 본문에 가격을 쓸 수 있는 유일한 근거입니다. 없으면 가격은 아예 쓰지 않습니다." />
+          1. 무엇을 쓸까요
+          <Help text={ui.photoHelp} />
         </h2>
+
+        {/* 분석을 마친 뒤 종류를 바꾸면 이미 읽은 사진과 맞지 않는다. 새 글에서만 고른다 */}
+        <div className="seg" style={{ marginBottom: 12 }}>
+          {(Object.keys(KIND_UI) as Kind[]).map((k) => (
+            <button key={k} className={kind === k ? "on" : ""} onClick={() => setKind(k)} disabled={Boolean(analysis) && kind !== k}>
+              {KIND_UI[k].label}
+            </button>
+          ))}
+        </div>
 
         <div className="field">
           <label>사진 (최대 {MAX_PHOTOS}장)</label>
@@ -426,20 +528,20 @@ function VisitInner() {
 
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 220 }}>
-            <label>장소명 또는 주소</label>
+            <label>{ui.what}</label>
             <input
-              placeholder="신림동 OO국밥"
+              placeholder={ui.whatHint}
               value={placeQuery}
               onChange={(e) => setPlaceQuery(e.target.value)}
             />
           </div>
           <div className="field" style={{ flex: 1, minWidth: 180 }}>
             <label>
-              방문 날짜
-              <Help text="대략이어도 됩니다. '2024년 가을쯤' 처럼 쓰세요. 오래된 방문이면 본문에서 시점을 밝힙니다." />
+              {ui.when}
+              <Help text="대략이어도 됩니다. '2024년 가을쯤' 처럼 쓰세요. 오래된 일이면 본문에서 시점을 밝힙니다." />
             </label>
             <input
-              placeholder="2024년 가을쯤"
+              placeholder={ui.whenHint}
               value={visitedOn}
               onChange={(e) => setVisitedOn(e.target.value)}
             />
@@ -492,13 +594,15 @@ function VisitInner() {
                 <strong>{place.name}</strong> · {place.category?.split(">").pop()?.trim()} ·{" "}
               </>
             ) : null}
-            사진 {analysis.photos.length}장 · 메뉴{" "}
+            사진 {analysis.photos.length}장 · {ui.price}{" "}
             {analysis.menu.length
               ? analysis.menu
                   .slice(0, 4)
                   .map((m) => (m.price ? `${m.name} ${m.price.toLocaleString()}원` : m.name))
                   .join(", ") + (analysis.menu.length > 4 ? " 외" : "")
-              : "근거 없음(가격을 쓰지 않습니다)"}
+              : kind === "restaurant"
+                ? "근거 없음(가격을 쓰지 않습니다)"
+                : "사진에서 못 읽음"}
           </p>
           <details style={{ marginBottom: 12 }}>
             <summary>사진에서 읽은 것 자세히</summary>
@@ -521,27 +625,83 @@ function VisitInner() {
             )}
           </details>
 
-          <div className="row">
-            <Choice label="누구랑 갔어요?" options={["혼자", "친구", "가족", "연인", "회식"]} value={company} onChange={setCompany} />
-            <Choice label="언제요?" options={["점심", "저녁", "그 외"]} value={mealTime} onChange={setMealTime} />
-          </div>
+          {kind === "restaurant" && (
+            <>
+              <div className="row">
+                <Choice label="누구랑 갔어요?" options={["혼자", "친구", "가족", "연인", "회식"]} value={company} onChange={setCompany} />
+                <Choice label="언제요?" options={["점심", "저녁", "그 외"]} value={mealTime} onChange={setMealTime} />
+              </div>
+              <div className="row">
+                <Choice label="웨이팅은요?" options={["없음", "10분 내외", "30분 이상", "모름"]} value={waiting} onChange={setWaiting} />
+                <Choice label="앉은 자리는요?" options={["1인석·바", "테이블", "좌식", "모름"]} value={seat} onChange={setSeat} />
+              </div>
+            </>
+          )}
+
+          {kind === "product" && (
+            <>
+              <div className="row">
+                <Choice label="얼마나 썼어요?" options={["1주 미만", "1개월", "3개월", "6개월 이상"]} value={usagePeriod} onChange={setUsagePeriod} />
+                <Choice label="또 살 거예요?" options={["응", "아니", "글쎄"]} value={rebuy} onChange={setRebuy} />
+              </div>
+              <div className="row">
+                <div className="field" style={{ flex: 2, minWidth: 220 }}>
+                  <label>
+                    어디서 어떻게 써요?
+                    <Help text="제목 공식(제품명 + 사용 환경 + 핵심 특징)의 재료입니다. 예: 원룸 자취방, 퇴근 후 매일 / 회사 책상, 오후마다" />
+                  </label>
+                  <input placeholder="원룸 자취방, 퇴근 후 매일" value={usageEnv} onChange={(e) => setUsageEnv(e.target.value)} />
+                </div>
+                <div className="field" style={{ flex: 1, minWidth: 160 }}>
+                  <label>산 곳·가격 (선택)</label>
+                  <input placeholder="쿠팡 39,000원" value={priceNote} onChange={(e) => setPriceNote(e.target.value)} />
+                </div>
+              </div>
+              <div className="field">
+                <label>
+                  왜 샀어요? 전에 쓰던 건? (선택)
+                  <Help text="상위 제품 후기 대부분이 '산 계기' 장면으로 시작합니다. 예: 유선청소기 꺼내기 귀찮아서 한 달에 한 번 청소함" />
+                </label>
+                <input placeholder="유선청소기 꺼내기 귀찮아서 한 달에 한 번 청소함" value={reason} onChange={(e) => setReason(e.target.value)} />
+              </div>
+            </>
+          )}
+
+          {kind === "daily" && (
+            <div className="row">
+              <Choice label="누구랑요?" options={["혼자", "친구", "가족", "연인", "회식"]} value={company} onChange={setCompany} />
+              <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                <label>그날 기분 한 줄 (선택)</label>
+                <input placeholder="일주일 치 피로가 좀 풀림" value={mood} onChange={(e) => setMood(e.target.value)} />
+              </div>
+            </div>
+          )}
 
           <div className="field">
-            <label>제일 기억나는 것 한 줄 *</label>
-            <input
-              placeholder="국물이 생각보다 안 짜서 끝까지 먹었음"
-              value={memorable}
-              onChange={(e) => setMemorable(e.target.value)}
-            />
+            <label>{ui.memorable}</label>
+            <input placeholder={ui.memorableHint} value={memorable} onChange={(e) => setMemorable(e.target.value)} />
           </div>
 
           <div className="row">
-            <Choice label="또 갈 거예요?" options={["응", "아니", "근처 오면"]} value={revisit} onChange={setRevisit} />
+            {kind === "product" ? (
+              <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                <label>이런 분께 맞아요 (선택)</label>
+                <input placeholder="좁은 집, 청소기 무거워서 안 쓰게 되는 사람" value={recommendFor} onChange={(e) => setRecommendFor(e.target.value)} />
+              </div>
+            ) : (
+              <Choice label="또 갈 거예요?" options={["응", "아니", "근처 오면"]} value={revisit} onChange={setRevisit} />
+            )}
             <div className="field" style={{ flex: 1, minWidth: 220 }}>
-              <label>아쉬웠던 점 (선택)</label>
+              <label>{kind === "daily" ? "작은 실패·아쉬웠던 점 (선택)" : "아쉬웠던 점 (선택)"}</label>
               <input value={downside} onChange={(e) => setDownside(e.target.value)} />
             </div>
           </div>
+
+          <label className="check-inline" style={{ marginBottom: 10 }}>
+            <input type="checkbox" checked={sponsored} onChange={(e) => setSponsored(e.target.checked)} />
+            {ui.sponsor}
+            <Help text="켜면 본문 첫 줄에 '제공받아 작성했다' 는 대가성 문구가 들어갑니다(표시광고법). 끄면 태그에 내돈내산을 넣습니다." />
+          </label>
 
           {/* 처음 쓰기와 다시 쓰기는 같은 일이다. 버튼 하나로 둔다 */}
           <div className="row" style={{ alignItems: "center" }}>
@@ -791,7 +951,10 @@ function VisitInner() {
               onClick={() => openPost(p.id)}
             >
               <div className="entry-main">
-                <div className="entry-title">{p.place?.name || p.place_query}</div>
+                <div className="entry-title">
+                  {asKind(p.kind) !== "restaurant" && <span className="tag">{KIND_UI[asKind(p.kind)].label}</span>}{" "}
+                  {p.place?.name || p.place_query}
+                </div>
                 <div className="entry-sub">
                   {[
                     p.warnings?.length ? `확인 ${p.warnings.length}` : "",

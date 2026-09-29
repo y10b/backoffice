@@ -359,3 +359,28 @@ export async function visitKeywords(o: {
     return [];
   }
 }
+
+/**
+ * 제품 후기 키워드. "제품명 후기·단점·내돈내산" 처럼 사람들이 사기 전에 치는 꼴을 비교한다.
+ * 검색광고는 띄어쓰기를 뗀 꼴로 집계하므로 후보도 그렇게 맞춘다.
+ */
+export async function productKeywords(product: string): Promise<KeywordPick[]> {
+  const name = product.trim();
+  if (!name) return [];
+  const candidates = [name, `${name} 후기`, `${name} 단점`, `${name} 내돈내산`, `${name} 추천`];
+  try {
+    const { exact, related } = await monthlySearches(candidates);
+    const picks: KeywordPick[] = candidates
+      .filter((c) => exact.has(bare(c)))
+      .map((c) => ({ keyword: c, searches: exact.get(bare(c))! }));
+    // 연관 키워드 중 제품명을 품은 것 — "OO 청소기 V8 거치대" 처럼 후보에 없던 좋은 조합
+    for (const r of related) {
+      if (!bare(r.keyword).includes(bare(name))) continue;
+      if (picks.some((p) => bare(p.keyword) === bare(r.keyword))) continue;
+      picks.push({ keyword: r.keyword, searches: r.searches });
+    }
+    return picks.sort((a, b) => b.searches - a.searches).slice(0, 5);
+  } catch {
+    return [];
+  }
+}

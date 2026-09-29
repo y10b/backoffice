@@ -65,7 +65,15 @@ function alignOf(cell: string): "left" | "center" | "right" | null {
   return null;
 }
 
-export function markdownToHtml(md: string): string {
+export type MarkdownOptions = {
+  /**
+   * 문단 안의 줄바꿈을 `<br>` 로 살린다. 네이버 후기는 모바일에서 한 줄 20자 안팎으로
+   * 끊어 쓰는 게 관습이라 줄바꿈이 곧 서식이다. 기본(티스토리)은 줄을 이어 붙인다.
+   */
+  lineBreaks?: boolean;
+};
+
+export function markdownToHtml(md: string, o: MarkdownOptions = {}): string {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
   let listType: "ul" | "ol" | null = null;
@@ -74,7 +82,7 @@ export function markdownToHtml(md: string): string {
 
   const flushParagraph = () => {
     if (paragraph.length) {
-      out.push(`<p>${inline(paragraph.join(" "))}</p>`);
+      out.push(`<p>${paragraph.map(inline).join(o.lineBreaks ? "<br>" : " ")}</p>`);
       paragraph = [];
     }
   };

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { insertVisitPost } from "@/lib/db";
-import { analyzePhotos, checkPlace, type InputPhoto } from "@/lib/visit";
+import { analyzePhotos, asKind, checkPlace, type InputPhoto, type PlaceCheck } from "@/lib/visit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,17 +19,19 @@ export const maxDuration = 120;
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
 
+  const kind = asKind(body.kind);
   const placeQuery = String(body.placeQuery ?? "").trim();
   const visitedOn = String(body.visitedOn ?? "").trim();
   const situation = String(body.situation ?? "").trim();
   const photos: InputPhoto[] = Array.isArray(body.photos) ? body.photos : [];
 
   if (!placeQuery) {
-    return NextResponse.json({ ok: false, error: "장소명이나 주소를 넣어주세요." }, { status: 400 });
+    const what = kind === "product" ? "제품명" : kind === "daily" ? "장소나 주제" : "장소명이나 주소";
+    return NextResponse.json({ ok: false, error: `${what}을 넣어주세요.` }, { status: 400 });
   }
   if (!visitedOn) {
     return NextResponse.json(
-      { ok: false, error: "방문 날짜를 넣어주세요. \"2024년 가을쯤\" 처럼 대략이어도 됩니다." },
+      { ok: false, error: "날짜를 넣어주세요. \"2024년 가을쯤\" 처럼 대략이어도 됩니다." },
       { status: 400 },
     );
   }
@@ -42,9 +44,18 @@ export async function POST(req: Request) {
      * 장소 조회와 사진 분석은 서로를 기다릴 이유가 없다. 사진 분석이 20초 넘게
      * 걸리는데 그 앞에 카카오 왕복을 직렬로 두면 그만큼 더 기다린다.
      */
+    /*
+     * 장소 조회는 종류마다 뜻이 다르다. 맛집은 못 찾으면 폐업을 의심하고, 일상은 장소가
+     * 아닐 수도 있어(동네 산책, 집) 찾으면 쓰고 못 찾으면 조용히 넘어간다. 제품은 안 찾는다.
+     */
+    const noPlace: PlaceCheck = { place: null, candidates: [], warnings: [] };
     const [analysis, check] = await Promise.all([
-      analyzePhotos(photos),
-      checkPlace(placeQuery),
+      analyzePhotos(photos, kind),
+      kind === "product"
+        ? noPlace
+        : kind === "daily"
+          ? checkPlace(placeQuery).then((c) => ({ ...c, warnings: [] }))
+          : checkPlace(placeQuery),
     ]);
 
     const warnings = [...check.warnings];
@@ -52,7 +63,7 @@ export async function POST(req: Request) {
      * 가격 근거가 없으면 미리 알린다. 생성 단계에서 가격을 아예 빼도록 프롬프트가
      * 막고 있지만, 사용자가 메뉴판 사진을 다시 찾아볼 기회를 여기서 주는 게 낫다.
      */
-    if (!analysis.menu.length) {
+    if (kind === "restaurant" && !analysis.menu.length) {
       warnings.push(
         "메뉴판·영수증 사진이 없어 가격 근거가 없습니다. 본문에 가격을 쓰지 않습니다. " +
           "찍어둔 메뉴판이 있으면 함께 올려주세요.",
@@ -60,6 +71,7 @@ export async function POST(req: Request) {
     }
 
     const id = await insertVisitPost({
+      kind,
       place_query: placeQuery,
       visited_on: visitedOn,
       situation,

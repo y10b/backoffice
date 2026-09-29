@@ -79,7 +79,8 @@ export const NAV_GROUPS: NavGroup[] = [
       // 키워드가 아니라 사진에서 출발하는 갈래. 방향이 반대라 글 작성과 섞지 않는다
       {
         href: "/visit",
-        label: "네이버 방문 후기",
+        // 맛집에서 시작해 제품 후기·일상으로 넓혔다. 사진에서 출발하는 흐름은 같다
+        label: "네이버 블로그",
         // 네이버 초록. 버튼(button.naver)의 --naver 와 같은 색
         color: "#03c75a",
         icon: svg(

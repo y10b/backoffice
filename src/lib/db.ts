@@ -545,6 +545,8 @@ export async function deleteThreadsPost(id: number): Promise<void> {
 
 export type VisitPost = {
   id: number;
+  /** restaurant | product | daily. 20260929 마이그레이션 전 행은 전부 restaurant */
+  kind: string;
   place_query: string;
   visited_on: string;
   place: Record<string, unknown> | null;
@@ -565,35 +567,41 @@ export type VisitPost = {
   updated_at: string;
 };
 
+/**
+ * kind 칸(20260929 마이그레이션)이 아직 없는 DB 인지. 배포와 마이그레이션 사이에 목록이
+ * 통째로 깨지지 않게, 이 오류일 때만 kind 없이 한 번 더 한다.
+ */
+const missingKind = (e: { message?: string } | null) => Boolean(e?.message && /kind/.test(e.message) && /column/i.test(e.message));
+
 export async function insertVisitPost(row: Record<string, unknown>): Promise<number> {
-  const { data, error } = await supabase()
-    .from("visit_posts")
-    .insert(row)
-    .select("id")
-    .single();
-  if (error) {
+  let { data, error } = await supabase().from("visit_posts").insert(row).select("id").single();
+  if (missingKind(error) && (row.kind ?? "restaurant") === "restaurant") {
+    const { kind: _drop, ...rest } = row;
+    ({ data, error } = await supabase().from("visit_posts").insert(rest).select("id").single());
+  } else if (missingKind(error)) {
+    throw new Error("제품 후기·일상 글은 DB 에 kind 칸이 있어야 저장됩니다. supabase/migrations/20260929000000_visit_posts_kind.sql 을 적용하세요.");
+  }
+  if (error || !data) {
     // 23505 = unique_violation. 같은 가게·같은 날짜가 이미 열려 있다
     if ((error as { code?: string }).code === "23505") {
       throw new Error(
         "같은 가게·같은 방문일의 초안이 이미 있습니다. 목록에서 기존 것을 이어서 쓰세요.",
       );
     }
-    throw new Error(`방문 후기 저장 실패: ${error.message}`);
+    throw new Error(`방문 후기 저장 실패: ${error?.message ?? "응답 없음"}`);
   }
   return Number(data.id);
 }
 
 /** 목록. 본문은 빼서 응답이 무거워지지 않게 한다 */
 export async function listVisitPosts(limit = 100) {
-  const { data, error } = await supabase()
-    .from("visit_posts")
-    .select(
-      "id, place_query, visited_on, place, situation, titles, title, tags, warnings, needs_check, status, posted_at, created_at, updated_at",
-    )
-    .order("id", { ascending: false })
-    .limit(limit);
-  if (error) throw new Error(`방문 후기 목록 조회 실패: ${error.message}`);
-  return data ?? [];
+  const cols = "place_query, visited_on, place, situation, titles, title, tags, warnings, needs_check, status, posted_at, created_at, updated_at";
+  const query = (select: string) =>
+    supabase().from("visit_posts").select(select).order("id", { ascending: false }).limit(limit);
+  let res: { data: unknown[] | null; error: { message: string } | null } = await query(`id, kind, ${cols}`);
+  if (missingKind(res.error)) res = await query(`id, ${cols}`);
+  if (res.error) throw new Error(`방문 후기 목록 조회 실패: ${res.error.message}`);
+  return (res.data ?? []) as Record<string, unknown>[];
 }
 
 export async function getVisitPost(id: number): Promise<VisitPost | null> {
