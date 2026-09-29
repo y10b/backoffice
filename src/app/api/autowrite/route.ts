@@ -66,6 +66,7 @@ export async function POST(req: Request) {
       tone: body.tone,
       targetChars: body.targetChars ? Number(body.targetChars) : undefined,
       outline: body.outline,
+      experience: typeof body.experience === "string" ? body.experience : undefined,
     });
   } catch (e) {
     return fail("generate", e);

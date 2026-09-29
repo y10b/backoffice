@@ -462,3 +462,28 @@ export async function loadTistoryTitles(): Promise<Overlap[]> {
 export async function findOverlap(keyword: string): Promise<Overlap[]> {
   return overlapsIn(keyword, await loadTistoryTitles());
 }
+
+/**
+ * 이 키워드와 가까운 내 글. 새 글 끝의 "함께 보면 좋은 글" 에 쓴다.
+ *
+ * 수익형 티스토리 상위 글 대부분이 자기 글을 주제 묶음으로 엮는다(실측 15편 중 9편).
+ * 키워드를 어절로 쪼개 제목에 몇 개 들어 있는지로 줄 세운다. 전부 들어 있는 글은 같은
+ * 글이라 뺀다 — 자기 자신이나 겹치는 글로 링크를 걸면 의미가 없다.
+ * 표를 못 읽으면 빈 배열이다. 링크가 없을 뿐 글은 써야 한다.
+ */
+export async function relatedTistoryPosts(keywords: string[], limit = 3): Promise<{ title: string; url: string }[]> {
+  const tokens = [...new Set(keywords.flatMap((k) => k.split(/\s+/)).map((t) => t.trim()).filter((t) => t.length >= 2))];
+  if (!tokens.length) return [];
+  let rows: TistoryPostRow[];
+  try {
+    rows = await selectTistoryPosts();
+  } catch {
+    return [];
+  }
+  return rows
+    .map((r) => ({ title: r.title || r.slug, url: r.url, hits: tokens.filter((t) => (r.title || "").includes(t)).length }))
+    .filter((r) => r.hits > 0 && r.hits < tokens.length)
+    .sort((a, b) => b.hits - a.hits)
+    .slice(0, limit)
+    .map(({ title, url }) => ({ title, url }));
+}

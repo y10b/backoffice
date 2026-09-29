@@ -62,8 +62,11 @@ function WritePageInner() {
   const [subKeyword, setSubKeyword] = useState("");
   const [context, setContext] = useState<string[]>([]);
   const [tone, setTone] = useState("친근하지만 정보 밀도가 높은 정보성 블로그 문체");
-  const [targetChars, setTargetChars] = useState(2000);
+  // 상위 수익형 글 실측 3,500~6,000자. 2,000자는 얇은 글로 밀린다
+  const [targetChars, setTargetChars] = useState(3500);
   const [outline, setOutline] = useState("");
+  /* 내가 직접 겪은 일. 경쟁 글 15편 중 1편만 1인칭 경험이 있었다 — 가장 큰 차별점 */
+  const [experience, setExperience] = useState("");
 
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggesting, setSuggesting] = useState(false);
@@ -278,6 +281,7 @@ function WritePageInner() {
           tone,
           targetChars,
           outline,
+          experience,
         }),
       });
       const d = await res.json();
@@ -369,6 +373,7 @@ function WritePageInner() {
           tone,
           targetChars,
           outline,
+          experience,
         }),
       });
       const d = await res.json();
@@ -626,7 +631,19 @@ function WritePageInner() {
             rows={3}
             value={outline}
             onChange={(e) => setOutline(e.target.value)}
-            placeholder="꼭 포함할 소제목, 개인 경험, 강조하고 싶은 포인트 등"
+            placeholder="꼭 포함할 소제목, 강조하고 싶은 포인트 등"
+          />
+        </div>
+        <div className="field" style={{ marginTop: 10 }}>
+          <label>
+            내가 직접 겪은 일 (선택)
+            <Help text="실제로 해 본 경험을 적으면 1인칭 단락으로 녹입니다. 예: '작년에 3.3% 떼이고 5월에 42만원 돌려받음, 경비 입력을 몰라 한 번 정정함'.&#10;상위 글 15편 중 경험담이 있는 글은 1편뿐이라 가장 큰 차별점입니다. 비우면 경험담을 지어내지 않습니다." />
+          </label>
+          <textarea
+            rows={2}
+            value={experience}
+            onChange={(e) => setExperience(e.target.value)}
+            placeholder="작년에 3.3% 떼이고 5월에 42만원 돌려받음"
           />
         </div>
         <button

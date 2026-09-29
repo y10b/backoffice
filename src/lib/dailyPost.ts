@@ -305,7 +305,7 @@ export async function writeDailyPost(
   const draft = await generateDraft({
     mainKeyword,
     subKeyword,
-    targetChars: 2000,
+    targetChars: 3500,
     retries: 4,
     extraInstruction: extraInstruction || undefined,
   });

@@ -22,6 +22,7 @@ export async function POST(req: Request) {
       tone: body.tone,
       targetChars: body.targetChars ? Number(body.targetChars) : undefined,
       outline: body.outline,
+      experience: typeof body.experience === "string" ? body.experience : undefined,
     });
 
     let postId: number | null = null;
