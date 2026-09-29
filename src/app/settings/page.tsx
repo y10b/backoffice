@@ -27,6 +27,7 @@ type SettingsState = {
     model: string;
   };
   kakao: { configured: boolean; fromEnv: boolean; apiKeyPreview: string };
+  azure?: { configured: boolean; fromEnv: boolean; apiKeyPreview: string; region: string };
   /** 네이버 방문 후기의 사진 분석·본문. 백엔드가 아직 안 내려주면 없다 */
   openai?: {
     configured: boolean;
@@ -115,6 +116,8 @@ export default function SettingsPage() {
   const [adsenseId, setAdsenseId] = useState("");
   const [adsenseSecret, setAdsenseSecret] = useState("");
   const [kakaoKey, setKakaoKey] = useState("");
+  const [azureKey, setAzureKey] = useState("");
+  const [azureRegion, setAzureRegion] = useState("");
   const [ghPat, setGhPat] = useState("");
   const [ghUser, setGhUser] = useState("");
   const [velogToken, setVelogToken] = useState("");
@@ -773,6 +776,46 @@ export default function SettingsPage() {
             저장
           </button>
         </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          Azure Speech — 썰 릴스 목소리
+          <Help text="썰 릴스의 한국어 음성(선히·인준 등)에 씁니다. Edge 의 '소리 내어 읽기' 와 같은 목소리를 공식 API 로 씁니다.&#10;키가 없으면 릴스는 자막만으로 만들어집니다." />{" "}
+          {state?.azure && (
+            <Status configured={state.azure.configured} fromEnv={state.azure.fromEnv} preview={state.azure.apiKeyPreview} />
+          )}
+        </h2>
+        <div className="row">
+          <div className="field" style={{ flex: 2, minWidth: 240 }}>
+            <label>키 (Azure Portal → Speech 리소스 → 키 및 엔드포인트)</label>
+            <input type="password" className="mono" placeholder="KEY 1" value={azureKey} onChange={(e) => setAzureKey(e.target.value)} />
+          </div>
+          <div className="field" style={{ flex: 1, minWidth: 140 }}>
+            <label>지역</label>
+            <input
+              className="mono"
+              placeholder={state?.azure?.region || "koreacentral"}
+              value={azureRegion}
+              onChange={(e) => setAzureRegion(e.target.value)}
+            />
+          </div>
+          <button
+            className="primary"
+            onClick={() =>
+              save({ azureSpeechKey: azureKey, azureSpeechRegion: azureRegion }).then(() => {
+                setAzureKey("");
+                setAzureRegion("");
+              })
+            }
+            disabled={!azureKey.trim() && !azureRegion.trim()}
+          >
+            저장
+          </button>
+        </div>
+        <p className="hint">
+          무료 등급(F0)으로 리소스를 만들면 신경망 음성을 매달 일정 글자 수까지 무료로 씁니다. 지역은 리소스를 만든 곳(예: koreacentral).
+        </p>
       </div>
 
       <div className="card">

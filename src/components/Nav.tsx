@@ -102,6 +102,18 @@ export const NAV_GROUPS: NavGroup[] = [
         color: "#30b0c7",
         icon: svg(<path d="M5 7l5 5-5 5M13 17h6" />),
       },
+      // 내가 겪은 일을 카톡처럼 물어 애니 릴스로. 영상은 브라우저에서 굽는다
+      {
+        href: "/reels",
+        label: "썰 릴스",
+        color: "#5856d6",
+        icon: svg(
+          <>
+            <rect x="6" y="3" width="12" height="18" rx="3" />
+            <path d="M10.5 9.5v5l4-2.5z" />
+          </>,
+        ),
+      },
       // 부수입 갈래. 시즌 주제 → 프롬프트 → 누끼 → 판매용 파일. 생성·업로드는 사람이 한다
       {
         href: "/stock",

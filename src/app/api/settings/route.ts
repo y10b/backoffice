@@ -33,6 +33,7 @@ export async function GET() {
     "adsense_client_id", "adsense_client_secret",
     "adsense_refresh_token", "adsense_account",
     "kakao_rest_api_key",
+    "azure_speech_key", "azure_speech_region",
     "github_pat", "github_user", "velog_user", "velog_token", "velog_refresh_token", "devlog_blocked_owners",
     "devlog_repos", "devlog_author_emails",
     "seeds_tistory",
@@ -54,6 +55,7 @@ export async function GET() {
   const adsenseSecret = resolve(s.adsense_client_secret, "ADSENSE_CLIENT_SECRET");
   const adsenseToken = s.adsense_refresh_token ?? "";
   const kakao = resolve(s.kakao_rest_api_key, "KAKAO_REST_API_KEY");
+  const azure = resolve(s.azure_speech_key, "AZURE_SPEECH_KEY");
   // devlogCreds 와 같은 순서로 본다. 화면은 "미설정"인데 수집은 되는 어긋남을 막는다
   const ghPat = resolve(s.github_pat, process.env.GH_PAT ? "GH_PAT" : "GITHUB_TOKEN");
   const velog = resolve(s.velog_token, "VELOG_TOKEN");
@@ -123,6 +125,12 @@ export async function GET() {
       fromEnv: kakao.fromEnv,
       apiKeyPreview: mask(kakao.value),
     },
+    azure: {
+      configured: Boolean(azure.value),
+      fromEnv: azure.fromEnv,
+      apiKeyPreview: mask(azure.value),
+      region: s.azure_speech_region || process.env.AZURE_SPEECH_REGION || "",
+    },
     // 티스토리 블로그 주소. 비어 있으면 화면이 기본 블로그(testao)의 에디터를 연다
     tistory: {
       url: s.tistory_url ?? "",
@@ -167,6 +175,8 @@ const TEXT_FIELDS: Record<string, string> = {
   adsenseClientId: "adsense_client_id",
   adsenseClientSecret: "adsense_client_secret",
   kakaoRestApiKey: "kakao_rest_api_key",
+  azureSpeechKey: "azure_speech_key",
+  azureSpeechRegion: "azure_speech_region",
   githubPat: "github_pat",
   githubUser: "github_user",
   velogUser: "velog_user",
