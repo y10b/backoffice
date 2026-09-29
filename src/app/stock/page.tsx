@@ -571,7 +571,8 @@ export default function StockPage() {
                 {spin("prompts")}
                 프롬프트 만들기
               </button>
-              {busyNote("prompts")}
+              {busyNote("prompts") ??
+                (!topic.trim() && <span className="hint">1번에서 주제를 고르거나 적으면 눌립니다</span>)}
             </div>
 
             {prompts.length > 0 && promptMode === "one" && (

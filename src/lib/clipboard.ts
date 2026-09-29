@@ -1,8 +1,43 @@
 "use client";
 
-/** 일반 텍스트 복사 */
+/**
+ * 일반 텍스트 복사.
+ *
+ * `navigator.clipboard` 만 쓰면 막히는 경우가 많다 — HTTPS 가 아닌 주소(휴대폰에서 내부 IP 로
+ * 접속), 사파리 권한, 창에 포커스가 없을 때. 예전엔 그때 오류가 조용히 삼켜져 "버튼을 눌러도
+ * 아무 일도 안 일어나는" 것처럼 보였다. 막히면 옛 방식(선택 + copy 명령)으로 한 번 더 하고,
+ * 그것도 안 되면 글을 선택된 채로 띄워 사람이 직접 복사하게 한다. 부르는 쪽은 그대로 둔다.
+ */
 export async function copyText(text: string): Promise<void> {
-  await navigator.clipboard.writeText(text);
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      /* 아래 방식으로 */
+    }
+  }
+  if (copyPlainBySelection(text)) return;
+  window.prompt("자동 복사가 막혔습니다. 아래 글을 복사(⌘C / Ctrl+C)하세요.", text);
+}
+
+/** 보이지 않는 입력칸에 넣고 선택한 뒤 copy 명령. 평문 전용 */
+function copyPlainBySelection(text: string): boolean {
+  try {
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.setAttribute("readonly", "");
+    // 화면 밖으로. 아이폰은 글자가 16px 미만이면 확대하므로 크기를 준다
+    el.style.cssText = "position:fixed;left:-9999px;top:0;font-size:16px;";
+    document.body.appendChild(el);
+    el.select();
+    el.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    el.remove();
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 /**
