@@ -81,6 +81,13 @@ export type PhotoAnalysis = {
   observations: string[];
   /** 모델이 사진만으로는 확신하지 못한 것 */
   uncertain: string[];
+  /** 제품 후기에서 상세페이지 캡처를 따로 올렸을 때만. 판매처가 밝힌 사실 */
+  detail?: DetailFacts;
+};
+
+export type DetailFacts = {
+  productName: string;
+  facts: { label: string; value: string }[];
 };
 
 /*
@@ -242,6 +249,61 @@ export async function analyzePhotos(photos: InputPhoto[], kind: PostKind = "rest
       : null,
     observations: (parsed.observations ?? []).map((s: unknown) => String(s)).filter(Boolean),
     uncertain: (parsed.uncertain ?? []).map((s: unknown) => String(s)).filter(Boolean),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * 상세페이지 캡처 — 판매처가 밝힌 제품 사실
+ *
+ * 쇼핑몰 상세페이지는 자동 수집이 막혀 있고 내용도 대부분 긴 이미지라, 사람이 보면서 스펙
+ * 부분을 캡처해 올린다. 여기서는 **사실만**(용량·크기·구성품·기능) 뽑는다. 홍보 문구를 옮기면
+ * 네이버 유사문서에 걸리고, 내 경험처럼 읽히면 안 되므로 본문에는 "판매처 설명에 따르면" 으로 쓴다.
+ * 캡처는 분석에만 쓰고 블로그 사진 순서에는 넣지 않는다(남의 상세 이미지를 올리지 않게).
+ * ------------------------------------------------------------------ */
+
+const DETAIL_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    productName: { type: "string" },
+    facts: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: { label: { type: "string" }, value: { type: "string" } },
+        required: ["label", "value"],
+      },
+    },
+  },
+  required: ["productName", "facts"],
+};
+
+const DETAIL_PROMPT = `쇼핑몰 상품 상세페이지를 사람이 캡처한 이미지들이다. 이 제품에 대해 **판매처가 적어 둔 사실**만 뽑는다.
+
+- productName: 캡처에 적힌 정확한 제품명·모델명. 없으면 빈 문자열
+- facts: 항목(label)과 값(value) 쌍. 예) 용량 / 500ml, 무게 / 1.4kg, 구성품 / 본체·충전기·필터 2개,
+  소재 / 스테인리스, 연속 사용 시간 / 최대 40분, 세척 / 식기세척기 사용 가능, 인증 / KC 인증
+  값은 캡처에 적힌 수치·표현 그대로 짧게. 최대 15개, 구매 판단에 중요한 것부터
+- 넣지 않는 것: 홍보 문구·형용사("최고의", "프리미엄", "압도적인"), 할인·이벤트·쿠폰, 배송 안내,
+  다른 구매자 후기, 흐리거나 잘려서 확실히 못 읽은 값`;
+
+export async function analyzeDetailShots(images: InputPhoto[]): Promise<DetailFacts> {
+  if (!images.length) return { productName: "", facts: [] };
+  const d = await withContext("상세페이지 분석", () =>
+    openaiJson<DetailFacts>({
+      user: DETAIL_PROMPT,
+      images: images.map((p) => ({ mimeType: p.mimeType, data: p.data, label: `--- 캡처 ${p.index} ---` })),
+      schema: DETAIL_SCHEMA,
+      schemaName: "detail_facts",
+    }),
+  );
+  return {
+    productName: String(d.productName ?? "").trim(),
+    facts: (d.facts ?? [])
+      .map((f) => ({ label: String(f.label ?? "").trim(), value: String(f.value ?? "").trim() }))
+      .filter((f) => f.label && f.value)
+      .slice(0, 15),
   };
 }
 
@@ -893,6 +955,14 @@ ${o.visitedOn}
 
 # 검색 조사 (Gemini — 구글 검색)
 ${researchText(o, "정확한 제품명·모델명, 스펙, 구성품, 정가를 정보 박스와 설명에 쓴다.")}
+${a.detail?.facts.length ? `
+# 판매처 상세페이지에서 읽은 사실 (사용자가 캡처해 올림)
+${a.detail.productName ? `  제품명: ${a.detail.productName}\n` : ""}${a.detail.facts.map((f) => `  - ${f.label}: ${f.value}`).join("\n")}
+
+판매처가 밝힌 정보다. 정보 박스의 "주요 스펙" 과 본문 설명에 쓰되, 본문에서는 "판매처 설명에 따르면",
+"상세페이지를 보니" 처럼 **출처를 드러내는 말투**로 쓴다. 내가 재 보거나 겪은 것처럼 쓰지 않는다.
+사용자 경험(좋았던 점·아쉬운 점)과 부딪히면 사용자 경험을 따른다. 판매처 문장을 그대로 옮기지 않는다.
+검색 조사와 값이 다르면 판매처 값을 쓴다(지금 파는 모델의 값이다).` : ""}
 
 ${photoBlocks(a, "가격 (가격표·영수증)")}
 

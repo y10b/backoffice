@@ -112,7 +112,13 @@ type Analysis = {
   receipt: { items: string[]; total: number | null; people: number | null } | null;
   observations: string[];
   uncertain: string[];
+  /** 제품 후기에서 상세페이지 캡처를 올렸을 때만 */
+  detail?: { productName: string; facts: { label: string; value: string }[] };
 };
+
+/** 상세페이지 캡처는 세로로 길고 글자가 작다. 사진보다 크게 줄여 보내야 스펙 글씨가 읽힌다 */
+const DETAIL_EDGE = 2000;
+const MAX_DETAIL_SHOTS = 4;
 
 const STATUS_LABEL: Record<string, string> = {
   analyzed: "분석됨",
@@ -182,6 +188,8 @@ function VisitInner() {
   const [kind, setKind] = useState<Kind>("restaurant");
   const ui = KIND_UI[kind];
   const [files, setFiles] = useState<File[]>([]);
+  /* 제품 후기: 상세페이지 캡처. 분석에만 쓰고 블로그 사진으로는 쓰지 않는다 */
+  const [detailFiles, setDetailFiles] = useState<File[]>([]);
   const [placeQuery, setPlaceQuery] = useState("");
   const [visitedOn, setVisitedOn] = useState("");
   const [situation, setSituation] = useState("");
@@ -324,6 +332,7 @@ function VisitInner() {
     setWarnings([]);
     setDraft(null);
     setFiles([]);
+    setDetailFiles([]);
     setPhotos(null);
     setResearch(null);
     setResearchFailed(false);
@@ -373,6 +382,26 @@ function VisitInner() {
       setWarnings(d.warnings ?? []);
       // 분석 단계에서 이미 행이 생긴다. 목록을 바로 갱신해야 "지난 초안"에 보인다
       load();
+
+      // 상세페이지 캡처는 따로 보낸다. 사진과 한 요청에 넣으면 요청 크기 한도에 걸린다
+      if (kind === "product" && detailFiles.length) {
+        setBusy({ key: "analyze", msg: "상세페이지 캡처에서 스펙을 읽는 중…" });
+        const images = [];
+        for (let i = 0; i < detailFiles.length; i++) {
+          const { mimeType, data } = await shrink(detailFiles[i], DETAIL_EDGE);
+          images.push({ index: i + 1, mimeType, data });
+        }
+        const r = await (
+          await fetch("/api/visit/detail", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: d.id, images }),
+          })
+        ).json();
+        // 캡처 분석이 실패해도 사진 분석은 살아 있다. 알리기만 한다
+        if (r.ok) setAnalysis(r.analysis);
+        else setError(`상세페이지 캡처를 읽지 못했습니다 — ${r.error ?? "알 수 없는 오류"}. 사진만으로 계속할 수 있어요.`);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -530,6 +559,26 @@ function VisitInner() {
           )}
         </div>
 
+        {kind === "product" && (
+          <div className="field">
+            <label>
+              상세페이지 캡처 (선택, 최대 {MAX_DETAIL_SHOTS}장)
+              <Help text="쇼핑몰 상세페이지에서 스펙·구성품·특징 부분을 캡처해 올리세요. 판매처가 밝힌 사실만 뽑아 '판매처 설명에 따르면' 으로 씁니다. 캡처는 분석에만 쓰고 블로그 사진으로는 넣지 않습니다." />
+            </label>
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(e) => setDetailFiles(Array.from(e.target.files ?? []).slice(0, MAX_DETAIL_SHOTS))}
+            />
+            {detailFiles.length > 0 && (
+              <p className="hint" style={{ marginTop: 6 }}>
+                캡처 {detailFiles.length}장. 사진 분석이 끝난 뒤 따로 읽습니다.
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="row">
           <div className="field" style={{ flex: 1, minWidth: 220 }}>
             <label>{ui.what}</label>
@@ -609,7 +658,23 @@ function VisitInner() {
                 : "사진에서 못 읽음"}
           </p>
           <details style={{ marginBottom: 12 }}>
-            <summary>사진에서 읽은 것 자세히</summary>
+            <summary>
+              사진에서 읽은 것 자세히{analysis.detail?.facts.length ? ` · 상세페이지 사실 ${analysis.detail.facts.length}개` : ""}
+            </summary>
+            {analysis.detail && analysis.detail.facts.length > 0 && (
+              <>
+                <p className="hint">
+                  상세페이지에서 읽은 것{analysis.detail.productName ? ` — ${analysis.detail.productName}` : ""} (본문에는 &quot;판매처 설명에 따르면&quot; 으로 들어갑니다)
+                </p>
+                <ul>
+                  {analysis.detail.facts.map((f, i) => (
+                    <li key={i}>
+                      {f.label}: {f.value}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
             <ul>
               {analysis.photos.map((p) => (
                 <li key={p.index}>
