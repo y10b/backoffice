@@ -1,9 +1,10 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import Help from "@/components/Help";
+import SeasonalPanel from "@/components/SeasonalPanel";
+import ProductPanel from "@/components/ProductPanel";
 import PublishSteps from "@/components/PublishSteps";
 import ActionBar from "@/components/ActionBar";
 import StatusBadge, { type StatusTone } from "@/components/StatusBadge";
@@ -314,6 +315,12 @@ function VisitInner() {
     openPost(n);
   }, [postParam, openPost]);
 
+  // 예전 제철·상품 트렌드 주소는 ?kind= 로 이리 온다. 그 탭을 열어 둔다
+  const kindParam = params.get("kind");
+  useEffect(() => {
+    if (kindParam === "restaurant" || kindParam === "product" || kindParam === "daily") setKind(kindParam);
+  }, [kindParam]);
+
   // 제철 트렌드에서 "다녀왔어요" 로 오면 가게 이름을 채워 둔다
   const placeParam = params.get("place");
   useEffect(() => {
@@ -522,11 +529,24 @@ function VisitInner() {
       <h1 className="page-title">네이버 블로그</h1>
       <p className="page-desc">
         직접 다녀온 곳, 써 본 물건, 보낸 하루의 사진에서 시작합니다. 사진이 사실을 채우고,
-        몇 문항이 감상을 채웁니다. 어디 갈지 고민이면 <Link href="/eat">제철 트렌드</Link>에서 찾아보세요.
+        몇 문항이 감상을 채웁니다. 맛집 탭에서는 제철 트렌드, 제품 후기 탭에서는 상품 트렌드를 먼저 볼 수 있어요.
       </p>
 
       {error && <div className="alert">{error}</div>}
       {notice && <div className="toast">{notice}</div>}
+
+      {/*
+        무엇을 쓸지 고르는 앞단. 제철·상품 트렌드는 네이버 글감에만 쓰여서 따로 메뉴를 두지 않고
+        탭에 맞춰 여기 붙인다 — 맛집이면 뜨는 음식과 갈 만한 가게, 제품 후기면 뜨는 상품.
+      */}
+      {kind !== "daily" && !analysis && (
+        <details className="card trend-drawer">
+          <summary>
+            <strong>{kind === "restaurant" ? "제철 트렌드 — 요즘 뜨는 음식과 갈 만한 가게" : "상품 트렌드 — 요즘 뜨는 상품"}</strong>
+          </summary>
+          <div style={{ marginTop: 12 }}>{kind === "restaurant" ? <SeasonalPanel /> : <ProductPanel />}</div>
+        </details>
+      )}
 
       {/* ---------------- 1단계 ---------------- */}
       <div className="card">

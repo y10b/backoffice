@@ -271,10 +271,67 @@ export async function foodTrends(seeds: string[], extra: string[] = []): Promise
   return { trends, errors };
 }
 
-/** 그 음식을 파는 주변 가게. 위치를 주면 가까운 순, 없으면 동네 이름으로 찾는다 */
-export async function nearbyFood(food: string, area: string, near?: Near): Promise<Place[]> {
+export type RankedPlace = Place & {
+  /** 가게 이름(지점명 뗀 것)의 월간 검색수. 모르면 null */
+  searches: number | null;
+};
+
+/** "OO국밥 신림본점" → "OO국밥". 사람들은 지점명 없이 가게 이름으로 찾는다 */
+export function baseStoreName(name: string): string {
+  return name.replace(/\s*\(?[가-힣A-Za-z0-9]*(본점|직영점|점)\)?$/, "").trim() || name.trim();
+}
+
+/**
+ * 가게마다 검색광고 월간 검색수를 붙여 많이 찾는 순으로 줄 세운다. 검색수는 "지점명 뗀 가게 이름"
+ * 기준이다 — 체인이면 전국 검색수가 섞이니 화면에서 체인 여부를 같이 보고 고른다.
+ * 검색광고가 안 되면 원래 순서(카카오 정확도·거리 순) 그대로 돌려준다.
+ */
+export async function rankPlacesBySearch(places: Place[]): Promise<RankedPlace[]> {
+  const names = [...new Set(places.map((p) => baseStoreName(p.name)))];
+  let exact = new Map<string, number>();
+  try {
+    exact = (await monthlySearches(names)).exact;
+  } catch {
+    /* 검색수 없이 간다 */
+  }
+  const ranked = places.map((p) => ({ ...p, searches: exact.get(bare(baseStoreName(p.name))) ?? null }));
+  return ranked
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => (b.p.searches ?? -1) - (a.p.searches ?? -1) || a.i - b.i)
+    .map(({ p }) => p);
+}
+
+/** 그 음식을 파는 주변 가게. 위치를 주면 가까운 순, 없으면 동네 이름으로 찾고, 검색수 많은 순으로 */
+export async function nearbyFood(food: string, area: string, near?: Near): Promise<RankedPlace[]> {
   const query = near ? food : `${area} ${food}`.trim();
-  return searchPlaces(query, 10, near);
+  return rankPlacesBySearch(await searchPlaces(query, 10, near));
+}
+
+export type PipelineRow = { food: string; delta: number | null; searches: number | null; places: RankedPlace[] };
+
+/**
+ * 제철 트렌드 → 인기 가게. 지금 오르는 음식 상위 몇 개를 골라, 동네에서 그 음식을 파는 가게를
+ * 찾고 검색수 많은 순으로 붙인다. 이 목록에서 골라 다녀오면 된다 — 방문 후기는 다녀온 곳만 쓴다.
+ *
+ * 검색광고는 음식당 한두 번(가게 이름 10개 ÷ 5)이라 음식 다섯 개면 열 번 안팎이다.
+ */
+export async function trendPipeline(o: { foods?: number; perFood?: number } = {}): Promise<{ area: string; rows: PipelineRow[]; errors: string[] }> {
+  const settings = await foodSettings();
+  if (!settings.area) throw new Error("동네를 먼저 정하세요. 제철 트렌드의 '동네·음식 목록' 에서 저장합니다.");
+  const { trends, errors } = await foodTrends(settings.seeds, discoveredForTrends(settings));
+  const rising = trends.filter((t) => (t.delta ?? 0) > 0).slice(0, o.foods ?? 5);
+  const pick = rising.length ? rising : trends.slice(0, o.foods ?? 5);
+  const rows: PipelineRow[] = [];
+  for (const t of pick) {
+    try {
+      const places = await nearbyFood(t.food, settings.area);
+      rows.push({ food: t.food, delta: t.delta, searches: t.searches, places: places.slice(0, o.perFood ?? 5) });
+    } catch (e) {
+      errors.push(`${t.food}: ${(e as Error).message}`);
+      rows.push({ food: t.food, delta: t.delta, searches: t.searches, places: [] });
+    }
+  }
+  return { area: settings.area, rows, errors };
 }
 
 /* ------------------------------------------------------------------ *

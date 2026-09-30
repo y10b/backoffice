@@ -3,9 +3,9 @@ name: 매일 블로그 초안
 # !! 키워드 수집 2주 동안은 이 워크플로를 꺼둔다 (gh workflow disable). !!
 #    keywords.yml 로 모은 키워드를 보고 주제·시드를 다시 정한 뒤 켠다.
 #
-# 티스토리 초안 하루 한 편. 네이버는 방문 후기 레인이 담당하므로 여기서 만들지 않는다.
-# 예전에는 Gemini 키 수만큼 여러 편을 만들었는데
-# 사람이 매일 손질해 올릴 수 있는 양은 한 편이라 초안만 쌓였다.
+# 티스토리 초안 하루 두 편(2026-10 부터). 네이버는 방문 후기 레인이 담당하므로 여기서 만들지 않는다.
+# 예전에는 Gemini 키 수만큼 여러 편을 만들다가 한 편으로 줄였다(손질이 못 따라가 초안만 쌓였다).
+# 편 수는 DAILY_POST_COUNT 로 바꾼다.
 #
 # 예전에는 배포본의 /api/cron/daily-post 를 curl 로 불렀다. 이제 개발 로그 · 키워드 수집과
 # 같은 방식으로 러너에서 scripts/daily-post.mjs 를 직접 돌린다 — 배포 상태 · CRON_SECRET ·
@@ -28,8 +28,8 @@ concurrency:
 jobs:
   write:
     runs-on: ubuntu-latest
-    # 그라운딩 + 본문 생성 + 503 재시도. 기본 6시간은 과하다
-    timeout-minutes: 15
+    # 그라운딩 + 본문 생성 + 503 재시도, 두 편. 기본 6시간은 과하다
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +51,7 @@ jobs:
           NAVER_SEARCHAD_CUSTOMER_ID: ${{ secrets.NAVER_SEARCHAD_CUSTOMER_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          DAILY_POST_COUNT: "2"
         run: |
           set -euo pipefail
           if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
