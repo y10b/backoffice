@@ -440,6 +440,11 @@ export type Interview = {
   priceNote?: string;
   /** 산 이유와 전에 쓰던 것. 상위 제품 후기 18편 중 13편이 "산 계기" 장면으로 시작한다 */
   reason?: string;
+  /**
+   * 네이버 쇼핑 커넥트 링크(브랜드 커넥트에서 발급한 naver.me 등). 쇼핑 커넥트는 API 가 없어
+   * 사람이 발급해 붙여 넣는다. 있으면 첫 줄 대가성 문구와 링크 자리를 코드가 넣는다.
+   */
+  shopLink?: string;
 
   /* ---- 일상 ---- */
   /** 그날 기분·한 줄 감상 */
@@ -900,6 +905,11 @@ ${photoBlocks(a, "가격 (가격표·영수증)")}
   재구매 의사: ${iv.rebuy || "모름"}
   구매가·구매처: ${iv.priceNote?.trim() || "(없음)"}
   산 이유·전에 쓰던 것: ${iv.reason?.trim() || "(없음 — 도입은 사용 환경과 사진으로 짧게)"}
+${iv.shopLink ? `
+# 쇼핑 링크 자리
+본문에 \`[쇼핑 링크]\` 를 **딱 두 번** 한 줄로 따로 둔다 — 정보 박스 바로 아래, 그리고 "이런 분께 추천" 바로 아래.
+링크 주소는 쓰지 않는다(코드가 채운다). 대가성 문구도 쓰지 않는다(코드가 첫 줄에 넣는다).
+링크는 두 곳뿐이다. 여러 번 넣으면 광고 글로 보인다.` : ""}
 
 # 정보 박스 (도입 바로 다음에 이 형식 그대로. 값이 없는 줄은 뺀다)
 ---
@@ -1040,7 +1050,7 @@ export async function generateVisitDraft(o: GenerateVisitOptions): Promise<Visit
       retries: o.retries,
     }),
   );
-  const bodyMarkdown = String(d.bodyMarkdown ?? "");
+  const bodyMarkdown = withShopLink(String(d.bodyMarkdown ?? ""), o.interview.shopLink);
   const titles = (d.titles ?? []).map((t: unknown) => String(t).trim()).filter(Boolean);
 
   return {
@@ -1056,6 +1066,27 @@ export async function generateVisitDraft(o: GenerateVisitOptions): Promise<Visit
       .filter((p: { index: number }) => Number.isFinite(p.index)),
     needsCheck: (d.needsCheck ?? []).map((s: unknown) => String(s)).filter(Boolean),
   };
+}
+
+/** 네이버 쇼핑 커넥트 대가성 문구. 글 맨 첫 줄에 텍스트로 — 상위 노출 제휴 글에서 가장 흔하고 표시 기준에도 안전하다 */
+export const SHOP_CONNECT_DISCLOSURE = "이 포스팅은 네이버 쇼핑 커넥트 활동의 일환으로, 판매 발생 시 수수료를 제공받습니다.";
+
+/**
+ * 쇼핑 커넥트 링크를 본문에 박는다. 모델에 맡기면 문구를 빠뜨리거나 링크를 여러 번 넣는다.
+ *
+ * - 첫 줄에 대가성 문구(이미 있으면 그대로)
+ * - `[쇼핑 링크]` 자리를 "👉 제품 보러가기" 링크 줄로. 네이버 에디터에서 링크 카드로 바꾸기 쉽게 한 줄로 둔다
+ * - 자리가 하나도 없으면 맨 끝에 한 번
+ * 고쳐 쓰기로 다시 돌아도 문구·링크가 두 번 들어가지 않게 이미 있는지 먼저 본다.
+ */
+export function withShopLink(markdown: string, link?: string): string {
+  const url = link?.trim();
+  if (!url || !/^https:\/\/\S+$/.test(url)) return markdown.replace(/^.*\[쇼핑 링크\].*$/gm, "").replace(/\n{3,}/g, "\n\n");
+  const line = `👉 [제품 보러가기](${url})`;
+  let out = markdown.replace(/^.*\[쇼핑 링크\].*$/gm, line);
+  if (!out.includes(url)) out = `${out.trimEnd()}\n\n${line}\n`;
+  if (!out.includes(SHOP_CONNECT_DISCLOSURE)) out = `${SHOP_CONNECT_DISCLOSURE}\n\n${out.trimStart()}`;
+  return out;
 }
 
 /** 어느 단계에서 실패했는지 오류 앞에 붙인다. 두 경로가 같은 모양으로 알리게 한 곳에 둔다 */

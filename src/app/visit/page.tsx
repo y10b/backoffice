@@ -97,7 +97,7 @@ type VisitPost = {
     | (Partial<
         Record<
           | "company" | "mealTime" | "memorable" | "revisit" | "downside" | "waiting" | "seat"
-          | "usagePeriod" | "usageEnv" | "recommendFor" | "rebuy" | "priceNote" | "mood" | "reason",
+          | "usagePeriod" | "usageEnv" | "recommendFor" | "rebuy" | "priceNote" | "mood" | "reason" | "shopLink",
           string
         >
       > & {
@@ -209,6 +209,8 @@ function VisitInner() {
   const [rebuy, setRebuy] = useState("응");
   const [priceNote, setPriceNote] = useState("");
   const [reason, setReason] = useState("");
+  /* 네이버 쇼핑 커넥트 링크. API 가 없어 브랜드 커넥트에서 발급해 붙여 넣는다 */
+  const [shopLink, setShopLink] = useState("");
   /* 일상 */
   const [mood, setMood] = useState("");
 
@@ -282,6 +284,7 @@ function VisitInner() {
         setRebuy(iv.rebuy || "응");
         setPriceNote(iv.priceNote ?? "");
         setReason(iv.reason ?? "");
+        setShopLink(iv.shopLink ?? "");
         setMood(iv.mood ?? "");
         window.scrollTo({ top: 0, behavior: "smooth" });
       } else if (d.error) {
@@ -337,6 +340,7 @@ function VisitInner() {
     setRecommendFor("");
     setPriceNote("");
     setReason("");
+    setShopLink("");
     setMood("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -394,7 +398,7 @@ function VisitInner() {
           situation,
           interview: {
             company, mealTime, memorable, revisit, downside, waiting, seat, sponsored,
-            usagePeriod, usageEnv, recommendFor, rebuy, priceNote, mood, reason,
+            usagePeriod, usageEnv, recommendFor, rebuy, priceNote, mood, reason, shopLink,
           },
           revision,
         }),
@@ -664,6 +668,19 @@ function VisitInner() {
                 </label>
                 <input placeholder="유선청소기 꺼내기 귀찮아서 한 달에 한 번 청소함" value={reason} onChange={(e) => setReason(e.target.value)} />
               </div>
+              <div className="field">
+                <label>
+                  네이버 쇼핑 커넥트 링크 (선택)
+                  <Help text="브랜드 커넥트(creator.naver.com) → 쇼핑 커넥트에서 이 상품 링크를 발급해 붙여 넣으세요. 넣으면 본문 첫 줄에 대가성 문구가, 정보 박스 아래와 추천 대상 아래에 링크가 한 번씩 들어갑니다. 네이버 에디터에 붙인 뒤 링크 줄을 링크 카드로 바꾸면 상위 제휴 글과 같은 모양이 됩니다." />
+                </label>
+                <input
+                  className="mono"
+                  placeholder="https://naver.me/..."
+                  value={shopLink}
+                  onChange={(e) => setShopLink(e.target.value.trim())}
+                />
+                {shopLink && !/^https:\/\/\S+$/.test(shopLink) && <p className="hint warn-text">https 로 시작하는 주소여야 합니다</p>}
+              </div>
             </>
           )}
 
@@ -887,6 +904,7 @@ function VisitInner() {
               <li>가격에 &quot;방문 당시&quot; 를 밝혔는가</li>
               <li>가게가 아직 영업 중인지 확인했는가</li>
               <li>체험단·협찬이면 대가성 문구를 넣었는가</li>
+              <li>쇼핑 커넥트 링크 줄을 에디터에서 링크 카드로 바꿨는가 (링크는 두 곳만)</li>
             </ul>
           </details>
 

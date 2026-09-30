@@ -51,6 +51,8 @@ export async function POST(req: Request) {
       priceNote: String(iv.priceNote ?? "").trim(),
       mood: String(iv.mood ?? "").trim(),
       reason: String(iv.reason ?? "").trim(),
+      // https 주소만. 그 밖의 값은 빈 문자열로 두어 링크를 넣지 않는다
+      shopLink: /^https:\/\/\S+$/.test(String(iv.shopLink ?? "").trim()) ? String(iv.shopLink).trim() : "",
     };
 
     // 화면이 상황을 고쳐 보냈으면 그것을 쓴다. 안 보냈으면 분석 때 넣은 값 그대로
