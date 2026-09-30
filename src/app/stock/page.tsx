@@ -26,7 +26,7 @@ import {
 import { DEFAULT_UPSCALE } from "@/lib/upscale";
 import SheetTool from "./SheetTool";
 import { finishPiece, sizeLabel, upscaleFactor, UpscaleControls } from "./Upscale";
-import { miriCsv, type MiriRow } from "@/lib/miriCsv";
+import { mergeMiriTemplate, miriCsv, parseCsv, type MiriRow } from "@/lib/miriCsv";
 
 /**
  * AI 스톡 이미지 — 부수입 갈래.
@@ -764,6 +764,75 @@ export default function StockPage() {
           )}
         </>
       )}
+
+      <MiriFix />
     </div>
+  );
+}
+
+/**
+ * 미리캔버스 CSV 등록이 실패할 때. 디자인허브가 내려준 양식에 우리 제목·키워드를 채워 넣는다.
+ * 양식의 uniqueId·contentType 을 그대로 쓰니 열 순서·표기 문제로 실패하지 않는다.
+ */
+function MiriFix() {
+  const [tpl, setTpl] = useState<File | null>(null);
+  const [ours, setOurs] = useState<File | null>(null);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  async function run() {
+    setMsg("");
+    setErr("");
+    try {
+      if (!tpl || !ours) return;
+      const mine = parseCsv(await ours.text());
+      const head = mine[0]?.map((h) => h.trim().toLowerCase()) ?? [];
+      const at = (h: string) => head.indexOf(h.toLowerCase());
+      if (at("filename") < 0) throw new Error("우리 ZIP 의 miricanvas.csv 가 아닌 것 같습니다 (fileName 열 없음).");
+      const rows: MiriRow[] = mine.slice(1).map((r) => ({
+        fileName: r[at("filename")] ?? "",
+        elementName: r[at("elementname")] ?? "",
+        keywords: (r[at("keywords")] ?? "").split(",").map((k) => k.trim()).filter(Boolean),
+      }));
+      const res = mergeMiriTemplate(await tpl.text(), rows);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([res.csv], { type: "text/csv;charset=utf-8" }));
+      a.download = "miricanvas-filled.csv";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      setMsg(
+        `${res.total}행 중 ${res.filled}행을 채웠습니다.` +
+          (res.missing.length ? ` 파일명이 안 맞은 ${res.missing.length}행: ${res.missing.slice(0, 5).join(", ")}${res.missing.length > 5 ? " …" : ""}` : ""),
+      );
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
+
+  return (
+    <details className="card" style={{ marginTop: 16 }}>
+      <summary>
+        <strong>미리캔버스 CSV 등록이 실패할 때</strong>
+      </summary>
+      <p className="hint" style={{ marginTop: 10 }}>
+        디자인허브 제출 예정 화면 → CSV 업로드 → <strong>업로드된 모든 콘텐츠 CSV 다운로드</strong> 로 받은 파일과, 우리 ZIP 의
+        miricanvas.csv 를 올리면 파일명으로 짝을 맞춰 채운 CSV 를 만들어 줍니다. 디자인허브가 넣어 준 uniqueId·콘텐츠 타입을 그대로 씁니다.
+      </p>
+      <div className="row">
+        <div className="field" style={{ flex: 1, minWidth: 220 }}>
+          <label>디자인허브에서 받은 CSV</label>
+          <input type="file" accept=".csv,text/csv" onChange={(e) => setTpl(e.target.files?.[0] ?? null)} />
+        </div>
+        <div className="field" style={{ flex: 1, minWidth: 220 }}>
+          <label>우리 ZIP 의 miricanvas.csv</label>
+          <input type="file" accept=".csv,text/csv" onChange={(e) => setOurs(e.target.files?.[0] ?? null)} />
+        </div>
+      </div>
+      <button className="primary" onClick={run} disabled={!tpl || !ours}>
+        채운 CSV 받기
+      </button>
+      {msg && <p className="hint" style={{ marginTop: 8 }}>{msg}</p>}
+      {err && <div className="alert" style={{ marginTop: 8 }}>{err}</div>}
+    </details>
   );
 }
