@@ -10,7 +10,7 @@ import {
   EXPRESSIONS,
   FPS,
   HEIGHT,
-  INTERVIEW,
+  MAX_FOLLOWUPS,
   LENGTHS,
   MOODS,
   VOICES,
@@ -21,6 +21,8 @@ import {
   type ExpressionKey,
   type LengthKey,
   type ReelScript,
+  type StoryQA,
+  plainText,
 } from "@/lib/reelScript";
 import { Reel } from "@/remotion/Reel";
 
@@ -37,7 +39,6 @@ import { Reel } from "@/remotion/Reel";
  */
 
 type Character = { look: string; expressions: Partial<Record<ExpressionKey, string>> } | null;
-type ChatItem = { from: "bot" | "me"; text: string };
 
 const DRAFT_KEY = "reels:draft";
 /** 표정 한 장의 긴 변. 영상에서 520px 로 쓰니 이 정도면 충분하고, 설정 표에 넣기에도 가볍다 */
@@ -49,8 +50,14 @@ export default function ReelsPage() {
   const [busy, setBusy] = useState<{ key: string; msg: string } | null>(null);
 
   const [character, setCharacter] = useState<Character>(null);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [step, setStep] = useState(0);
+  /*
+   * 썰 풀기. 질문을 하드코딩하지 않는다 — 사람이 상황을 쭉 적고(story), AI 가 빠진 것만 되묻는다(followups).
+   * pending 은 지금 대답을 기다리는 질문, ready 는 "이제 대본을 만들어도 된다".
+   */
+  const [story, setStory] = useState("");
+  const [followups, setFollowups] = useState<StoryQA[]>([]);
+  const [pending, setPending] = useState("");
+  const [ready, setReady] = useState(false);
   const [mood, setMood] = useState<string>("웃김");
   const [length, setLength] = useState<LengthKey>("normal");
   const [script, setScript] = useState<ReelScript | null>(null);
@@ -98,8 +105,10 @@ export default function ReelsPage() {
     try {
       const d = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "null");
       if (d) {
-        setAnswers(d.answers ?? {});
-        setStep(d.step ?? 0);
+        setStory(d.story ?? "");
+        setFollowups(d.followups ?? []);
+        setPending(d.pending ?? "");
+        setReady(Boolean(d.ready));
         setScript(d.script ?? null);
         if (d.mood) setMood(d.mood);
         if (d.length) setLength(d.length);
@@ -111,11 +120,11 @@ export default function ReelsPage() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ answers, step, script, mood, length }));
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ story, followups, pending, ready, script, mood, length }));
     } catch {
       /* 저장 못 해도 지금 화면에는 있다 */
     }
-  }, [answers, step, script, mood, length]);
+  }, [story, followups, pending, ready, script, mood, length]);
 
   function flash(msg: string) {
     setNotice(msg);
@@ -124,11 +133,46 @@ export default function ReelsPage() {
 
   function resetAll() {
     Object.values(audio).forEach((u) => URL.revokeObjectURL(u));
-    setAnswers({});
-    setStep(0);
+    setStory("");
+    setFollowups([]);
+    setPending("");
+    setReady(false);
     setScript(null);
     setAudio({});
     setAudioFrames({});
+  }
+
+  /** 다음에 물을 것 하나를 받는다. 충분하면 ready */
+  async function askNext(nextFollowups: StoryQA[]) {
+    setError("");
+    setBusy({ key: "followup", msg: "읽고 있어요…" });
+    try {
+      const d = await (
+        await fetch("/api/reels/followup", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ story, followups: nextFollowups }),
+        })
+      ).json();
+      if (!d.ok) throw new Error(d.error ?? "다음 질문을 못 받았습니다.");
+      if (d.done || nextFollowups.length >= MAX_FOLLOWUPS) {
+        setPending("");
+        setReady(true);
+      } else {
+        setPending(d.question);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function answerPending(a: string) {
+    const next = [...followups, { q: pending, a: a.trim() }];
+    setFollowups(next);
+    setPending("");
+    askNext(next);
   }
 
   async function makeScript() {
@@ -139,7 +183,7 @@ export default function ReelsPage() {
         await fetch("/api/reels/script", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ answers, mood, length }),
+          body: JSON.stringify({ story, followups, mood, length }),
         })
       ).json();
       if (!d.ok) throw new Error(d.error ?? "대본을 못 만들었습니다.");
@@ -169,14 +213,15 @@ export default function ReelsPage() {
         const res = await fetch("/api/reels/tts", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text: line.text, voice: line.speaker === "other" ? voiceOther : voiceMe, think: line.mode === "think" }),
+          // 강조 표시(**)는 읽지 않는다
+          body: JSON.stringify({ text: plainText(line.text), voice: line.speaker === "other" ? voiceOther : voiceMe, think: line.mode === "think" }),
         });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "음성을 못 만들었습니다.");
         const blob = await res.blob();
         const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
         nextAudio[key] = URL.createObjectURL(blob);
-        // 끝에 0.25초 여유 — 말이 끝나자마자 자막이 사라지면 급해 보인다
-        nextFrames[key] = Math.ceil((buf.duration + 0.25) * FPS);
+        // 끝에 0.1초만 — 쇼츠는 문장 사이가 촘촘해야 이탈이 적다(조사: 문장 간 0.03~0.15초)
+        nextFrames[key] = Math.ceil((buf.duration + 0.1) * FPS);
       }
       Object.values(audio).forEach((u) => URL.revokeObjectURL(u));
       setAudio(nextAudio);
@@ -274,11 +319,25 @@ export default function ReelsPage() {
       <div className="card">
         <h2>
           1. 썰 풀기
-          <Help text="한 번에 하나씩 물어봅니다. 실제로 한 말과 속으로 한 생각을 따로 적을수록 웃기고, 사소한 디테일이 많을수록 주작 소리를 덜 듣습니다. 실명·회사·가게 이름은 대본에서 가명으로 바뀝니다." />
+          <Help text="그때 상황을 편하게 쭉 적으면, 빠진 것만 한두 개씩 되물어요(최대 5번). 상대가 실제로 한 말과 내 속마음을 적을수록 웃기고, 사소한 디테일이 많을수록 주작 소리를 덜 듣습니다. 실명·회사·가게 이름은 대본에서 가명으로 바뀝니다." />
         </h2>
-        <InterviewChat answers={answers} setAnswers={setAnswers} step={step} setStep={setStep} />
+        <StoryChat
+          story={story}
+          setStory={setStory}
+          followups={followups}
+          pending={pending}
+          ready={ready}
+          busy={busy?.key === "followup"}
+          disabled={isBusy}
+          onStart={() => askNext([])}
+          onAnswer={answerPending}
+          onSkipAll={() => {
+            setPending("");
+            setReady(true);
+          }}
+        />
 
-        {step >= INTERVIEW.length && (
+        {ready && (
           <>
             <div className="row" style={{ marginTop: 12 }}>
               <div className="field">
@@ -622,95 +681,145 @@ function CharacterCard({
 }
 
 /* ------------------------------------------------------------------ *
- * 인터뷰 — 카톡 티키타카
+ * 썰 풀기 — 쭉 적고, 빠진 것만 되묻는다
  * ------------------------------------------------------------------ */
 
-function InterviewChat({
-  answers,
-  setAnswers,
-  step,
-  setStep,
+function StoryChat({
+  story,
+  setStory,
+  followups,
+  pending,
+  ready,
+  busy,
+  disabled,
+  onStart,
+  onAnswer,
+  onSkipAll,
 }: {
-  answers: Record<string, string>;
-  setAnswers: (a: Record<string, string>) => void;
-  step: number;
-  setStep: (n: number) => void;
+  story: string;
+  setStory: (s: string) => void;
+  followups: StoryQA[];
+  pending: string;
+  ready: boolean;
+  busy: boolean;
+  disabled: boolean;
+  onStart: () => void;
+  onAnswer: (a: string) => void;
+  onSkipAll: () => void;
 }) {
   const [input, setInput] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
-  const q = INTERVIEW[step];
+  const started = followups.length > 0 || Boolean(pending) || ready;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [step]);
+  }, [followups.length, pending, ready]);
 
-  const log: ChatItem[] = [];
-  INTERVIEW.slice(0, step).forEach((qq) => {
-    log.push({ from: "bot", text: qq.ask });
-    log.push({ from: "me", text: answers[qq.id]?.trim() || "(건너뜀)" });
-  });
-  if (q) log.push({ from: "bot", text: q.ask });
-  else log.push({ from: "bot", text: "좋아, 다 들었어! 분위기랑 길이 고르고 대본 만들어 보자 🙌" });
-
-  function answer(text: string) {
-    if (!q) return;
-    setAnswers({ ...answers, [q.id]: text.trim() });
-    setInput("");
-    setStep(step + 1);
+  // 아직 시작 전: 쭉 적는 칸
+  if (!started) {
+    return (
+      <div className="talk">
+        <div className="talk-log">
+          <div className="talk-row bot">
+            <div className="talk-avatar">썰</div>
+            <div className="talk-bubble">
+              그때 무슨 일 있었는지 편하게 쭉 적어줘! 누가 뭐라고 했는지, 너는 속으로 뭐라고 생각했는지까지 적으면 최고 🙌
+            </div>
+          </div>
+        </div>
+        <div className="talk-input">
+          <textarea
+            rows={7}
+            style={{ width: "100%" }}
+            placeholder={"예) 입사 3일차 월요일 아침에 동기한테 팀장님 욕을 카톡으로 보낸다는 게 팀 단톡방에 보냄.\n팀장님이 조용히 부르더니 \"○○씨, 이거 나한테 한 말이야?\" 하심.\n입으로는 \"아 아닙니다!\" 했는데 속으로는 '끝났다' 싶었음…"}
+            value={story}
+            onChange={(e) => setStory(e.target.value)}
+          />
+          <div className="row" style={{ alignItems: "center", marginTop: 8 }}>
+            <button className="primary" onClick={onStart} disabled={disabled || story.trim().length < 20}>
+              {busy && <span className="spinner" />}다 적었어
+            </button>
+            <span className="hint">{story.trim().length < 20 ? "조금만 더 적어줘 (20자 이상)" : `${story.trim().length}자`}</span>
+          </div>
+        </div>
+      </div>
+    );
   }
+
+  const send = () => {
+    if (!input.trim()) return;
+    onAnswer(input);
+    setInput("");
+  };
 
   return (
     <div className="talk">
       <div className="talk-log">
-        {log.map((m, i) => (
-          <div key={i} className={`talk-row ${m.from}`}>
-            {m.from === "bot" && <div className="talk-avatar">썰</div>}
-            <div className="talk-bubble">{m.text}</div>
+        <div className="talk-row me">
+          <div className="talk-bubble">{story}</div>
+        </div>
+        {followups.map((f, i) => (
+          <div key={i}>
+            <div className="talk-row bot">
+              <div className="talk-avatar">썰</div>
+              <div className="talk-bubble">{f.q}</div>
+            </div>
+            <div className="talk-row me" style={{ marginTop: 8 }}>
+              <div className="talk-bubble">{f.a || "(건너뜀)"}</div>
+            </div>
           </div>
         ))}
+        {pending && (
+          <div className="talk-row bot">
+            <div className="talk-avatar">썰</div>
+            <div className="talk-bubble">{pending}</div>
+          </div>
+        )}
+        {busy && (
+          <div className="talk-row bot">
+            <div className="talk-avatar">썰</div>
+            <div className="talk-bubble">
+              <span className="spinner" />
+            </div>
+          </div>
+        )}
+        {ready && !busy && (
+          <div className="talk-row bot">
+            <div className="talk-avatar">썰</div>
+            <div className="talk-bubble">좋아, 이 정도면 충분해! 분위기랑 길이 고르고 대본 만들어 보자 🙌</div>
+          </div>
+        )}
         <div ref={endRef} />
       </div>
-      {q && (
+
+      {pending && !busy && (
         <div className="talk-input">
-          {q.chips && (
-            <div className="row" style={{ marginBottom: 8 }}>
-              {q.chips.map((c) => (
-                <button key={c} className="small" onClick={() => (q.chipsPrefix ? setInput(`${c}: `) : answer(c))}>
-                  {c}
-                </button>
-              ))}
-            </div>
-          )}
           <div className="row" style={{ alignItems: "flex-end" }}>
             <textarea
               rows={2}
               style={{ flex: 1, minWidth: 200 }}
-              placeholder={q.example ? `예) ${q.example}` : "편하게 적어줘"}
+              placeholder="편하게 적어줘"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 // 한글 조합 중 엔터는 글자를 확정하는 것이지 보내는 게 아니다
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && input.trim()) {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  answer(input);
+                  send();
                 }
               }}
             />
-            <button className="primary" onClick={() => answer(input)} disabled={!input.trim()}>
+            <button className="primary" onClick={send} disabled={!input.trim()}>
               보내기
             </button>
-            {q.optional && (
-              <button className="ghost" onClick={() => answer("")}>
-                건너뛰기
-              </button>
-            )}
+            <button className="ghost" onClick={() => onAnswer("")}>
+              기억 안 나
+            </button>
           </div>
+          <button className="ghost small" onClick={onSkipAll} style={{ marginTop: 6 }}>
+            그만 묻고 대본 만들기 →
+          </button>
         </div>
-      )}
-      {step > 0 && (
-        <button className="ghost small" onClick={() => setStep(step - 1)} style={{ marginTop: 8 }}>
-          ← 이전 질문 다시 답하기
-        </button>
       )}
     </div>
   );

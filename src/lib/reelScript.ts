@@ -51,42 +51,25 @@ export function characterSheetPrompt(look: string): string {
  * 인터뷰
  * ------------------------------------------------------------------ */
 
-export type InterviewQuestion = {
-  id: string;
-  ask: string;
-  /** 누르면 그대로 답이 되는 버튼 */
-  chips?: string[];
-  /** 버튼이 답이 아니라 머리말이다 — 누르면 입력칸에 "회사: " 처럼 채우고 이어 쓰게 한다 */
-  chipsPrefix?: boolean;
-  /** 건너뛰어도 되는 질문 */
-  optional?: boolean;
-  /** 입력칸 예시 */
-  example?: string;
-};
-
 /**
- * 카톡 티키타카 인터뷰. 한 번에 하나씩, 3~5분이면 끝나게.
- *
- * 핵심은 "실제로 한 말" 과 "속으로 한 생각" 을 따로 받는 것 — 이 대비가 썰의 웃음 포인트이고,
- * 사소하고 구체적인 디테일일수록 주작 소리를 덜 듣는다(조사: 소박한 실화가 신뢰를 얻는다).
+ * 좋은 썰에 필요한 재료. 질문을 하드코딩하지 않는다 — 사람이 상황을 쭉 적으면, AI 가 이 목록과
+ * 대조해 **빠진 것만** 되묻는다. 조사(썰툰 계정 15곳)에서 공통으로 보인 재료다.
  */
-export const INTERVIEW: InterviewQuestion[] = [
-  { id: "topic", ask: "요즘 제일 어이없었던 일, 한 줄로 말해줘!", chips: ["회사", "자취", "연애", "알바", "가족"], chipsPrefix: true, example: "신입 때 팀장님 앞에서 메일 전체답장 누름" },
-  { id: "whenWhere", ask: "그게 언제, 어디서였어?", example: "월요일 아침 9시, 사무실" },
-  { id: "cast", ask: "등장인물은 누구누구야? 한 단어씩 소개해줘", example: "팀장님-말 느림, 동기-눈치 빠름" },
-  { id: "myState", ask: "그때 너는 어떤 상태였어?", chips: ["피곤", "설렘", "쫄아있음", "배고픔", "멍함"] },
-  { id: "goal", ask: "원래 뭘 하려던 참이었어?", example: "동기한테만 몰래 투덜대려고 했음" },
-  { id: "firstLine", ask: "처음 일이 꼬인 순간, 상대가 실제로 한 말 그대로 적어줘", example: "○○씨, 이거 나한테 보낸 거 맞아?" },
-  { id: "sayThink", ask: "그때 너는 입으로 뭐라고 했고, 속으로는 뭐라고 생각했어?", example: "입: 아 네 확인해볼게요! / 속: 끝났다" },
-  { id: "worst", ask: "일이 더 커진 순간 있어? 제일 최악이었던 장면은?", optional: true },
-  { id: "chat", ask: "혹시 그 대화가 카톡으로도 오갔어? 기억나는 메시지 3~6개 적어줘", chips: ["없음"], optional: true, example: "동기: 너 괜찮냐 / 나: 아니 / 동기: ㅋㅋㅋㅋ" },
-  { id: "twist", ask: "결말에 예상 못 한 반전이 있었어?", chips: ["없음"], optional: true },
-  { id: "lastLine", ask: "마지막에 누가 무슨 말 했어? 그 한마디가 영상 마지막 대사야" },
-  { id: "feeling", ask: "지금 돌아보면 한 줄 소감은?", example: "그 뒤로 전체답장 버튼 가려놓고 삼" },
-  { id: "hook", ask: "이 얘기 친구한테 할 때 첫 마디가 뭐야?", example: "야 나 입사 3일 만에 팀장님한테 욕 보냄" },
-  { id: "tagWho", ask: "이거 보고 누가 '이거 너잖아' 하고 태그할 것 같아?", chips: ["신입", "직장인", "자취러", "커플", "알바생"], optional: true },
-  { id: "safety", ask: "실명·회사·가게 이름은 가명으로 바꿀게. 더 바꾸고 싶은 디테일 있어?", chips: ["없음"], optional: true },
-];
+export const STORY_CHECKLIST = [
+  { id: "whenWhere", label: "언제·어디서", why: "장소 자막과 첫 장면" },
+  { id: "cast", label: "누가 나오는지 (직급·관계)", why: "이름표 말풍선" },
+  { id: "stakes", label: "원래 하려던 것, 틀어지면 곤란했던 것", why: "긴장감" },
+  { id: "theirLine", label: "상대가 실제로 한 말 (그대로)", why: "대사 장면의 핵심" },
+  { id: "sayThink", label: "내가 입으로 한 말과 속으로 한 생각", why: "겉말/속마음 대비가 웃음 포인트" },
+  { id: "worst", label: "제일 최악이었던 순간", why: "악화 장면" },
+  { id: "ending", label: "어떻게 끝났는지, 마지막 한마디", why: "펀치라인" },
+  { id: "detail", label: "사소하고 구체적인 디테일 (시간·물건·숫자)", why: "주작 소리를 덜 듣는다" },
+] as const;
+
+/** 되묻기 최대 횟수. 3~5분 안에 끝나야 출퇴근길에 쓴다 */
+export const MAX_FOLLOWUPS = 5;
+
+export type StoryQA = { q: string; a: string };
 
 export const MOODS = ["웃김", "억울", "설렘", "소름"] as const;
 export const LENGTHS = [
@@ -124,7 +107,12 @@ export type ReelScene = {
   chatWith: string;
   chat: ChatMessage[];
   effect: "none" | "shake" | "zoom" | "flash";
+  /** 화면에 크게 튀어나오는 효과음 글자("쾅", "띠용"). 없으면 빈 문자열. 한 편에 2~4번만 */
+  sfx: string;
 };
+
+/** 강조 표시(**단어**)를 뗀 글. 음성과 길이 계산은 이걸로 한다 */
+export const plainText = (t: string) => t.replace(/\*\*/g, "");
 
 export type ReelScript = {
   /** 영상 내내 위에 떠 있는 제목. "입사 3일 만에 팀장님한테 욕 보낸 썰" */
@@ -154,7 +142,7 @@ export const lineKey = (scene: number, line: number) => `${scene}-${line}`;
  * 읽는 속도보다 조금 길게 두어야 한 번에 읽힌다.
  */
 export function silentFrames(text: string): number {
-  return Math.round(Math.max(1.2, text.replace(/\s/g, "").length * 0.12) * FPS);
+  return Math.round(Math.max(1.2, plainText(text).replace(/\s/g, "").length * 0.12) * FPS);
 }
 
 /** 메신저 말풍선 하나가 뜨는 간격 */

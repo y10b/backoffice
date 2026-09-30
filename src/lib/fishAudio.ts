@@ -47,7 +47,8 @@ export async function fishSpeak(o: { text: string; voice: string; think?: boolea
       reference_id: o.voice,
       format: "mp3",
       mp3_bitrate: 128,
-      prosody: { speed: 1.05, volume: o.think ? -6 : 0 },
+      // 쇼츠 TTS 는 1.1~1.2배가 표준이다. 편집툴에서 배속하면 소리가 뭉개지니 엔진에서 빠르게 만든다
+      prosody: { speed: 1.2, volume: o.think ? -6 : 0 },
     }),
     cache: "no-store",
   });

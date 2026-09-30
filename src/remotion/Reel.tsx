@@ -2,7 +2,11 @@
 
 import { AbsoluteFill, Img, Sequence, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { Audio } from "@remotion/media";
-import { loadFont } from "@remotion/google-fonts/NotoSansKR";
+import { loadFont as loadNoto } from "@remotion/google-fonts/NotoSansKR";
+import { loadFont as loadBlackHan } from "@remotion/google-fonts/BlackHanSans";
+import { loadFont as loadJua } from "@remotion/google-fonts/Jua";
+import { loadFont as loadGaegu } from "@remotion/google-fonts/Gaegu";
+import { loadFont as loadBagel } from "@remotion/google-fonts/BagelFatOne";
 import {
   CHAT_STEP,
   buildTimeline,
@@ -22,7 +26,39 @@ import {
  * 핵심 자막·말풍선은 y 300~1450, x 60~930.
  */
 
-const { fontFamily } = loadFont("normal", { weights: ["700", "900"], ignoreTooManyRequestsWarning: true });
+/*
+ * 글꼴은 썰툰·쇼츠에서 많이 쓰는 조합(2026-10 조사). 전부 OFL 이라 영상에 넣어도 된다.
+ *   제목  검은고딕(Black Han Sans)   자막·말풍선  주아(Jua)   속마음  개구(Gaegu, 손글씨)
+ *   효과음 베이글(Bagel Fat One)     메신저 화면  Noto Sans KR
+ */
+const opt = { ignoreTooManyRequestsWarning: true } as const;
+const NOTO = loadNoto("normal", { weights: ["500", "700"], ...opt }).fontFamily;
+const TITLE_FONT = loadBlackHan("normal", opt).fontFamily;
+const CAPTION_FONT = loadJua("normal", opt).fontFamily;
+const THINK_FONT = loadGaegu("normal", { weights: ["700"], ...opt }).fontFamily;
+const SFX_FONT = loadBagel("normal", opt).fontFamily;
+const fontFamily = CAPTION_FONT;
+
+/** 강조색. 대본에서 **단어** 로 감싼 곳만 */
+const HIGHLIGHT = "#FFE14D";
+
+/** "**단어**" 를 강조 조각으로 나눈다 */
+function Emph({ text, color }: { text: string; color: string }) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.startsWith("**") && p.endsWith("**") ? (
+          <span key={i} style={{ color }}>
+            {p.slice(2, -2)}
+          </span>
+        ) : (
+          <span key={i}>{p}</span>
+        ),
+      )}
+    </>
+  );
+}
 
 export type ReelProps = {
   script: ReelScript;
@@ -45,10 +81,14 @@ const PALETTE: Record<string, [string, string]> = {
 const INK = "#1B1B1F";
 
 /** 흰 글자에 두르는 검은 외곽선. 16방향 그림자를 겹쳐 두께 약 7px 로 만든다 */
-const OUTLINE = Array.from({ length: 16 }, (_, i) => {
-  const a = (i / 16) * Math.PI * 2;
-  return `${(Math.cos(a) * 7).toFixed(1)}px ${(Math.sin(a) * 7).toFixed(1)}px 0 #111`;
-}).join(", ");
+const ring = (r: number) =>
+  Array.from({ length: 16 }, (_, i) => {
+    const a = (i / 16) * Math.PI * 2;
+    return `${(Math.cos(a) * r).toFixed(1)}px ${(Math.sin(a) * r).toFixed(1)}px 0 #111`;
+  }).join(", ");
+const OUTLINE = ring(6);
+/** 효과음 글자는 더 두껍게 */
+const OUTLINE_THICK = ring(10);
 
 export function Reel({ script, audioFrames, audio, character }: ReelProps) {
   const { scenes } = buildTimeline(script, audioFrames);
@@ -81,14 +121,14 @@ function TitleBar({ title }: { title: string }) {
         borderRadius: 36,
         background: "rgba(20,20,24,0.88)",
         color: "#fff",
-        fontSize: 54,
-        fontWeight: 900,
-        lineHeight: 1.25,
+        fontFamily: TITLE_FONT,
+        fontSize: 60,
+        lineHeight: 1.2,
         textAlign: "center",
         wordBreak: "keep-all",
       }}
     >
-      {title}
+      {title.replace(/\*\*/g, "")}
     </div>
   );
 }
@@ -127,10 +167,10 @@ function SceneView({
           src={character![scene.expression as ExpressionKey]!}
           style={{
             position: "absolute",
-            left: 540 - 260,
-            top: 900,
-            width: 520,
-            height: 520,
+            left: 540 - 270,
+            top: 760,
+            width: 540,
+            height: 540,
             objectFit: "contain",
             transform: `translateY(${(1 - enter) * 120 + (meTalking ? Math.abs(Math.sin(frame / 3)) * -10 : 0)}px) scale(${0.9 + enter * 0.1})`,
           }}
@@ -154,6 +194,8 @@ function SceneView({
         );
       })}
 
+      {scene.sfx && <SfxPop text={scene.sfx} />}
+
       {scene.effect === "flash" && (
         <AbsoluteFill style={{ background: "#fff", opacity: interpolate(frame, [0, 8], [0.9, 0], { extrapolateRight: "clamp" }) }} />
       )}
@@ -166,7 +208,7 @@ function PlaceChip({ text, dark }: { text: string; dark: boolean }) {
     <div
       style={{
         position: "absolute",
-        top: 470,
+        top: 440,
         left: 0,
         right: 150,
         display: "flex",
@@ -194,28 +236,34 @@ function LineView({ line, kind, hasCharacter, dark }: { line: ReelLine; kind: st
   const { fps } = useVideoConfig();
   const pop = spring({ frame, fps, config: { damping: 12, stiffness: 220 } });
 
-  // 훅·엔딩·내레이션은 화면 가운데 큰 자막. 흰 글자 + 검은 외곽선이 썰툰 자막의 표준이다
+  /*
+   * 내레이션은 화면 아래쪽(세로 68~75%) 자막 — 썰 쇼츠의 표준 자리다. 캐릭터와 겹치지 않고,
+   * 그 아래 릴스 버튼·캡션 영역(하단 약 20%)에도 걸리지 않는다. 훅·엔딩은 주인공이 없으면
+   * 가운데에 더 크게 띄운다.
+   */
   if (line.speaker === "narrator" || kind === "hook" || kind === "ending") {
     const big = kind === "hook" || kind === "ending";
+    const center = big && !hasCharacter;
     return (
       <div
         style={{
           position: "absolute",
-          left: 70,
+          left: 80,
           right: 170,
-          top: hasCharacter ? 640 : big ? 820 : 760,
+          top: center ? 780 : 1310,
           textAlign: "center",
-          fontSize: big ? 92 : 70,
-          fontWeight: 900,
+          fontFamily: CAPTION_FONT,
+          fontSize: center ? 96 : big ? 80 : 70,
           lineHeight: 1.25,
+          letterSpacing: -2,
           color: "#fff",
           // 외곽선. -webkit-text-stroke 는 브라우저 렌더에서 글자 안쪽까지 덮어 지저분해져서, 그림자를 둘러 만든다
-          textShadow: OUTLINE,
+          textShadow: `${OUTLINE}, 0 6px 0 rgba(0,0,0,0.35)`,
           wordBreak: "keep-all",
           transform: `scale(${0.85 + pop * 0.15})`,
         }}
       >
-        {line.text}
+        <Emph text={line.text} color={HIGHLIGHT} />
       </div>
     );
   }
@@ -226,7 +274,7 @@ function LineView({ line, kind, hasCharacter, dark }: { line: ReelLine; kind: st
     <div
       style={{
         position: "absolute",
-        top: hasCharacter ? 610 : 760,
+        top: hasCharacter ? 520 : 700,
         left: me ? 200 : 70,
         right: me ? 170 : 300,
         display: "flex",
@@ -237,25 +285,41 @@ function LineView({ line, kind, hasCharacter, dark }: { line: ReelLine; kind: st
       }}
     >
       {!me && line.name && (
-        <div style={{ fontSize: 36, fontWeight: 900, marginBottom: 10, color: dark ? "#fff" : INK }}>{line.name}</div>
+        <div
+          style={{
+            fontFamily: NOTO,
+            fontSize: 32,
+            fontWeight: 700,
+            marginBottom: 10,
+            padding: "6px 18px",
+            borderRadius: 999,
+            background: "#5B5BD6",
+            color: "#fff",
+          }}
+        >
+          {line.name}
+        </div>
       )}
-      {me && think && <div style={{ fontSize: 34, fontWeight: 700, marginBottom: 8, opacity: 0.7 }}>(속마음)</div>}
       <div
         style={{
           padding: "26px 34px",
-          borderRadius: 40,
-          background: think ? "rgba(255,255,255,0.55)" : me ? "#C9F2E3" : "#fff",
-          border: think ? "4px dashed rgba(0,0,0,0.35)" : "4px solid #111",
+          borderRadius: think ? 60 : 40,
+          background: think ? "rgba(255,255,255,0.7)" : me ? "#FFF3B8" : "#fff",
+          border: think ? "4px dashed rgba(0,0,0,0.4)" : "4px solid #111",
           color: INK,
-          fontSize: 60,
-          fontWeight: think ? 700 : 900,
-          fontStyle: think ? "italic" : "normal",
+          // 속마음은 손글씨로 살짝 기울여 — 만화에서 속으로 하는 말의 관습이다
+          fontFamily: think ? THINK_FONT : CAPTION_FONT,
+          fontSize: think ? 64 : 58,
+          fontWeight: think ? 700 : 400,
           lineHeight: 1.3,
           wordBreak: "keep-all",
           boxShadow: think ? "none" : "0 8px 0 #111",
+          transform: think ? "rotate(-3deg)" : undefined,
         }}
       >
-        {line.text}
+        {think ? "(" : ""}
+        <Emph text={line.text} color={think ? "#C2410C" : "#E8590C"} />
+        {think ? ")" : ""}
       </div>
     </div>
   );
@@ -285,6 +349,7 @@ function ChatView({ withName, messages }: { withName: string; messages: { from: 
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
+        fontFamily: NOTO,
       }}
     >
       <div style={{ padding: "26px 32px", background: "#CFC6F2", fontSize: 44, fontWeight: 900, color: INK }}>
@@ -337,6 +402,35 @@ function ChatView({ withName, messages }: { withName: string; messages: { from: 
           <div style={{ fontSize: 44, fontWeight: 900, opacity: 0.5 }}>{".".repeat((Math.floor(frame / 6) % 3) + 1)}</div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 효과음 글자("쾅", "띠용"). 장면이 시작될 때 크게 튀어나왔다 사라진다 — 0.5초 안에 0→1.2→1, 1초 뒤 사라짐.
+ * 한 편에 2~4번만 쓰도록 대본이 정한다.
+ */
+function SfxPop({ text }: { text: string }) {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const pop = spring({ frame, fps, config: { damping: 8, stiffness: 260 } });
+  const fade = interpolate(frame, [fps * 1.1, fps * 1.4], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  if (fade <= 0) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 190,
+        top: 690,
+        fontFamily: SFX_FONT,
+        fontSize: 150,
+        color: HIGHLIGHT,
+        textShadow: OUTLINE_THICK,
+        transform: `rotate(-10deg) scale(${pop * 1.1})`,
+        opacity: fade,
+      }}
+    >
+      {text}
     </div>
   );
 }
