@@ -28,6 +28,7 @@ type SettingsState = {
   };
   kakao: { configured: boolean; fromEnv: boolean; apiKeyPreview: string };
   azure?: { configured: boolean; fromEnv: boolean; apiKeyPreview: string; region: string };
+  fish?: { configured: boolean; fromEnv: boolean; apiKeyPreview: string; model: string };
   /** 네이버 방문 후기의 사진 분석·본문. 백엔드가 아직 안 내려주면 없다 */
   openai?: {
     configured: boolean;
@@ -117,6 +118,7 @@ export default function SettingsPage() {
   const [adsenseSecret, setAdsenseSecret] = useState("");
   const [kakaoKey, setKakaoKey] = useState("");
   const [azureKey, setAzureKey] = useState("");
+  const [fishKey, setFishKey] = useState("");
   const [azureRegion, setAzureRegion] = useState("");
   const [ghPat, setGhPat] = useState("");
   const [ghUser, setGhUser] = useState("");
@@ -776,6 +778,34 @@ export default function SettingsPage() {
             저장
           </button>
         </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          Fish Audio — 썰 릴스 목소리
+          <Help text="썰 릴스의 한국어 음성에 씁니다. 키가 있으면 Azure 보다 먼저 씁니다.&#10;fish.audio → API Keys 에서 발급합니다." />{" "}
+          {state?.fish && <Status configured={state.fish.configured} fromEnv={state.fish.fromEnv} preview={state.fish.apiKeyPreview} />}
+        </h2>
+        <div className="row">
+          <div className="field" style={{ flex: 2, minWidth: 240 }}>
+            <label>API 키 (fish.audio → API Keys)</label>
+            <input type="password" className="mono" placeholder="키" value={fishKey} onChange={(e) => setFishKey(e.target.value)} />
+          </div>
+          <button className="primary" onClick={() => save({ fishApiKey: fishKey }).then(() => setFishKey(""))} disabled={!fishKey.trim()}>
+            저장
+          </button>
+        </div>
+        <div className="row" style={{ alignItems: "center" }}>
+          <label>모델</label>
+          <select value={state?.fish?.model ?? "s2.1-pro-free"} onChange={(e) => save({ fishModel: e.target.value })}>
+            <option value="s2.1-pro-free">s2.1-pro-free — 무료 (2026-11-30 종료 예고)</option>
+            <option value="s2.1-pro">s2.1-pro — 유료 (썰 한 편 약 2센트)</option>
+            <option value="s2-pro">s2-pro — 유료, 이전 세대</option>
+          </select>
+        </div>
+        <p className="hint">
+          무료 모델은 약관상 비상업 용도라, 수익 계정이면 유료 모델로 바꾸고 fish.audio 에서 API 잔액을 충전하세요(글자당이 아니라 바이트당 과금, 한 달 1달러 안팎).
+        </p>
       </div>
 
       <div className="card">

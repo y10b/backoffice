@@ -34,6 +34,7 @@ export async function GET() {
     "adsense_refresh_token", "adsense_account",
     "kakao_rest_api_key",
     "azure_speech_key", "azure_speech_region",
+    "fish_api_key", "fish_model",
     "github_pat", "github_user", "velog_user", "velog_token", "velog_refresh_token", "devlog_blocked_owners",
     "devlog_repos", "devlog_author_emails",
     "seeds_tistory",
@@ -56,6 +57,7 @@ export async function GET() {
   const adsenseToken = s.adsense_refresh_token ?? "";
   const kakao = resolve(s.kakao_rest_api_key, "KAKAO_REST_API_KEY");
   const azure = resolve(s.azure_speech_key, "AZURE_SPEECH_KEY");
+  const fish = resolve(s.fish_api_key, "FISH_API_KEY");
   // devlogCreds 와 같은 순서로 본다. 화면은 "미설정"인데 수집은 되는 어긋남을 막는다
   const ghPat = resolve(s.github_pat, process.env.GH_PAT ? "GH_PAT" : "GITHUB_TOKEN");
   const velog = resolve(s.velog_token, "VELOG_TOKEN");
@@ -125,6 +127,12 @@ export async function GET() {
       fromEnv: kakao.fromEnv,
       apiKeyPreview: mask(kakao.value),
     },
+    fish: {
+      configured: Boolean(fish.value),
+      fromEnv: fish.fromEnv,
+      apiKeyPreview: mask(fish.value),
+      model: s.fish_model || process.env.FISH_MODEL || "s2.1-pro-free",
+    },
     azure: {
       configured: Boolean(azure.value),
       fromEnv: azure.fromEnv,
@@ -176,6 +184,8 @@ const TEXT_FIELDS: Record<string, string> = {
   adsenseClientSecret: "adsense_client_secret",
   kakaoRestApiKey: "kakao_rest_api_key",
   azureSpeechKey: "azure_speech_key",
+  fishApiKey: "fish_api_key",
+  fishModel: "fish_model",
   azureSpeechRegion: "azure_speech_region",
   githubPat: "github_pat",
   githubUser: "github_user",

@@ -1,6 +1,7 @@
 import { getSettings } from "./db";
 import { openaiJson } from "./openai";
 import { EXPRESSION_KEYS, INTERVIEW, LENGTHS, type LengthKey, type ReelScript } from "./reelScript";
+import { fishCreds } from "./fishAudio";
 
 /**
  * 썰 릴스 — 인터뷰 답을 장면 대본으로 바꾸고, 대사를 음성으로 만든다.
@@ -106,6 +107,7 @@ ${len.label}. 장면 ${len.scenes}개 안팎.
 # 장면 규칙
 - 장면 하나에 lines 는 최대 2개. 한 줄은 공백 포함 28자 이내(자막 두 줄), 짧을수록 좋다
 - 말투: 구어체. 주인공 대사·속마음은 반말 혼잣말 톤, 상대 대사는 인터뷰에 적힌 말투 그대로
+- 숫자·금액·시간은 읽는 그대로 한글로 쓴다("3만원" → "삼만 원", "9시" → "아홉 시"). 음성이 숫자를 잘못 읽는다
 - think 는 주인공 속마음에만 쓴다. 겉말과 속마음이 어긋날수록 웃기다
 - expression: 주인공이 나오는 장면에만 표정을 고른다(${EXPRESSION_KEYS.join(", ")}).
   주인공이 말하거나 생각하는 줄이 없는 장면은 none 으로 둘 수 있다
@@ -155,6 +157,16 @@ export async function generateReelScript(o: ScriptInput): Promise<ReelScript> {
     hashtags: (d.hashtags ?? []).map((h) => (h.startsWith("#") ? h : `#${h}`)).slice(0, 8),
     masked: d.masked ?? [],
   };
+}
+
+/**
+ * 쓸 음성 엔진. Fish Audio 키가 있으면 Fish, 없으면 Azure, 둘 다 없으면 null(자막만).
+ * 사용자가 Fish 로 정했다 — Azure 는 키를 넣어 둔 경우를 위한 대안으로 남긴다.
+ */
+export async function ttsEngine(): Promise<"fish" | "azure" | null> {
+  if (await fishCreds()) return "fish";
+  if (await azureCreds()) return "azure";
+  return null;
 }
 
 /* ------------------------------------------------------------------ *

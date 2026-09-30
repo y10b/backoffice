@@ -55,9 +55,11 @@ export default function ReelsPage() {
   const [length, setLength] = useState<LengthKey>("normal");
   const [script, setScript] = useState<ReelScript | null>(null);
 
-  const [ttsReady, setTtsReady] = useState(false);
-  const [voiceMe, setVoiceMe] = useState<string>(VOICES[0].id);
-  const [voiceOther, setVoiceOther] = useState<string>(VOICES[1].id);
+  /* 음성 엔진. Fish 키가 있으면 fish, Azure 키만 있으면 azure, 둘 다 없으면 null(자막만) */
+  const [engine, setEngine] = useState<"fish" | "azure" | null>(null);
+  const [voiceOptions, setVoiceOptions] = useState<{ id: string; label: string }[]>([]);
+  const [voiceMe, setVoiceMe] = useState<string>("");
+  const [voiceOther, setVoiceOther] = useState<string>("");
   const [audio, setAudio] = useState<Record<string, string>>({});
   const [audioFrames, setAudioFrames] = useState<Record<string, number>>({});
 
@@ -68,7 +70,29 @@ export default function ReelsPage() {
       .catch(() => {});
     fetch("/api/reels/tts")
       .then((r) => r.json())
-      .then((d) => setTtsReady(Boolean(d.configured)))
+      .then(async (d) => {
+        const eng = d.engine === "fish" || d.engine === "azure" ? d.engine : null;
+        setEngine(eng);
+        if (!eng) return;
+        let options: { id: string; label: string }[] = VOICES.map((v) => ({ id: v.id, label: v.label }));
+        if (eng === "fish") {
+          const v = await (await fetch("/api/reels/voices")).json().catch(() => ({ voices: [] }));
+          options = (v.voices ?? []).map((x: { id: string; title: string; uses: number }) => ({
+            id: x.id,
+            label: `${x.title} · ${x.uses.toLocaleString()}회`,
+          }));
+        }
+        setVoiceOptions(options);
+        // 고른 목소리는 이 브라우저에 남긴다. 매번 다시 고르기 번거롭다
+        let saved: { me?: string; other?: string } = {};
+        try {
+          saved = JSON.parse(localStorage.getItem(`reels:voices:${eng}`) ?? "{}");
+        } catch {
+          /* 없으면 첫 목소리 */
+        }
+        setVoiceMe(saved.me || options[0]?.id || "");
+        setVoiceOther(saved.other || options[1]?.id || options[0]?.id || "");
+      })
       .catch(() => {});
     // 인터뷰는 출퇴근길에 나눠서 하기도 한다. 이 브라우저에만 남긴다
     try {
@@ -166,6 +190,16 @@ export default function ReelsPage() {
       setBusy(null);
     }
   }
+
+  // 고른 목소리를 엔진별로 기억한다
+  useEffect(() => {
+    if (!engine || !voiceMe) return;
+    try {
+      localStorage.setItem(`reels:voices:${engine}`, JSON.stringify({ me: voiceMe, other: voiceOther }));
+    } catch {
+      /* 저장 못 해도 지금 화면에는 있다 */
+    }
+  }, [engine, voiceMe, voiceOther]);
 
   function clearVoices() {
     Object.values(audio).forEach((u) => URL.revokeObjectURL(u));
@@ -312,32 +346,14 @@ export default function ReelsPage() {
         <div className="card">
           <h2>
             3. 미리보기와 받기
-            <Help text="목소리는 Azure 한국어 음성(Edge 소리 내어 읽기와 같은 목소리)입니다. 설정에 키가 없으면 자막만으로 만들어집니다. AI 음성을 쓰면 업로드할 때 인스타의 'AI 정보' 표시를 켜세요." />
+            <Help text="목소리는 Fish Audio 한국어 음성입니다(키가 없으면 Azure, 둘 다 없으면 자막만). Fish 는 같은 문장도 매번 조금씩 다르게 나오니 마음에 안 들면 다시 입히세요. AI 음성을 쓰면 업로드할 때 인스타의 'AI 정보' 표시를 켜세요." />
           </h2>
 
-          {ttsReady ? (
+          {engine ? (
             <div className="row" style={{ alignItems: "flex-end" }}>
-              <div className="field">
-                <label>내 목소리 (나·자막)</label>
-                <select value={voiceMe} onChange={(e) => setVoiceMe(e.target.value)}>
-                  {VOICES.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label>상대 목소리</label>
-                <select value={voiceOther} onChange={(e) => setVoiceOther(e.target.value)}>
-                  {VOICES.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <button onClick={makeVoices} disabled={isBusy}>
+              <VoicePicker label="내 목소리 (나·자막)" engine={engine} options={voiceOptions} value={voiceMe} onChange={setVoiceMe} setError={setError} />
+              <VoicePicker label="상대 목소리" engine={engine} options={voiceOptions} value={voiceOther} onChange={setVoiceOther} setError={setError} />
+              <button onClick={makeVoices} disabled={isBusy || !voiceMe}>
                 {spin("voice")}
                 {hasVoice ? "목소리 다시 입히기" : "목소리 입히기"}
               </button>
@@ -349,7 +365,7 @@ export default function ReelsPage() {
               {busyNote("voice")}
             </div>
           ) : (
-            <p className="hint">목소리 없이 자막만으로 만듭니다. 설정 → Azure Speech 에 키를 넣으면 목소리를 입힐 수 있어요.</p>
+            <p className="hint">목소리 없이 자막만으로 만듭니다. 설정 → Fish Audio 에 키를 넣으면 목소리를 입힐 수 있어요.</p>
           )}
 
           <div style={{ maxWidth: 320, margin: "16px auto" }}>
@@ -388,6 +404,79 @@ export default function ReelsPage() {
             <li>회사·동료가 특정될 만한 디테일이 남지 않았는가</li>
           </ul>
         </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 목소리 고르기
+ * ------------------------------------------------------------------ */
+
+/** 목록에서 고르거나(Fish 공개 목소리·Azure 음성), Fish 면 내 클론 ID 를 직접 넣는다. 들어보기로 미리 듣는다 */
+function VoicePicker({
+  label,
+  engine,
+  options,
+  value,
+  onChange,
+  setError,
+}: {
+  label: string;
+  engine: "fish" | "azure";
+  options: { id: string; label: string }[];
+  value: string;
+  onChange: (v: string) => void;
+  setError: (m: string) => void;
+}) {
+  const [playing, setPlaying] = useState(false);
+  const custom = engine === "fish" && value !== "" && !options.some((o) => o.id === value);
+
+  async function preview() {
+    setError("");
+    setPlaying(true);
+    try {
+      const res = await fetch("/api/reels/tts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: "아 진짜 그날 생각하면 아직도 어이가 없어.", voice: value }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "미리 듣기에 실패했습니다.");
+      const url = URL.createObjectURL(await res.blob());
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPlaying(false);
+    }
+  }
+
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <div className="row" style={{ alignItems: "center", gap: 6 }}>
+        <select value={custom ? "__custom" : value} onChange={(e) => onChange(e.target.value === "__custom" ? " " : e.target.value)} style={{ maxWidth: 260 }}>
+          {options.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+          {engine === "fish" && <option value="__custom">내 클론 ID 직접 입력</option>}
+        </select>
+        <button className="small ghost" onClick={preview} disabled={playing || !value.trim()}>
+          {playing && <span className="spinner" />}들어보기
+        </button>
+      </div>
+      {custom && (
+        <input
+          className="mono"
+          style={{ marginTop: 6 }}
+          placeholder="fish.audio 목소리 ID (32자리)"
+          value={value.trim()}
+          onChange={(e) => onChange(e.target.value.trim() || " ")}
+        />
       )}
     </div>
   );
