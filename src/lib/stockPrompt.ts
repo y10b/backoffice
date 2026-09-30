@@ -2,14 +2,39 @@
  * 이미지 프롬프트 문구. 서버(stock.ts)와 화면(시트 나누기) 양쪽이 쓰므로 서버 의존성 없이 둔다.
  */
 
+/**
+ * 스타일 문구. 2026-10 조사(미리캔버스 기여자 후기, Adobe·Canva 2026 트렌드)에서 잘 팔리고
+ * 누끼가 깔끔한 쪽으로 다듬었다. 수채화처럼 가장자리가 번지는 화풍은 흰 배경과 경계가 흐려
+ * 누끼가 지저분해져 넣지 않는다.
+ */
 export const STOCK_STYLES = {
-  flat: "flat vector illustration, simple shapes, limited pastel palette",
-  sticker: "cute sticker style illustration, thick dark outline, soft flat colors",
-  clay: "3D clay render icon, soft studio lighting, matte material",
-  // 수채화처럼 가장자리가 번지는 화풍은 흰 배경과 경계가 흐려 누끼가 지저분해진다. 외곽선 있는 것만 둔다
-  doodle: "hand-drawn doodle illustration, bold marker outline, flat fill colors",
-  line: "minimal line icon, uniform stroke, single accent color",
+  flat: "flat vector illustration style, solid color fills, no gradients, no texture, crisp simple shapes, at most one flat shadow tone per color",
+  // 흰 테두리 스티커는 흰 배경에서 누끼로 같이 사라진다. 테두리 바깥에 옅은 회색 윤곽선을 두른다
+  sticker: "kawaii sticker style, thick uniform off-white die-cut border with a thin light-gray outline around it, rounded chunky shapes, soft pastel palette, simple dot eyes",
+  clay: "soft 3D clay render, matte plasticine texture, rounded chunky forms, soft even studio lighting from the top left, no environment",
+  // 2026 트렌드 "Imperfect by Design" — 손맛 있는 불완전함
+  doodle: "hand-drawn doodle style, slightly uneven marker lines of consistent weight, subtle paper-grain feel on the object only, imperfect charming shapes",
+  line: "minimal line icon style, uniform stroke weight, rounded caps and joins, single color with at most one flat accent fill",
 } as const;
+
+/**
+ * 모든 이미지 프롬프트에 붙는 품질 규칙.
+ *
+ * - 흰색 함정: 누끼는 흰 배경을 지운다. 요소 안의 흰 부분(눈 흰자, 구름, 눈사람)까지 지워지지
+ *   않게 요소 안의 흰색은 크림색으로 칠하게 한다. 미리캔버스도 에디터 배경과 같은 #FFFFFF 를
+ *   요소에 쓰지 말라고 안내한다.
+ * - 반려 사유(기여자 후기): 너무 단순함, 잘린 요소, 여백 과다, 색만 바꾼 중복, AI 흔적(손가락·왜곡)
+ * - 세트 일관성: 같은 시점·광원·크기감·팔레트여야 컬렉션으로 팔린다
+ */
+export const STOCK_QUALITY =
+  "Each object is fully inside its space with nothing cropped, filling about 75% of it with an even margin. " +
+  "No cast shadows, no reflections, no floor. " +
+  "Do not use pure white inside the objects; paint any white parts off-white or cream (#F7F3EC) so they survive background removal. " +
+  "Every object has a clear closed outer contour. " +
+  "Same 3/4 front viewing angle, same top-left light, same scale and visual weight for every object; one cohesive palette of about 5 colors. " +
+  "Simple readable silhouettes that stay clear at thumbnail size; avoid tiny details and hairline strokes. " +
+  "No hands or fingers shown up close (characters have simple mitten-like hands). " +
+  "Commercial stock quality: clean edges, no artifacts, no distortion.";
 export type StockStyle = keyof typeof STOCK_STYLES;
 
 /**
@@ -21,9 +46,9 @@ export type StockStyle = keyof typeof STOCK_STYLES;
  */
 export const CUTOUT_SUFFIX =
   "Isolated single object centered on a solid pure white background (#FFFFFF). " +
-  "No shadow, no ground, no gradient, no border frame. Leave generous white margin around the object. " +
-  "Clean closed outline so the object separates clearly from the background. " +
-  "No text, no letters, no numbers, no logos, no brand names, no watermarks, no real people or celebrities. " +
+  "No shadow, no ground, no gradient, no border frame. " +
+  STOCK_QUALITY +
+  " No text, no letters, no numbers, no logos, no brand names, no watermarks, no QR codes, no real people or celebrities. " +
   "Square image.";
 
 /**
@@ -37,10 +62,14 @@ export function sheetPrompt(o: { item: string; rows: number; cols: number; style
   return (
     `A sticker sheet of ${n} different variations of ${o.item}, arranged in a ${o.rows} by ${o.cols} grid. ` +
     `${STOCK_STYLES[o.style]}. ` +
-    "Vary the pose, angle, color and small details so that no two items are the same, but keep one consistent style and size. " +
+    // 색만 바꾼 변형은 미리캔버스·Adobe 모두 스팸으로 반려한다. 포즈·동작·소품·표정·상황으로 바꾼다
+    "Each variation must be clearly different in pose, action, prop, expression or situation — never just a color change, flip or rotation — " +
+    "while keeping the same design, proportions, palette and size. " +
     "Each item sits alone in the center of its own equal square cell with wide empty white gaps between items; " +
     "no item touches or crosses into a neighboring cell. " +
     "Solid pure white background (#FFFFFF) everywhere. No grid lines, no borders, no shadows, no ground. " +
+    STOCK_QUALITY +
+    " " +
     "No text, no letters, no numbers, no logos, no brand names, no watermarks, no real people. " +
     "Square image at the highest resolution available."
   );
@@ -148,6 +177,8 @@ export function gridSheetPrompt(o: {
     "with wide empty white gutters between cells; no item touches or crosses into a neighboring cell. " +
     (empty > 0 ? `Leave the last ${empty} cell${empty > 1 ? "s" : ""} completely empty. ` : "") +
     "Solid pure white background (#FFFFFF) everywhere. " +
+    STOCK_QUALITY +
+    " " +
     "No grid lines, no borders, no frames, no cell numbers, no captions, no shadows, no ground. " +
     "No text, no letters, no numbers, no logos, no brand names, no watermarks, no real people. " +
     `${size.w}x${size.h} ${size.orientation} image at the highest resolution, crisp clean edges, no blur.`
