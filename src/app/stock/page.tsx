@@ -151,6 +151,8 @@ export default function StockPage() {
   const [count, setCount] = useState(8);
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [promptTopic, setPromptTopic] = useState("");
+  /* 프롬프트 만들기 실패 사유. 화면 맨 위 알림은 버튼 근처에서 안 보여 "눌러도 아무 일 없음" 으로 보였다 */
+  const [promptError, setPromptError] = useState("");
 
   /* 3. 누끼 */
   const [files, setFiles] = useState<File[]>([]);
@@ -202,6 +204,7 @@ export default function StockPage() {
 
   async function makePrompts() {
     setError("");
+    setPromptError("");
     setBusy({ key: "prompts", msg: "프롬프트와 키워드를 만드는 중… 20초쯤" });
     try {
       const d = await (
@@ -222,7 +225,7 @@ export default function StockPage() {
         /* 저장 못 해도 지금 화면에는 있다 */
       }
     } catch (e) {
-      setError((e as Error).message);
+      setPromptError((e as Error).message);
     } finally {
       setBusy(null);
     }
@@ -574,6 +577,11 @@ export default function StockPage() {
               {busyNote("prompts") ??
                 (!topic.trim() && <span className="hint">1번에서 주제를 고르거나 적으면 눌립니다</span>)}
             </div>
+            {promptError && (
+              <div className="alert" style={{ marginTop: 10 }}>
+                {promptError}
+              </div>
+            )}
 
             {prompts.length > 0 && promptMode === "one" && (
               <>

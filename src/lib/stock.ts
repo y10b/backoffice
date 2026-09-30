@@ -1,4 +1,5 @@
-import { geminiCall, geminiModel } from "./gemini";
+import { geminiCall, geminiKeys, geminiModel } from "./gemini";
+import { openaiJson, openaiKey } from "./openai";
 import { foodTrends } from "./foodTrend";
 import { CUTOUT_SUFFIX, STOCK_STYLES, type StockStyle } from "./stockPrompt";
 
@@ -162,7 +163,7 @@ ${o.hints ? `소재 힌트: ${o.hints}` : ""}
 - titleKo: 미리캔버스용 제목(한국어, 15자 이내, 검색어가 앞에)
 - titleEn: Adobe Stock 제목(영어, 70자 이내, 설명형. 예: "Korean autumn sports day relay baton illustration isolated on white")
 - keywordsKo: 미리캔버스 태그 10개(한국어)
-- keywordsEn: Adobe 키워드 25~35개(영어, 중요한 것 앞 10개에). "AI", "generative" 같은 단어는 넣지 않는다
+- keywordsEn: Adobe 키워드 25~30개(영어, 중요한 것 앞 10개에). "AI", "generative" 같은 단어는 넣지 않는다
 - adobeCategory: 다음 중 번호 하나 — ${Object.entries(ADOBE_CATEGORIES).map(([k, v]) => `${k} ${v}`).join(", ")}
 
 금지: 실존 인물·유명인, 사람 얼굴 클로즈업(인물은 뒷모습이나 단순화한 캐릭터만), 브랜드·로고·상표
@@ -171,28 +172,67 @@ ${o.hints ? `소재 힌트: ${o.hints}` : ""}
 JSON 으로만 낸다.`;
 }
 
+/** OpenAI strict 스키마. Gemini 스키마와 같은 모양에 additionalProperties:false 만 더했다 */
+const PROMPT_SCHEMA_STRICT = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: "array",
+      items: { ...PROMPT_SCHEMA.properties.items.items, additionalProperties: false },
+    },
+  },
+  required: ["items"],
+};
+
+/**
+ * Gemini 로 만든다. 12개 × 키워드 30개면 출력이 길어, 기본 한도에선 JSON 이 중간에 잘려
+ * 파싱이 깨졌다 — 화면에는 "눌러도 프롬프트가 안 나온다" 로 보였다. 한도를 넉넉히 주고,
+ * 그래도 실패하면(키 없음·쿼터·잘림) OpenAI 로 한 번 더 한다.
+ */
+async function askGemini(prompt: string): Promise<{ items?: unknown[] }> {
+  const payload = await geminiCall(await geminiModel(), {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.9,
+      maxOutputTokens: 32768,
+      responseMimeType: "application/json",
+      responseSchema: PROMPT_SCHEMA,
+    },
+  });
+  const parts = payload?.candidates?.[0]?.content?.parts;
+  // 생각(thought) 조각이 섞여 올 수 있다. 답 조각만 잇는다
+  const text = Array.isArray(parts) ? parts.filter((p: any) => !p?.thought).map((p: any) => p?.text ?? "").join("") : "";
+  try {
+    return JSON.parse(text);
+  } catch {
+    const reason = payload?.candidates?.[0]?.finishReason ?? "알 수 없음";
+    throw new Error(`Gemini 가 온전한 JSON 을 돌려주지 않았습니다 (finishReason: ${reason}).`);
+  }
+}
+
 export async function generateStockPrompts(o: {
   topic: string;
   hints?: string;
   style: StockStyle;
   count: number;
 }): Promise<StockPrompt[]> {
-  const payload = await geminiCall(await geminiModel(), {
-    contents: [{ role: "user", parts: [{ text: buildStockPrompt(o) }] }],
-    generationConfig: {
-      temperature: 0.9,
-      responseMimeType: "application/json",
-      responseSchema: PROMPT_SCHEMA,
-    },
-  });
-  const parts = payload?.candidates?.[0]?.content?.parts;
-  const text = Array.isArray(parts) ? parts.map((p: any) => p?.text ?? "").join("") : "";
-  let parsed: any;
+  const prompt = buildStockPrompt(o);
+  let parsed: { items?: unknown[] };
+  const errors: string[] = [];
   try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("Gemini 가 프롬프트 JSON 을 돌려주지 않았습니다. 다시 시도하세요.");
+    if (!(await geminiKeys()).length) throw new Error("Gemini 키 없음");
+    parsed = await askGemini(prompt);
+  } catch (e) {
+    errors.push(`Gemini: ${(e as Error).message}`);
+    if (!(await openaiKey())) throw new Error(`프롬프트를 못 만들었습니다. ${errors.join(" / ")} · OpenAI 키도 없습니다.`);
+    try {
+      parsed = await openaiJson<{ items?: unknown[] }>({ user: prompt, schema: PROMPT_SCHEMA_STRICT, schemaName: "stock_prompts" });
+    } catch (e2) {
+      throw new Error(`프롬프트를 못 만들었습니다. ${errors.join(" / ")} · OpenAI: ${(e2 as Error).message}`);
+    }
   }
+  if (!parsed.items?.length) throw new Error("프롬프트가 비어 있습니다. 주제를 조금 더 구체적으로 적어 보세요.");
 
   const clean = (xs: unknown, max: number) =>
     (Array.isArray(xs) ? xs : [])
@@ -200,7 +240,7 @@ export async function generateStockPrompts(o: {
       .filter((x, i, arr) => x && arr.indexOf(x) === i)
       .slice(0, max);
 
-  return (parsed.items ?? []).map((it: any): StockPrompt => {
+  return (parsed.items as any[]).map((it: any): StockPrompt => {
     let prompt = String(it.prompt ?? "").trim();
     // 모델이 꼬리 문장을 빼먹으면 누끼가 깨진다. 없으면 붙인다
     if (!prompt.includes("#FFFFFF")) prompt = `${prompt} ${CUTOUT_SUFFIX}`;
