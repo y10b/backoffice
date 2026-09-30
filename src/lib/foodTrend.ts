@@ -184,8 +184,8 @@ function chunk<T>(xs: T[], n: number): T[][] {
 }
 
 
-/** 힌트 키워드들의 월간 검색수. 연관 키워드도 같이 돌려준다 */
-async function monthlySearches(
+/** 힌트 키워드들의 월간 검색수. 연관 키워드도 같이 돌려준다. 상품 트렌드(productTrend.ts)도 쓴다 */
+export async function monthlySearches(
   keywords: string[],
 ): Promise<{ exact: Map<string, number>; related: { keyword: string; searches: number }[]; error?: string }> {
   const exact = new Map<string, number>();
