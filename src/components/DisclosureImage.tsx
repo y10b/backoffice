@@ -115,6 +115,61 @@ export default function DisclosureImage({
   onReady?: (dataUrl: string) => void;
 }) {
   const [src, setSrc] = useState("");
+  const [msg, setMsg] = useState("");
+
+  /** data URL → PNG 파일. 공유·복사·다운로드가 같은 파일을 쓴다 */
+  async function pngFile(): Promise<File> {
+    const blob = await (await fetch(src)).blob();
+    return new File([blob], "disclosure.png", { type: "image/png" });
+  }
+
+  function flash(m: string) {
+    setMsg(m);
+    setTimeout(() => setMsg(""), 2500);
+  }
+
+  /*
+   * 아이폰 사파리는 <a download> 를 눌러도 저장 대신 새 탭에 이미지를 여는 경우가 많다.
+   * 공유 시트(navigator.share + 파일)는 "이미지 저장" 항목이 있어 사진 앱에 바로 들어간다.
+   */
+  async function saveToPhotos() {
+    try {
+      const file = await pngFile();
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: "대가성 문구" });
+        return;
+      }
+      download(file);
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") flash("저장하지 못했습니다. 이미지를 길게 눌러 저장하세요.");
+    }
+  }
+
+  /** 클립보드에 이미지로. 에디터 맨 위에 바로 붙여넣을 수 있다 */
+  async function copyImage() {
+    try {
+      const file = await pngFile();
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": file })]);
+      flash("이미지를 복사했습니다. 에디터 맨 위에 붙여넣으세요.");
+    } catch {
+      flash("이 브라우저는 이미지 복사를 막습니다. 사진에 저장을 쓰세요.");
+    }
+  }
+
+  function download(file?: File) {
+    const go = (f: File) => {
+      const url = URL.createObjectURL(f);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "disclosure.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    };
+    if (file) go(file);
+    else pngFile().then(go).catch(() => flash("다운로드하지 못했습니다."));
+  }
 
   useEffect(() => {
     if (!text) return;
@@ -141,16 +196,23 @@ export default function DisclosureImage({
         대가성 문구 이미지
         <Help text="공정위 지침상 대가성 표시는 글의 제목 또는 첫 부분에 크게·눈에 띄게 둬야 합니다. 하단에 두면 위반입니다. 이미지로 맨 위에 두면 검색 미리보기는 그다음 문장부터 나옵니다." />
       </label>
-      <p className="hint">네이버 에디터 맨 위에 이 이미지를 먼저 넣고 본문을 붙여넣으세요. 아이폰은 이미지를 길게 눌러 사진에 저장할 수 있습니다.</p>
+      <p className="hint">네이버 에디터 맨 위에 이 이미지를 먼저 넣고 본문을 붙여넣으세요. 아이폰은 "사진에 저장" → 공유 시트의 "이미지 저장"을 누르면 사진 앱에 들어갑니다. "이미지 복사" 뒤 에디터에 바로 붙여넣어도 됩니다.</p>
       {src ? (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element -- data URL 이라 next/image 를 쓸 이유가 없다 */}
           <img src={src} alt={`${label}: ${text}`} style={{ display: "block", width: "100%", maxWidth: W, height: "auto", borderRadius: 8 }} />
-          <div className="row" style={{ marginTop: 6 }}>
-            <a className="link-btn" href={src} download="대가성-문구.png">
-              이미지 저장
-            </a>
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            <button className="primary" type="button" onClick={saveToPhotos}>
+              사진에 저장
+            </button>
+            <button type="button" onClick={copyImage}>
+              이미지 복사
+            </button>
+            <button className="ghost" type="button" onClick={() => download()}>
+              파일 다운로드
+            </button>
           </div>
+          {msg && <p className="hint">{msg}</p>}
         </>
       ) : (
         <p className="hint">이미지를 만드는 중…</p>
