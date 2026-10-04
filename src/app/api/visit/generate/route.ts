@@ -3,6 +3,7 @@ import { getVisitPost, updateVisitPost } from "@/lib/db";
 import { asKind, generateVisitDraft, researchVisit, type Interview, type PhotoAnalysis, type Revision } from "@/lib/visit";
 import type { Place } from "@/lib/kakao";
 import { productKeywords, visitKeywords } from "@/lib/foodTrend";
+import { validateShopLinks } from "@/lib/shopLinks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,12 @@ export async function POST(req: Request) {
     );
   }
 
+  // 제휴 링크 — https 만, 최대 6개, 아는 판매처만. 예전 화면이 보낸 shopLink 하나는 네이버 링크로 받는다
+  const shop = validateShopLinks(
+    iv.shopLinks ?? (String(iv.shopLink ?? "").trim() ? [{ shop: "naver", url: String(iv.shopLink) }] : []),
+  );
+  if (shop.error) return NextResponse.json({ ok: false, error: shop.error }, { status: 400 });
+
   try {
     const post = await getVisitPost(id);
     if (!post) return NextResponse.json({ ok: false, error: "없는 초안입니다." }, { status: 404 });
@@ -51,8 +58,8 @@ export async function POST(req: Request) {
       priceNote: String(iv.priceNote ?? "").trim(),
       mood: String(iv.mood ?? "").trim(),
       reason: String(iv.reason ?? "").trim(),
-      // https 주소만. 그 밖의 값은 빈 문자열로 두어 링크를 넣지 않는다
-      shopLink: /^https:\/\/\S+$/.test(String(iv.shopLink ?? "").trim()) ? String(iv.shopLink).trim() : "",
+      shopLinks: shop.links,
+      disclosureMode: iv.disclosureMode === "text" ? "text" : "image",
     };
 
     // 화면이 상황을 고쳐 보냈으면 그것을 쓴다. 안 보냈으면 분석 때 넣은 값 그대로

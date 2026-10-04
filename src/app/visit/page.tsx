@@ -8,7 +8,19 @@ import ProductPanel from "@/components/ProductPanel";
 import PublishSteps from "@/components/PublishSteps";
 import ActionBar from "@/components/ActionBar";
 import StatusBadge, { type StatusTone } from "@/components/StatusBadge";
-import { copyForNaver, copyText, toNaverHtml, withPhotos } from "@/lib/clipboard";
+import DisclosureImage from "@/components/DisclosureImage";
+import { copyForNaver, copyText, toNaverHtml, withDisclosureImage, withPhotos } from "@/lib/clipboard";
+import {
+  MAX_SHOP_LINKS,
+  SHOP_INFO,
+  SHOP_KINDS,
+  disclosureText,
+  isHttpsUrl,
+  normalizeShopLinks,
+  type DisclosureMode,
+  type ShopKind,
+  type ShopLink,
+} from "@/lib/shopLinks";
 
 /**
  * 네이버 방문 후기 — 사진에서 글로.
@@ -103,6 +115,8 @@ type VisitPost = {
         >
       > & {
         sponsored?: boolean;
+        shopLinks?: ShopLink[];
+        disclosureMode?: DisclosureMode;
       })
     | null;
 };
@@ -218,8 +232,14 @@ function VisitInner() {
   const [rebuy, setRebuy] = useState("응");
   const [priceNote, setPriceNote] = useState("");
   const [reason, setReason] = useState("");
-  /* 네이버 쇼핑 커넥트 링크. API 가 없어 브랜드 커넥트에서 발급해 붙여 넣는다 */
-  const [shopLink, setShopLink] = useState("");
+  /*
+   * 제휴 링크 목록. 네이버 쇼핑 커넥트·쿠팡 파트너스·오늘의집·올리브영은 API 가 없거나 승인 전이라
+   * 각 곳에서 발급해 붙여 넣는다. 대가성 표시는 기본이 맨 위 이미지다(shopLinks.ts 참고)
+   */
+  const [shopLinks, setShopLinks] = useState<ShopLink[]>([]);
+  const [disclosureMode, setDisclosureMode] = useState<DisclosureMode>("image");
+  /* 결과 화면에서 만든 대가성 문구 이미지(data URL). 본문 복사 때 맨 앞 자리에 넣는다 */
+  const [disclosureImg, setDisclosureImg] = useState<{ postId: number; url: string } | null>(null);
   /* 일상 */
   const [mood, setMood] = useState("");
 
@@ -293,7 +313,8 @@ function VisitInner() {
         setRebuy(iv.rebuy || "응");
         setPriceNote(iv.priceNote ?? "");
         setReason(iv.reason ?? "");
-        setShopLink(iv.shopLink ?? "");
+        setShopLinks(normalizeShopLinks(iv));
+        setDisclosureMode(iv.disclosureMode === "text" ? "text" : "image");
         setMood(iv.mood ?? "");
         window.scrollTo({ top: 0, behavior: "smooth" });
       } else if (d.error) {
@@ -356,7 +377,9 @@ function VisitInner() {
     setRecommendFor("");
     setPriceNote("");
     setReason("");
-    setShopLink("");
+    setShopLinks([]);
+    setDisclosureMode("image");
+    setDisclosureImg(null);
     setMood("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -434,7 +457,10 @@ function VisitInner() {
           situation,
           interview: {
             company, mealTime, memorable, revisit, downside, waiting, seat, sponsored,
-            usagePeriod, usageEnv, recommendFor, rebuy, priceNote, mood, reason, shopLink,
+            usagePeriod, usageEnv, recommendFor, rebuy, priceNote, mood, reason,
+            // 빈 주소 행은 보내지 않는다. 검증은 서버가 한 번 더 한다
+            shopLinks: shopLinks.filter((l) => l.url.trim()),
+            disclosureMode,
           },
           revision,
         }),
@@ -496,7 +522,7 @@ function VisitInner() {
 
   function copyBody() {
     if (!draft) return;
-    copyForNaver(draft.body_html ?? "", undefined, draftPhotos).then((mode) =>
+    copyForNaver(draft.body_html ?? "", undefined, draftPhotos, draftDisclosureImg).then((mode) =>
       flash(
         mode === "rich"
           ? "본문 복사됨 — 네이버 에디터 본문에 붙여넣으세요"
@@ -510,6 +536,13 @@ function VisitInner() {
   const draftResearch = draft && research?.postId === draft.id ? research : null;
   const draftKeywords = draft && keywords?.postId === draft.id ? keywords.list : [];
   const draftTitle = draft ? draft.title || draft.titles?.[0] || "" : "";
+  // 이 초안이 쓰인 때의 제휴 링크·표시 방식. 저장된 인터뷰 기준이다(폼을 고쳐도 다시 쓰기 전엔 본문이 그대로라)
+  const draftLinks = normalizeShopLinks(draft?.interview);
+  const draftDisclosureMode: DisclosureMode = draft?.interview?.disclosureMode === "text" ? "text" : "image";
+  const draftDisclosure = draftLinks.length ? disclosureText(draftLinks) : "";
+  const draftDisclosureImg =
+    draft && draftDisclosure && draftDisclosureMode === "image" && disclosureImg?.postId === draft.id ? disclosureImg.url : undefined;
+  const shopLinksInvalid = shopLinks.some((l) => l.url && !isHttpsUrl(l.url));
   // 고칠 자리 후보 — 본문의 소제목들. 모델이 준 마크다운 그대로라 # 을 떼기만 한다
   const sections = (draft?.body_markdown ?? "")
     .split("\n")
@@ -755,17 +788,74 @@ function VisitInner() {
               </div>
               <div className="field">
                 <label>
-                  네이버 쇼핑 커넥트 링크 (선택)
-                  <Help text="브랜드 커넥트(creator.naver.com) → 쇼핑 커넥트에서 이 상품 링크를 발급해 붙여 넣으세요. 넣으면 본문 첫 줄에 대가성 문구가, 정보 박스 아래와 추천 대상 아래에 링크가 한 번씩 들어갑니다. 네이버 에디터에 붙인 뒤 링크 줄을 링크 카드로 바꾸면 상위 제휴 글과 같은 모양이 됩니다." />
+                  제휴 링크 (선택)
+                  <Help text="네이버 쇼핑 커넥트(브랜드 커넥트)·쿠팡 파트너스·오늘의집·올리브영에서 이 상품 링크를 발급해 붙여 넣으세요. 넣으면 정보 박스 아래와 추천 대상 아래에 판매처별 링크 줄이, 글 맨 앞에 대가성 표시가 들어갑니다. 네이버 에디터에 붙인 뒤 링크 줄을 링크 카드로 바꾸세요." />
                 </label>
-                <input
-                  className="mono"
-                  placeholder="https://naver.me/..."
-                  value={shopLink}
-                  onChange={(e) => setShopLink(e.target.value.trim())}
-                />
-                {shopLink && !/^https:\/\/\S+$/.test(shopLink) && <p className="hint warn-text">https 로 시작하는 주소여야 합니다</p>}
+                {shopLinks.map((l, i) => {
+                  const set = (patch: Partial<ShopLink>) =>
+                    setShopLinks((prev) => prev.map((x, k) => (k === i ? { ...x, ...patch } : x)));
+                  return (
+                    <div key={i} style={{ marginBottom: 10 }}>
+                      <div className="row" style={{ alignItems: "center" }}>
+                        <select value={l.shop} onChange={(e) => set({ shop: e.target.value as ShopKind })} aria-label="판매처">
+                          {SHOP_KINDS.map((k) => (
+                            <option key={k} value={k}>
+                              {SHOP_INFO[k].program}
+                            </option>
+                          ))}
+                        </select>
+                        {l.shop === "other" && (
+                          <input
+                            style={{ flex: 1, minWidth: 120 }}
+                            placeholder="판매처 이름 (예: 무신사)"
+                            value={l.label ?? ""}
+                            onChange={(e) => set({ label: e.target.value })}
+                          />
+                        )}
+                        <button
+                          className="small ghost danger"
+                          onClick={() => setShopLinks((prev) => prev.filter((_, k) => k !== i))}
+                          aria-label="이 링크 삭제"
+                        >
+                          삭제
+                        </button>
+                      </div>
+                      <input
+                        className="mono"
+                        style={{ marginTop: 6 }}
+                        placeholder={SHOP_INFO[l.shop].placeholder}
+                        value={l.url}
+                        onChange={(e) => set({ url: e.target.value.trim() })}
+                      />
+                      {l.url && !isHttpsUrl(l.url) && <p className="hint warn-text">https 로 시작하는 주소여야 합니다</p>}
+                    </div>
+                  );
+                })}
+                {shopLinks.length < MAX_SHOP_LINKS && (
+                  <button
+                    className="small"
+                    onClick={() =>
+                      setShopLinks((prev) => [...prev, { shop: prev.length ? "coupang" : "naver", url: "" }])
+                    }
+                  >
+                    링크 추가
+                  </button>
+                )}
               </div>
+              {shopLinks.some((l) => l.url.trim()) && (
+                <>
+                  <Choice
+                    label="대가성 표시 방식"
+                    options={["이미지 (권장)", "텍스트"]}
+                    value={disclosureMode === "text" ? "텍스트" : "이미지 (권장)"}
+                    onChange={(v) => setDisclosureMode(v === "텍스트" ? "text" : "image")}
+                  />
+                  <p className="hint">
+                    공정위 지침상 대가성 표시는 글의 제목 또는 첫 부분에 크게·눈에 띄게 둬야 합니다(하단은 위반).
+                    이미지로 맨 위에 두면 검색 미리보기는 그다음 문장부터 나옵니다.
+                  </p>
+                </>
+              )}
             </>
           )}
 
@@ -807,7 +897,7 @@ function VisitInner() {
 
           {/* 처음 쓰기와 다시 쓰기는 같은 일이다. 버튼 하나로 둔다 */}
           <div className="row" style={{ alignItems: "center" }}>
-            <button className="primary" onClick={() => generate()} disabled={isBusy || !memorable.trim()}>
+            <button className="primary" onClick={() => generate()} disabled={isBusy || !memorable.trim() || shopLinksInvalid}>
               {spin("generate")}
               {draft ? "처음부터 다시 쓰기" : "본문 쓰기"}
             </button>
@@ -870,7 +960,7 @@ function VisitInner() {
           <h3>본문</h3>
           <div
             className="preview"
-            dangerouslySetInnerHTML={{ __html: withPhotos(draft.body_html ?? "", draftPhotos) }}
+            dangerouslySetInnerHTML={{ __html: withDisclosureImage(withPhotos(draft.body_html ?? "", draftPhotos), draftDisclosureImg) }}
           />
 
           <h3>
@@ -892,6 +982,13 @@ function VisitInner() {
               </>
             }
           />
+          {draftDisclosure && draftDisclosureMode === "image" && (
+            <DisclosureImage
+              key={draft.id}
+              text={draftDisclosure}
+              onReady={(url) => setDisclosureImg({ postId: draft.id, url })}
+            />
+          )}
           {!draftPhotos && (
             <p className="hint">
               지난 초안이라 사진이 없습니다. 본문의 [사진 N] 자리에 아래 순서대로 직접 넣으세요.
@@ -926,7 +1023,7 @@ function VisitInner() {
                 id="naver-manual-copy"
                 className="preview"
                 style={{ maxHeight: 360 }}
-                dangerouslySetInnerHTML={{ __html: toNaverHtml(draft.body_html ?? "", draftTitle, draftPhotos) }}
+                dangerouslySetInnerHTML={{ __html: toNaverHtml(draft.body_html ?? "", draftTitle, draftPhotos, draftDisclosureImg) }}
               />
             </div>
           </details>
@@ -989,7 +1086,9 @@ function VisitInner() {
               <li>가격에 &quot;방문 당시&quot; 를 밝혔는가</li>
               <li>가게가 아직 영업 중인지 확인했는가</li>
               <li>체험단·협찬이면 대가성 문구를 넣었는가</li>
-              <li>쇼핑 커넥트 링크 줄을 에디터에서 링크 카드로 바꿨는가 (링크는 두 곳만)</li>
+              {draftLinks.length > 0 && draftDisclosureMode === "image" && <li>대가성 이미지를 맨 위에 넣었는가</li>}
+              {draftLinks.length > 0 && draftDisclosureMode === "text" && <li>첫 줄 대가성 문구가 그대로 있는가</li>}
+              {draftLinks.length > 0 && <li>링크 줄을 링크 카드로 바꿨는가 (링크 자리는 두 곳만)</li>}
             </ul>
           </details>
 

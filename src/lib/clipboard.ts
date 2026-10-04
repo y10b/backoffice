@@ -80,8 +80,8 @@ export async function copyRichHtml(html: string): Promise<"rich" | "plain"> {
  * 살린다. 그래서 소제목을 "굵고 큰 문단"으로, 굵게는 `<b>` 로 바꾸고, 문단 사이에 빈 줄을
  * 둔다. 사진을 넘기면 사진 자리(`[사진 N]`)를 실제 사진으로 바꾼다.
  */
-export function toNaverHtml(html: string, title?: string, photos?: string[]): string {
-  let out = withPhotos(html, photos)
+export function toNaverHtml(html: string, title?: string, photos?: string[], disclosureImage?: string): string {
+  let out = withDisclosureImage(withPhotos(html, photos), disclosureImage)
     .replace(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi, '<p><b><span style="font-size:19px">$1</span></b></p><p><br></p>')
     .replace(/<h[4-6][^>]*>([\s\S]*?)<\/h[4-6]>/gi, "<p><b>$1</b></p>")
     .replace(/<strong>/gi, "<b>")
@@ -114,9 +114,26 @@ export function withPhotos(html: string, photos?: string[]): string {
     .replace(/\[사진\s*(\d+)\]/g, (m, n) => img(n) ?? m);
 }
 
+/**
+ * 본문 맨 앞의 `[대가성 문구 이미지]` 자리를 실제 이미지(data URL)로 바꾼다.
+ * 이미지가 없으면 자리 표시를 그대로 둔다 — 빠진 걸 알아채고 손으로 넣어야 한다(공정위 지침상 첫 부분 표시).
+ */
+export function withDisclosureImage(html: string, src?: string): string {
+  if (!src) return html;
+  const img = `<img src="${src}" alt="대가성 표시">`;
+  return html
+    .replace(/<p>\s*\[대가성 문구 이미지\]\s*<\/p>/g, `<p>${img}</p>`)
+    .replace(/\[대가성 문구 이미지\]/g, img);
+}
+
 /** 네이버용으로 변환해 서식 복사한다 */
-export async function copyForNaver(html: string, title?: string, photos?: string[]): Promise<"rich" | "plain"> {
-  return copyRichHtml(toNaverHtml(html, title, photos));
+export async function copyForNaver(
+  html: string,
+  title?: string,
+  photos?: string[],
+  disclosureImage?: string,
+): Promise<"rich" | "plain"> {
+  return copyRichHtml(toNaverHtml(html, title, photos, disclosureImage));
 }
 
 function isTouch(): boolean {

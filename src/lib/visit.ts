@@ -32,6 +32,7 @@ import { DEFAULT_MODEL, geminiCall, parseGrounding, type ResearchResult } from "
 import { markdownToHtml } from "./markdown";
 import { searchPlaces, type Place } from "./kakao";
 import type { KeywordPick } from "./foodTrend";
+import { normalizeShopLinks, withShopLinks, type DisclosureMode, type ShopLink } from "./shopLinks";
 
 /**
  * 글 종류. 사진에서 출발한다는 흐름은 같고, 사진에서 읽을 것·물을 것·쓰는 법이 다르다.
@@ -503,9 +504,13 @@ export type Interview = {
   /** 산 이유와 전에 쓰던 것. 상위 제품 후기 18편 중 13편이 "산 계기" 장면으로 시작한다 */
   reason?: string;
   /**
-   * 네이버 쇼핑 커넥트 링크(브랜드 커넥트에서 발급한 naver.me 등). 쇼핑 커넥트는 API 가 없어
-   * 사람이 발급해 붙여 넣는다. 있으면 첫 줄 대가성 문구와 링크 자리를 코드가 넣는다.
+   * 제휴 링크들(네이버 쇼핑 커넥트·쿠팡 파트너스·오늘의집·올리브영·기타). 각 곳에서 사람이 발급해
+   * 붙여 넣는다. 있으면 맨 앞 대가성 표시와 링크 자리를 코드가 넣는다(shopLinks.ts).
    */
+  shopLinks?: ShopLink[];
+  /** 대가성 표시 방식. 기본은 맨 위 이미지 — 검색 미리보기가 대가성 문구로 시작하지 않는다 */
+  disclosureMode?: DisclosureMode;
+  /** @deprecated 예전 초안의 네이버 쇼핑 커넥트 링크 하나. 읽을 때 normalizeShopLinks 가 shopLinks 로 바꾼다 */
   shopLink?: string;
 
   /* ---- 일상 ---- */
@@ -926,7 +931,7 @@ const PRODUCT_SEO = `- 본문 공백 제외 1,500~2,500자
 - 사진 자리 \`[사진 N]\` 은 가진 사진을 모두 쓴다. 사진 사이 텍스트는 1~4줄
 - 모바일 줄바꿈: 한 줄 20자 안팎, 2~4줄마다 빈 줄. 한 문단은 3문장 이내
 - 태그 10~15개: 제품명 변형(브랜드+모델, 모델만) + 제품 종류 + 사용 환경(자취템, 원룸, 직장인) + 후기류(내돈내산은 대가성 규칙대로)
-- 구매 링크는 넣지 않는다(제휴 링크를 넣을 거면 사람이 대가성 문구와 함께 넣는다)
+- 구매 링크와 제휴 대가성(수수료) 문구는 쓰지 않는다(필요하면 코드가 넣는다)
 - 공감·댓글·이웃추가를 부탁하지 않는다`;
 
 function productPrompt(o: GenerateVisitOptions): string {
@@ -975,11 +980,12 @@ ${photoBlocks(a, "가격 (가격표·영수증)")}
   재구매 의사: ${iv.rebuy || "모름"}
   구매가·구매처: ${iv.priceNote?.trim() || "(없음)"}
   산 이유·전에 쓰던 것: ${iv.reason?.trim() || "(없음 — 도입은 사용 환경과 사진으로 짧게)"}
-${iv.shopLink ? `
+${normalizeShopLinks(iv).length ? `
 # 쇼핑 링크 자리
 본문에 \`[쇼핑 링크]\` 를 **딱 두 번** 한 줄로 따로 둔다 — 정보 박스 바로 아래, 그리고 "이런 분께 추천" 바로 아래.
-링크 주소는 쓰지 않는다(코드가 채운다). 대가성 문구도 쓰지 않는다(코드가 첫 줄에 넣는다).
-링크는 두 곳뿐이다. 여러 번 넣으면 광고 글로 보인다.` : ""}
+링크 주소·판매처 이름은 쓰지 않는다(코드가 판매처별 링크 줄로 채운다). 링크는 두 곳뿐이다. 여러 번 넣으면 광고 글로 보인다.
+대가성(수수료) 문구는 어디에도 쓰지 않는다 — 코드가 글 맨 앞에 넣는다.
+본문 첫 문단은 그대로 제품 이야기(산 계기 장면)로 시작한다. 제휴·수수료 이야기로 시작하지 않는다.` : ""}
 
 # 정보 박스 (도입 바로 다음에 이 형식 그대로. 값이 없는 줄은 뺀다)
 ---
@@ -1120,7 +1126,11 @@ export async function generateVisitDraft(o: GenerateVisitOptions): Promise<Visit
       retries: o.retries,
     }),
   );
-  const bodyMarkdown = withShopLink(String(d.bodyMarkdown ?? ""), o.interview.shopLink);
+  const bodyMarkdown = withShopLinks(
+    String(d.bodyMarkdown ?? ""),
+    normalizeShopLinks(o.interview),
+    o.interview.disclosureMode === "text" ? "text" : "image",
+  );
   const titles = (d.titles ?? []).map((t: unknown) => String(t).trim()).filter(Boolean);
 
   return {
@@ -1138,26 +1148,8 @@ export async function generateVisitDraft(o: GenerateVisitOptions): Promise<Visit
   };
 }
 
-/** 네이버 쇼핑 커넥트 대가성 문구. 글 맨 첫 줄에 텍스트로 — 상위 노출 제휴 글에서 가장 흔하고 표시 기준에도 안전하다 */
-export const SHOP_CONNECT_DISCLOSURE = "이 포스팅은 네이버 쇼핑 커넥트 활동의 일환으로, 판매 발생 시 수수료를 제공받습니다.";
-
-/**
- * 쇼핑 커넥트 링크를 본문에 박는다. 모델에 맡기면 문구를 빠뜨리거나 링크를 여러 번 넣는다.
- *
- * - 첫 줄에 대가성 문구(이미 있으면 그대로)
- * - `[쇼핑 링크]` 자리를 "👉 제품 보러가기" 링크 줄로. 네이버 에디터에서 링크 카드로 바꾸기 쉽게 한 줄로 둔다
- * - 자리가 하나도 없으면 맨 끝에 한 번
- * 고쳐 쓰기로 다시 돌아도 문구·링크가 두 번 들어가지 않게 이미 있는지 먼저 본다.
- */
-export function withShopLink(markdown: string, link?: string): string {
-  const url = link?.trim();
-  if (!url || !/^https:\/\/\S+$/.test(url)) return markdown.replace(/^.*\[쇼핑 링크\].*$/gm, "").replace(/\n{3,}/g, "\n\n");
-  const line = `👉 [제품 보러가기](${url})`;
-  let out = markdown.replace(/^.*\[쇼핑 링크\].*$/gm, line);
-  if (!out.includes(url)) out = `${out.trimEnd()}\n\n${line}\n`;
-  if (!out.includes(SHOP_CONNECT_DISCLOSURE)) out = `${SHOP_CONNECT_DISCLOSURE}\n\n${out.trimStart()}`;
-  return out;
-}
+// 제휴 링크·대가성 표시는 화면도 같이 쓰므로 순수 모듈로 뺐다
+export { SHOP_CONNECT_DISCLOSURE, disclosureText, withShopLinks } from "./shopLinks";
 
 /** 어느 단계에서 실패했는지 오류 앞에 붙인다. 두 경로가 같은 모양으로 알리게 한 곳에 둔다 */
 async function withContext<T>(what: string, fn: () => Promise<T>): Promise<T> {
