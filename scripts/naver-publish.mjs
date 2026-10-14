@@ -88,19 +88,84 @@ async function pasteBody(page, f, html) {
   return images;
 }
 
+/** 이미지에 들어갈 장면. 제품 자체는 그리지 않는다 — AI 는 모양·로고를 그럴듯하게 틀리게 그린다 */
+const AI_SCENE = {
+  product:
+    "A natural lifestyle photo of an everyday setting where a product like the one in this blog title would be used: {title}. " +
+    "Show the setting, mood and the moment of use only. Do not depict any specific branded product, packaging, logo or label; " +
+    "any object in use stays generic and partly out of focus.",
+  daily: "A natural lifestyle photo that matches the mood of this Korean blog post title: {title}.",
+};
+
+/**
+ * 상품·일상 글에 GPT 이미지로 만든 연출 이미지를 한 장 넣는다.
+ *
+ * 실제 사용 사진처럼 보이면 체험하지 않은 것을 체험한 것처럼 보이게 하는 기만 광고가 된다.
+ * 그래서 제품은 그리지 않고 장면만 만들고, 바로 아래에 AI 연출 이미지라고 밝힌다.
+ * 키가 없거나 생성이 실패하면 이미지 없이 그대로 간다 — 발행을 막을 이유는 아니다.
+ * 브라우저로 ChatGPT 화면을 돌리지 않고 API 를 쓴다(웹 화면 자동화는 약관 위반이다).
+ */
+async function withAiImage(post, html) {
+  const scene = AI_SCENE[post.kind];
+  const key = process.env.OPENAI_API_KEY;
+  if (!scene || args.includes("--no-ai-image")) return html;
+  if (!key) {
+    console.log("- AI 연출 이미지 건너뜀: OPENAI_API_KEY 없음");
+    return html;
+  }
+  // 일상 글은 사진이 넉넉하면 굳이 채우지 않는다
+  if (post.kind === "daily" && (html.match(/<img\b/gi) ?? []).length >= 4) return html;
+
+  const title = (post.title || post.titles?.[0] || "").trim();
+  const prompt =
+    scene.replace("{title}", title) +
+    " Photorealistic, soft natural light, Korean everyday atmosphere. " +
+    "No text, no letters, no logos, no brand names, no watermarks, no recognizable real people or celebrities.";
+  try {
+    const res = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-2",
+        prompt,
+        size: "1536x1024",
+        quality: "medium",
+        output_format: "jpeg",
+        n: 1,
+      }),
+      signal: AbortSignal.timeout(180000),
+    });
+    const data = await res.json().catch(() => ({}));
+    const b64 = data?.data?.[0]?.b64_json;
+    if (!res.ok || !b64) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+    const block =
+      `<p><img src="data:image/jpeg;base64,${b64}"></p>` +
+      "<p>※ AI로 만든 연출 이미지입니다. 실제 제품·사용 사진이 아닙니다.</p>";
+    // 본문 한가운데 문단 뒤에 둔다. 맨 위는 대가성 표시 자리, 맨 아래는 쇼핑 링크 자리다
+    const ends = [...html.matchAll(/<\/p>/gi)].map((m) => m.index + m[0].length);
+    const at = ends.length ? ends[Math.floor(ends.length / 2)] : html.length;
+    console.log(`- AI 연출 이미지 1장 추가 (${post.kind})`);
+    return html.slice(0, at) + block + html.slice(at);
+  } catch (e) {
+    console.log(`- AI 연출 이미지 건너뜀: ${String(e.message ?? e).slice(0, 120)}`);
+    return html;
+  }
+}
+
 const text = (html) => html.replace(/<img[^>]*>/g, "[이미지]").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 async function publish(id) {
   const post = await getVisitPost(id);
   if (!post) throw new Error(`${id}번 글이 없습니다.`);
   if (post.status !== "ready") throw new Error(`${id}번은 올릴 준비(ready)가 아니라 ${post.status} 입니다.`);
-  const html = await getQueued(id);
-  if (!html) throw new Error(`${id}번 완성본이 대기열에 없습니다. /visit 에서 "자동 발행 맡기기" 를 다시 누르세요.`);
+  const queued = await getQueued(id);
+  if (!queued) throw new Error(`${id}번 완성본이 대기열에 없습니다. /visit 에서 "자동 발행 맡기기" 를 다시 누르세요.`);
   const title = (post.title || post.titles?.[0] || "").trim();
   if (!title) throw new Error(`${id}번은 제목이 없습니다.`);
 
   const { aut, ses, blogId: savedId } = await creds();
   if (!aut || !ses) throw new Error("NID_AUT · NID_SES 가 없습니다. 브라우저의 네이버 로그인 쿠키를 환경에 넣으세요.");
+  const html = await withAiImage(post, queued);
 
   const { chromium } = loadPlaywright();
   const browser = await chromium.launch();
