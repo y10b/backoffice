@@ -8,9 +8,11 @@
  * 로그인은 THREEHOURS_ID · THREEHOURS_PW (이메일 로그인). 값은 출력하지 않는다.
  */
 
-/** 상품 글에 쓰는 판매처만. 코드는 스튜디오 주소 /studio/affiliate/programs/<code> 의 끝이다 */
+/**
+ * 상품 글에 쓰는 판매처만. 코드는 스튜디오 주소 /studio/affiliate/programs/<code> 의 끝이다.
+ * 쿠팡은 넣지 않는다 — 세시간전 사전 승인이 필요하고, 쿠팡 파트너스 링크를 직접 쓰면 된다.
+ */
 export const THREEHOURS_PROGRAMS = [
-  { code: "coupang", title: "쿠팡", host: /(^|\.)coupang\.com$/ },
   { code: "linkprice_ohouse", title: "오늘의집", host: /(^|\.)ohou\.se$/ },
   { code: "linkprice_himart", title: "하이마트", host: /(^|\.)e-himart\.co\.kr$/ },
   { code: "linkprice_gmarket", title: "Gmarket", host: /(^|\.)gmarket\.co\.kr$/ },
@@ -73,13 +75,20 @@ export async function createThreeHoursLinks(browser, items, label) {
     await login(page);
     for (const { url, name } of items) {
       const program = programFor(url);
-      if (!program) throw new Error(`세시간전에 없는 판매처입니다: ${new URL(url).hostname}`);
+      if (!program) {
+        const host = new URL(url).hostname;
+        if (/(^|\.)coupang\.com$/.test(host)) {
+          throw new Error("쿠팡은 세시간전으로 걸지 않습니다 — /visit 에서 판매처를 '쿠팡'(쿠팡 파트너스 링크)으로 바꾸세요.");
+        }
+        throw new Error(`세시간전 자동 링크를 지원하지 않는 판매처입니다: ${host}`);
+      }
 
       await page.goto(`${STUDIO}/studio/affiliate/programs/${program.code}`, { waitUntil: "domcontentloaded" });
       const input = page.locator("main input[placeholder='https://']");
       const ready = await input.waitFor({ timeout: 20000 }).then(() => true, () => false);
       if (!ready) {
         const text = await page.evaluate(() => document.body.innerText).catch(() => "");
+        // 목록에 있는 판매처가 나중에 사전 승인제로 바뀌는 경우
         if (/사전 승인이 필요한 프로그램/.test(text)) {
           throw new Error(`${program.title} 은 세시간전 사전 승인 전이라 링크를 만들 수 없습니다.`);
         }

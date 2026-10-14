@@ -15,6 +15,7 @@
  * 셀렉터가 안 맞으면 naver-fail.png 를 남기고 멈춘다.
  */
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import { getSettings, getVisitPost, updateVisitPost } from "../src/lib/db.ts";
 import { getQueued, listQueuedIds, removeQueued } from "../src/lib/naverQueue.ts";
 import { normalizeShopLinks } from "../src/lib/shopLinks.ts";
@@ -33,6 +34,9 @@ function loadPlaywright() {
 }
 
 const args = process.argv.slice(2);
+
+/** 종류별 네이버 블로그 카테고리 이름 (blog.naver.com/k-jun03 기준) */
+const NAVER_CATEGORY = { product: "써 본 물건", daily: "자취 일상" };
 const isPrivate = args.includes("--private");
 const [cmd, idArg] = args.filter((a) => !a.startsWith("--"));
 
@@ -182,6 +186,14 @@ async function withThreeHoursLinks(browser, post, html) {
   return out;
 }
 
+/** 스마트에디터는 링크를 <a> 가 아니라 span.se-link 의 data-href 로 들고 있다 */
+const editorLinks = (f) =>
+  f.evaluate(() =>
+    [...document.querySelectorAll(".se-component .se-link[data-href], .se-component a[href]")].map(
+      (e) => e.getAttribute("data-href") || e.getAttribute("href"),
+    ),
+  );
+
 const text = (html) => html.replace(/<img[^>]*>/g, "[이미지]").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 async function publish(id) {
@@ -190,6 +202,16 @@ async function publish(id) {
   if (post.status !== "ready") throw new Error(`${id}번은 올릴 준비(ready)가 아니라 ${post.status} 입니다.`);
   const queued = await getQueued(id);
   if (!queued) throw new Error(`${id}번 완성본이 대기열에 없습니다. /visit 에서 "자동 발행 맡기기" 를 다시 누르세요.`);
+  await publishPost(post, queued);
+}
+
+/**
+ * 글 한 편을 에디터에 넣고 발행한다. --dry-run 이면 발행 창에서 공개 범위까지 고르고 마지막 확인은
+ * 누르지 않는다(세시간전 링크·AI 이미지는 실제로 만든다). 시험 글로 전체 흐름을 볼 때 쓴다.
+ */
+export async function publishPost(post, queued) {
+  const id = post.id;
+  const dryRun = args.includes("--dry-run");
   const title = (post.title || post.titles?.[0] || "").trim();
   if (!title) throw new Error(`${id}번은 제목이 없습니다.`);
 
@@ -254,9 +276,36 @@ async function publish(id) {
       const got = await pasteBody(page, f, html);
       const imgs = await f.locator(".se-component.se-image").count();
       if (got !== want || imgs < want) throw new Error(`사진이 에디터에 안 들어갔습니다 (${imgs}/${want}).`);
+      // 제휴 링크가 글자만 남고 빠지면 수익이 0 이다. 붙여넣은 링크가 모두 살아 있어야 한다
+      // 에디터가 링크를 붙이는 데 시간이 걸린다
+      const hrefs = [...html.matchAll(/<a\b[^>]*href="([^"]+)"/gi)].map((m) => m[1].replace(/&amp;/g, "&")).filter((h) => /^https?:/.test(h));
+      let lost = hrefs;
+      for (let i = 0; i < 10 && lost.length; i++) {
+        await page.waitForTimeout(1000);
+        const inEditor = await editorLinks(f);
+        lost = hrefs.filter((h) => !inEditor.includes(h));
+      }
+      if (lost.length) throw new Error(`링크가 에디터에 안 들어갔습니다: ${lost.join(", ")}`);
     });
 
     await step("발행 창", () => f.locator("[class^='publish_btn__']").first().click({ timeout: 10000 }));
+
+    // 기본 카테고리는 "서울 맛집" 이라 상품·일상 글은 옮긴다. 주제는 카테고리에 딸려 바뀐다.
+    // 음식점은 지역·혼밥이 갈려 기본값에 둔다. 블로그에 그 카테고리가 없으면 기본값으로 둔다
+    const category = post.category || NAVER_CATEGORY[post.kind];
+    if (category) {
+      await step("카테고리", async () => {
+        await f.locator("[class^='selectbox_button__']").first().click({ timeout: 5000 });
+        const item = f
+          .locator("[class^='option_list_layer__'] [class^='item__']")
+          .filter({ hasText: new RegExp(`^\\s*${category.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`) });
+        if (await item.count()) await item.first().click();
+        else {
+          console.log(`- 카테고리 "${category}" 가 없어 기본값으로 둠`);
+          await f.locator("[class^='selectbox_button__']").first().click();
+        }
+      });
+    }
 
     const tags = Array.isArray(post.tags) ? post.tags.slice(0, 10) : [];
     if (tags.length) {
@@ -274,6 +323,13 @@ async function publish(id) {
       await f.locator(`label[for="${id}"]`).click({ timeout: 5000 });
       if (!(await f.locator(`#${id}`).isChecked())) throw new Error(`#${id} 가 선택되지 않았습니다`);
     });
+    if (dryRun) {
+      const cat = await f.locator("[class^='selectbox_button__']").first().innerText().catch(() => "?");
+      console.log(`- 에디터 링크: ${JSON.stringify(await editorLinks(f))} · 카테고리: ${cat}`);
+      await page.screenshot({ path: "naver-dryrun.png" });
+      console.log(`#${id} 시험 — 발행 확인 직전에서 멈춤 (naver-dryrun.png)`);
+      return;
+    }
     await step("발행", async () => {
       // 발행 창 안의 확인 버튼. 위쪽 "발행" 은 창을 여는 버튼이다
       await f.locator("[data-testid='seOnePublishBtn']").click({ timeout: 5000 });
@@ -294,7 +350,10 @@ async function publish(id) {
   }
 }
 
-try {
+// 다른 스크립트가 publishPost 만 가져다 쓸 때는 명령을 돌리지 않는다
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMain) try {
   switch (cmd) {
     case "list": {
       const ids = await listQueuedIds();
