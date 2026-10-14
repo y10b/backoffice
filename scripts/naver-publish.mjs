@@ -197,12 +197,15 @@ try {
   switch (cmd) {
     case "list": {
       const ids = await listQueuedIds();
+      const count = { restaurant: 0, product: 0, daily: 0 };
       for (const id of ids) {
         const p = await getVisitPost(id);
         if (!p) continue;
+        count[p.kind] = (count[p.kind] ?? 0) + 1;
         console.log(`#${id}\t${p.status}\t${p.kind}\t${p.title || p.titles?.[0] || ""}\t${String(p.updated_at).slice(0, 10)}`);
       }
-      console.log(`대기열 ${ids.length}편`);
+      // 종류별 하루 한 편이라 종류마다 남은 편수가 곧 며칠 치인지다
+      console.log(`대기열 ${ids.length}편 — 음식점 ${count.restaurant} · 상품 ${count.product} · 일상 ${count.daily}`);
       break;
     }
     case "show": {
