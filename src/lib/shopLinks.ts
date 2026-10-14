@@ -10,11 +10,11 @@
  * "이 포스팅은 … 수수료를" 로 시작해 클릭을 깎는다 — 이미지면 미리보기는 그다음 문장부터 나온다.
  */
 
-export type ShopKind = "naver" | "coupang" | "ohou" | "oliveyoung" | "other";
+export type ShopKind = "naver" | "coupang" | "threehours" | "ohou" | "oliveyoung" | "other";
 export type ShopLink = { shop: ShopKind; url: string; label?: string };
 export type DisclosureMode = "image" | "text";
 
-export const SHOP_KINDS: ShopKind[] = ["naver", "coupang", "ohou", "oliveyoung", "other"];
+export const SHOP_KINDS: ShopKind[] = ["naver", "coupang", "threehours", "ohou", "oliveyoung", "other"];
 export const MAX_SHOP_LINKS = 6;
 
 /**
@@ -25,6 +25,11 @@ export const MAX_SHOP_LINKS = 6;
 export const SHOP_INFO: Record<ShopKind, { program: string; name: string; placeholder: string }> = {
   naver: { program: "네이버 쇼핑 커넥트", name: "네이버 쇼핑", placeholder: "https://naver.me/..." },
   coupang: { program: "쿠팡 파트너스", name: "쿠팡", placeholder: "https://link.coupang.com/a/..." },
+  // 세시간전(3hoursahead.com) 경유 링크. 쿠팡·컬리·아고다 등 39곳을 ha3.in 단축 링크 하나로 잇는다.
+  // 링크는 세시간전 스튜디오·크롬 확장에서 사람이 만든다 — 공개 API 가 없고, 내부 API 를 부르면
+  // 약관의 "소프트웨어 이용 트래픽 조작" 으로 읽힐 수 있다. 판매처 이름은 label 에 적는다("쿠팡").
+  // 쿠팡을 세시간전으로 거는 건 승인받은 네이버 블로그에서만 정산된다(티스토리 불가).
+  threehours: { program: "세시간전 크리에이터", name: "구매처", placeholder: "https://ha3.in/..." },
   ohou: { program: "오늘의집", name: "오늘의집", placeholder: "https://ohou.se/..." },
   oliveyoung: { program: "올리브영", name: "올리브영", placeholder: "https://oy.run/..." },
   other: { program: "기타", name: "판매처", placeholder: "https://..." },

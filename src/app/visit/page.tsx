@@ -488,6 +488,29 @@ function VisitInner() {
     }
   }
 
+  /**
+   * 자동 발행 대기열에 넣는다. 사진은 분석한 그 화면의 메모리에만 있으므로(원본을 저장하지 않는다)
+   * 지금 보이는 완성본을 통째로 보낸다. 제목은 발행할 때 제목 칸에 따로 넣으니 본문에서 뺀다.
+   */
+  async function queueNaver(postId: number, html: string) {
+    setBusy({ key: "queue", msg: "" });
+    try {
+      const res = await fetch("/api/visit/queue", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: postId, html }),
+      });
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error);
+      if (draft?.id === postId) setDraft(d.post);
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function patch(postId: number, body: Record<string, unknown>, key = "") {
     if (key) setBusy({ key, msg: "" });
     try {
@@ -1126,6 +1149,16 @@ function VisitInner() {
               <button onClick={() => patch(draft.id, { status: "dropped" }, "dropped")} disabled={isBusy}>
                 {spin("dropped")}
                 보류
+              </button>
+            )}
+            {draft.status !== "posted" && draft.status !== "dropped" && (
+              <button
+                onClick={() => queueNaver(draft.id, toNaverHtml(draft.body_html ?? "", undefined, draftPhotos, draftDisclosureImg))}
+                disabled={isBusy || !draft.body_html}
+                title="지금 화면의 사진·대가성 이미지까지 담아 맡깁니다. 매일 한 편씩 Claude 가 네이버에 올립니다."
+              >
+                {spin("queue")}
+                {draft.status === "ready" ? "자동 발행 다시 맡기기" : "자동 발행 맡기기"}
               </button>
             )}
             {draft.status === "posted" ? (
