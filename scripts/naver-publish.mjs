@@ -42,6 +42,52 @@ async function creds() {
   };
 }
 
+/**
+ * 완성본을 글·사진 조각으로 나눠 차례로 붙여넣는다. 스마트에디터는 붙여넣은 HTML 의 <img> 를
+ * 버리고, 사진은 클립보드 파일로 줘야 자기 서버로 올린다. 키 입력은 에디터 안의 숨은 iframe
+ * (input_buffer) 이 받으므로 붙여넣기 이벤트도 그 안에 보낸다.
+ */
+async function pasteBody(page, f, html) {
+  const parts = html.split(/(<img\b[^>]*>)/i).filter((s) => s.trim());
+  let images = 0;
+  for (const part of parts) {
+    const src = /^<img/i.test(part) ? (part.match(/src="([^"]+)"/i)?.[1] ?? "") : null;
+    if (src === null && !part.replace(/<[^>]+>/g, "").trim()) continue;
+    if (src !== null && !src.startsWith("data:image/")) throw new Error("data URL 이 아닌 사진이 있습니다.");
+    // 늘 문서 끝에 잇는다 — 사진을 넣으면 그 뒤에 빈 문단이 남는다
+    await f.locator(".se-component.se-text .se-text-paragraph").last().click({ timeout: 10000 });
+    await page.keyboard.press("End");
+    await f.evaluate(([part, src]) => {
+      const d = document.activeElement?.contentDocument ?? document;
+      const t = d.activeElement || d.body;
+      const dt = new DataTransfer();
+      if (src) {
+        const [meta, b64] = src.split(",");
+        const type = meta.slice(5).split(";")[0];
+        const bin = atob(b64);
+        const u = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+        dt.items.add(new File([u], `photo.${type.split("/")[1] || "jpg"}`, { type }));
+      } else {
+        dt.setData("text/html", part);
+        dt.setData("text/plain", part.replace(/<[^>]+>/g, ""));
+      }
+      t.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, [part, src]);
+    if (src) {
+      images++;
+      // 컴포넌트는 바로 생기고 "전송중" 이 뜬다. 업로드가 끝나면 src 가 네이버 서버 주소로 바뀐다
+      await f.waitForFunction(
+        (n) => /^https:/.test(document.querySelectorAll(".se-component.se-image")[n]?.querySelector("img")?.getAttribute("src") ?? ""),
+        images - 1,
+        { timeout: 60000 },
+      );
+    }
+    await page.waitForTimeout(500);
+  }
+  return images;
+}
+
 const text = (html) => html.replace(/<img[^>]*>/g, "[이미지]").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 async function publish(id) {
@@ -91,8 +137,9 @@ async function publish(id) {
       }
     };
 
-    // 이어쓰기·도움말 팝업. 없으면 지나간다
-    await f.locator(".se-popup-button-cancel").click({ timeout: 5000 }).catch(() => {});
+    // 이어쓰기·도움말 팝업. 없으면 지나간다. "작성 중인 글" 팝업은 에디터가 뜨고 몇 초 뒤에 나온다
+    await f.locator(".se-title-text").waitFor({ timeout: 30000 }).catch(() => {});
+    await f.locator(".se-popup-button-cancel").click({ timeout: 15000 }).catch(() => {});
     await f.locator(".se-help-panel-close-button").click({ timeout: 3000 }).catch(() => {});
 
     await step("제목", async () => {
@@ -101,26 +148,19 @@ async function publish(id) {
     });
 
     await step("본문", async () => {
-      await f.locator(".se-component.se-text .se-text-paragraph").first().click({ timeout: 10000 });
       // 서식 붙여넣기. 사람이 휴대폰에서 하던 "복사 → 붙여넣기" 와 같은 이벤트를 에디터에 준다
-      await f.evaluate((h) => {
-        const dt = new DataTransfer();
-        dt.setData("text/html", h);
-        dt.setData("text/plain", h.replace(/<[^>]+>/g, ""));
-        document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
-      }, html);
-      // data URL 사진을 에디터가 다시 올릴 시간
-      await page.waitForTimeout(5000 + 1500 * ((html.match(/<img/g) ?? []).length));
+      const want = (html.match(/<img\b/gi) ?? []).length;
+      const got = await pasteBody(page, f, html);
       const imgs = await f.locator(".se-component.se-image").count();
-      if ((html.match(/<img/g) ?? []).length && !imgs) throw new Error("붙여넣은 사진이 에디터에 안 들어갔습니다.");
+      if (got !== want || imgs < want) throw new Error(`사진이 에디터에 안 들어갔습니다 (${imgs}/${want}).`);
     });
 
-    await step("발행 창", () => f.getByRole("button", { name: /^발행$/ }).first().click({ timeout: 10000 }));
+    await step("발행 창", () => f.locator("[class^='publish_btn__']").first().click({ timeout: 10000 }));
 
     const tags = Array.isArray(post.tags) ? post.tags.slice(0, 10) : [];
     if (tags.length) {
       await step("태그", async () => {
-        const input = f.locator("#tag-input, input[placeholder*='태그']").first();
+        const input = f.locator("#tag-input").first();
         for (const t of tags) {
           await input.fill(String(t).replace(/^#/, ""));
           await input.press("Enter");
@@ -128,10 +168,14 @@ async function publish(id) {
       });
     }
 
-    await step("공개 범위", () => f.getByText(isPrivate ? "비공개" : "전체공개", { exact: true }).first().click({ timeout: 5000 }));
+    await step("공개 범위", async () => {
+      const id = isPrivate ? "open_private" : "open_public";
+      await f.locator(`label[for="${id}"]`).click({ timeout: 5000 });
+      if (!(await f.locator(`#${id}`).isChecked())) throw new Error(`#${id} 가 선택되지 않았습니다`);
+    });
     await step("발행", async () => {
-      // 발행 창 안의 확인 버튼. 첫 "발행" 은 창을 여는 버튼이다
-      await f.getByRole("button", { name: /^발행$/ }).last().click();
+      // 발행 창 안의 확인 버튼. 위쪽 "발행" 은 창을 여는 버튼이다
+      await f.locator("[data-testid='seOnePublishBtn']").click({ timeout: 5000 });
       await page.waitForURL(/PostView|logNo=|\/\d{9,}/, { timeout: 30000 });
     });
 

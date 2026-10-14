@@ -29,6 +29,9 @@ function loadPlaywright() {
   throw new Error("playwright 를 찾지 못했습니다.");
 }
 
+// HTML 모드로 바꾸면 마크다운용 CodeMirror 가 숨은 채로 하나 더 있다 — 테마 클래스로 고른다
+const HTML_CM = ".CodeMirror.cm-s-tistory-html";
+
 const args = process.argv.slice(2);
 const isPrivate = args.includes("--private");
 const [cmd, idArg] = args.filter((a) => !a.startsWith("--"));
@@ -80,11 +83,11 @@ async function publish(id) {
     await step("HTML 모드", async () => {
       await page.locator("#editor-mode-layer-btn-open").click();
       await page.locator("#editor-mode-html").click();
-      await page.locator(".CodeMirror").waitFor({ timeout: 10000 });
+      await page.locator(HTML_CM).waitFor({ timeout: 10000 });
     });
     const html = await bodyOf(post);
     await step("본문", () =>
-      page.evaluate((v) => document.querySelector(".CodeMirror").CodeMirror.setValue(v), html),
+      page.evaluate(([sel, v]) => document.querySelector(sel).CodeMirror.setValue(v), [HTML_CM, html]),
     );
 
     if (post.category) {
@@ -108,7 +111,12 @@ async function publish(id) {
     }
 
     await step("발행 창", () => page.locator("#publish-layer-btn").click());
-    await step("공개 범위", () => page.locator(isPrivate ? "#open0" : "#open20").check({ force: true }));
+    await step("공개 범위", async () => {
+      // React 라디오라 input 을 check 하면 상태가 안 바뀌고, label 은 높이가 0 이라 못 누른다 — 글자를 누른다
+      const id = isPrivate ? "open0" : "open20";
+      await page.locator(`label[for="${id}"] .checkbox-text`).click();
+      if (!(await page.locator(`#${id}`).isChecked())) throw new Error(`#${id} 가 선택되지 않았습니다`);
+    });
     await step("발행", async () => {
       await Promise.all([
         page.waitForURL(/\/manage\/posts/, { timeout: 30000 }),
