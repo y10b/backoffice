@@ -97,15 +97,18 @@ export async function createThreeHoursLinks(browser, items, label) {
       await page.waitForTimeout(1500);
       await input.fill(url);
       await page.locator("main button", { hasText: /^다음$/ }).click();
-      // 주소가 그 판매처 규칙에 맞으면 상품명 칸이 열린다
+      // 주소가 그 판매처 규칙에 맞으면 상품명 칸이 열린다. 예시 문구는 프로그램마다 다르다
+      // (yes24 "예) 아프니까 청춘이다", 하이마트 "예) 도쿄 디즈니 랜드") — 라벨 칸이 아닌 "예)" 칸이 상품명
+      const NAME = "main input[placeholder^='예)']:not([placeholder^='예) N blog'])";
       await page
-        .waitForFunction(() => !document.querySelector("main input[placeholder^='예) 아프니까']")?.disabled, null, {
-          timeout: 15000,
-        })
+        .waitForFunction((sel) => {
+          const el = document.querySelector(sel);
+          return el && !el.disabled;
+        }, NAME, { timeout: 15000 })
         .catch(() => {
           throw new Error(`${program.title} 이 이 주소를 받지 않았습니다: ${url}`);
         });
-      await page.locator("main input[placeholder^='예) 아프니까']").fill(String(name).slice(0, 60));
+      await page.locator(NAME).first().fill(String(name).slice(0, 60));
       await page.locator("main input[placeholder^='예) N blog']").fill(String(label).slice(0, 60));
       await page.locator("main button", { hasText: /^제휴링크 만들기$/ }).last().click();
 

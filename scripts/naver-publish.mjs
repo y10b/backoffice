@@ -148,9 +148,11 @@ async function withAiImage(post, html) {
     const block =
       `<p><img src="data:image/jpeg;base64,${b64}"></p>` +
       "<p>※ AI로 만든 연출 이미지입니다. 실제 제품·사용 사진이 아닙니다.</p>";
-    // 본문 한가운데 문단 뒤에 둔다. 맨 위는 대가성 표시 자리, 맨 아래는 쇼핑 링크 자리다
+    // 소제목이 있으면 첫 소제목 앞(도입 뒤)에, 없으면 본문 한가운데 문단 뒤에 둔다.
+    // 맨 위는 대가성 표시 자리, 맨 아래는 쇼핑 링크 자리다
     const ends = [...html.matchAll(/<\/p>/gi)].map((m) => m.index + m[0].length);
-    const at = ends.length ? ends[Math.floor(ends.length / 2)] : html.length;
+    const h = html.search(/<h[23][\s>]/i);
+    const at = h > 0 ? h : ends.length ? ends[Math.floor(ends.length / 2)] : html.length;
     console.log(`- AI 연출 이미지 1장 추가 (${post.kind})`);
     return html.slice(0, at) + block + html.slice(at);
   } catch (e) {
@@ -292,18 +294,22 @@ export async function publishPost(post, queued) {
 
     // 기본 카테고리는 "서울 맛집" 이라 상품·일상 글은 옮긴다. 주제는 카테고리에 딸려 바뀐다.
     // 음식점은 지역·혼밥이 갈려 기본값에 둔다. 블로그에 그 카테고리가 없으면 기본값으로 둔다
-    const category = post.category || NAVER_CATEGORY[post.kind];
-    if (category) {
+    // 앞의 것부터 블로그에 있는 첫 카테고리를 고른다
+    const categories = [post.category, NAVER_CATEGORY[post.kind]].filter(Boolean);
+    if (categories.length) {
       await step("카테고리", async () => {
         await f.locator("[class^='selectbox_button__']").first().click({ timeout: 5000 });
-        const item = f
-          .locator("[class^='option_list_layer__'] [class^='item__']")
-          .filter({ hasText: new RegExp(`^\\s*${category.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`) });
-        if (await item.count()) await item.first().click();
-        else {
-          console.log(`- 카테고리 "${category}" 가 없어 기본값으로 둠`);
-          await f.locator("[class^='selectbox_button__']").first().click();
+        for (const category of categories) {
+          const item = f
+            .locator("[class^='option_list_layer__'] [class^='item__']")
+            .filter({ hasText: new RegExp(`^\\s*${category.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`) });
+          if (await item.count()) {
+            await item.first().click();
+            return;
+          }
+          console.log(`- 카테고리 "${category}" 가 블로그에 없음`);
         }
+        await f.locator("[class^='selectbox_button__']").first().click();
       });
     }
 
@@ -337,11 +343,13 @@ export async function publishPost(post, queued) {
     });
 
     const url = page.url();
-    if (!isPrivate) {
+    // 대기열에 없는 글(자동 정보 글)은 visit_posts 에 행이 없다
+    if (!isPrivate && !post.virtual) {
       await updateVisitPost(id, { status: "posted" });
       await removeQueued(id);
     }
     console.log(`#${id} ${isPrivate ? "비공개로" : "공개로"} 발행 — ${url}`);
+    return url;
   } catch (e) {
     await page.screenshot({ path: "naver-fail.png", fullPage: true }).catch(() => {});
     throw e;
