@@ -21,7 +21,7 @@ import { markdownToHtml } from "../src/lib/markdown.ts";
 import { productTrends } from "../src/lib/productTrend.ts";
 import { disclosureText } from "../src/lib/shopLinks.ts";
 import { ANTI_AI, PERSONA } from "../src/lib/visit.ts";
-import { publishPost } from "./naver-publish.mjs";
+import { OG_MARK, publishPost } from "./naver-publish.mjs";
 
 const require = createRequire(import.meta.url);
 const args = process.argv.slice(2);
@@ -198,6 +198,50 @@ async function openaiResearch(text) {
 }
 
 /**
+ * JSON 으로 답을 받는다. Gemini 를 먼저 쓰고, 쿼터(무료 티어 하루 한도 — 티스토리 초안 생성과 나눠 쓴다)에
+ * 걸리거나 실패하면 OpenAI 로 같은 일을 시킨다. 매일 루틴이 쿼터 때문에 멈추지 않게.
+ */
+async function askJSON(text, schema, temperature) {
+  try {
+    const res = await geminiCall(await geminiModel(), {
+      contents: [{ role: "user", parts: [{ text }] }],
+      generationConfig: { temperature, responseMimeType: "application/json", responseSchema: schema },
+    });
+    return JSON.parse(res?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}");
+  } catch (e) {
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) throw e;
+    console.log(`- Gemini 실패(${String(e.message ?? e).slice(0, 40)}) — OpenAI 로`);
+  }
+  // OpenAI 구조화 출력은 모든 객체에 additionalProperties:false 와 전체 required 를 요구한다
+  const strict = (s) =>
+    s.type === "object"
+      ? { ...s, additionalProperties: false, required: Object.keys(s.properties), properties: Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, strict(v)])) }
+      : s.type === "array"
+        ? { ...s, items: strict(s.items) }
+        : s;
+  const res = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    body: JSON.stringify({
+      model: process.env.OPENAI_WRITE_MODEL || "gpt-5",
+      input: text,
+      text: { format: { type: "json_schema", name: "out", schema: strict(schema), strict: true } },
+    }),
+    signal: AbortSignal.timeout(300000),
+  });
+  const d = await res.json();
+  if (!res.ok) throw new Error(`OpenAI: ${d?.error?.message || res.status}`);
+  const out = (d.output ?? [])
+    .filter((o) => o.type === "message")
+    .flatMap((o) => o.content ?? [])
+    .filter((c) => c.type === "output_text")
+    .map((c) => c.text)
+    .join("");
+  return JSON.parse(out || "{}");
+}
+
+/**
  * 검수. 다 쓴 글에서 근거 없는 상품 주장(상품명 낱말을 성능으로 푼 것)과 나열 템플릿만 고친다.
  * 생성 프롬프트로 막아도 모델은 "세미마이크로 원단이라 부드럽게 접힌다" 식으로 풀어 버린다.
  */
@@ -223,21 +267,21 @@ async function review(d, products) {
     d.bodyMarkdown,
   ].join("\n");
   try {
-    const res = await geminiCall(await geminiModel(), {
-      contents: [{ role: "user", parts: [{ text }] }],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: "object",
-          properties: { bodyMarkdown: { type: "string" }, changes: { type: "array", items: { type: "string" } } },
-          required: ["bodyMarkdown", "changes"],
-        },
+    const r = await askJSON(
+      text,
+      {
+        type: "object",
+        properties: { bodyMarkdown: { type: "string" }, changes: { type: "array", items: { type: "string" } } },
+        required: ["bodyMarkdown", "changes"],
       },
-    });
-    const r = JSON.parse(res?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}");
-    // 검수가 글을 통째로 줄여 버리면 쓰지 않는다
-    if (!r.bodyMarkdown || r.bodyMarkdown.length < d.bodyMarkdown.length * 0.7) return d;
+      0.2,
+    );
+    // 검수가 글을 통째로 줄이거나 줄바꿈을 날려 버리면(소제목·표가 한 줄로 뭉친다) 쓰지 않는다
+    const lines = (t) => t.split("\n").length;
+    if (!r.bodyMarkdown || r.bodyMarkdown.length < d.bodyMarkdown.length * 0.7 || lines(r.bodyMarkdown) < lines(d.bodyMarkdown) * 0.8) {
+      console.log("- 검수 결과가 원문 구조를 망가뜨려 버림");
+      return d;
+    }
     for (const c of r.changes ?? []) console.log(`- 검수: ${String(c).slice(0, 100)}`);
     return { ...d, bodyMarkdown: r.bodyMarkdown };
   } catch (e) {
@@ -305,6 +349,7 @@ ${facts ? `\n# 조사된 사실 (구글 검색 — 기준 섹션은 이것으로
 - 한 문장이 한 줄. 긴 문장은 쉼표에서 줄을 나눈다. 2~3줄마다 빈 줄.
 - 한 문단(빈 줄 사이)은 3줄 이내.
 - 이모지는 소제목이 아닌 본문 줄 끝에 글 전체 3~6개 정도.
+- 섹션마다 가장 중요한 짧은 구절 하나를 \`==구절==\` 로 감싼다(형광펜으로 바뀐다). 글 전체 4~6개, 한 구절 20자 이내.
 
 # 제목
 - 30~45자. "${keyword}" 를 맨 앞에. 대상(자취·원룸·1인 가구 중 맞는 것) + TOP ${products.length} + 가격대 범위 + 비교.
@@ -331,7 +376,7 @@ function render(d, products, disclosureImg) {
   // 한 줄 = 한 문단(모바일에서 한 줄씩 끊겨 읽히게). 스마트에디터에서 문단끼리는 간격 없이 붙으므로
   // 원래 빈 줄(묶음 사이)은 빈 문단으로 남겨 간격을 만든다. 표·목록·소제목 줄은 마크다운 그대로 둔다
   const GAP = "@@gap@@";
-  const block = (l) => /^\s*(\||[-*]\s|\d+\.\s|#|✔)/.test(l);
+  const block = (l) => /^\s*(\||[-*]\s|\d+\.\s|#)/.test(l);
   const md = d.bodyMarkdown
     .replace(/^\s*#\s+.*\n/, "")
     .replace(/\n{2,}/g, `\n${GAP}\n`)
@@ -342,28 +387,46 @@ function render(d, products, disclosureImg) {
   let html = markdownToHtml(md).replace(new RegExp(`<p>\\s*${GAP}\\s*</p>`, "g"), "<p>&nbsp;</p>");
   // 소제목 앞뒤 빈 문단은 소제목 여백과 겹친다
   html = html.replace(/(<p>&nbsp;<\/p>\s*)+(<h[23])/g, "<p>&nbsp;</p>$2").replace(/(<\/h[23]>)\s*<p>&nbsp;<\/p>/g, "$1");
+  // 링크 자리 → 링크 카드(상품 사진·이름 미리보기). naver-publish 가 주소 줄 끝에서 Enter 를 쳐 만든다
+  const og = (p) => `<p>${OG_MARK}${esc(p.url)}</p>`;
   html = html.replace(/(?:<p>\s*)?\{\{\s*link\s*:\s*(\d+)\s*\}\}(?:\s*<\/p>)?/gi, (_, n) => {
     const p = products[Number(n) - 1];
-    return p ? `<p>👉 <a href="${esc(p.url)}">롯데하이마트에서 지금 가격 보기</a></p>` : "";
+    return p ? og(p) : "";
   });
   // 모델이 링크 자리를 빠뜨린 상품은 비교 표 앞에 몰아 둔다 — 링크 없는 상품 소개는 쓸모가 없다
   const missing = products.filter((p) => !html.includes(esc(p.url)));
   if (missing.length) {
-    const block = missing.map((p) => `<p>👉 <a href="${esc(p.url)}">${esc(p.name)} 가격 보기</a></p>`).join("");
     const at = html.search(/<h2[^>]*>[^<]*한눈에/);
+    const block = missing.map(og).join("");
     html = at > 0 ? html.slice(0, at) + block + html.slice(at) : html + block;
   }
+
+  // 네이버 에디터 모양으로: 소제목 → 인용구(발행 때 라인형으로 바뀐다), 섹션 사이 구분선,
+  // 가격 줄은 주황 굵게, ==핵심== 은 형광펜
+  let first = true;
+  html = html.replace(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/g, (_, t) => {
+    const q = `<blockquote><p>${t}</p></blockquote>`;
+    if (first) return (first = false), q;
+    return `<hr>${q}`;
+  });
+  html = html
+    .replace(/<p>(\s*검색 당시 가격[^<]*)<\/p>/g, `<p><span style="color:${ACCENT}"><b>$1</b></span></p>`)
+    .replace(/==([^=<]{1,80})==/g, '<span style="background-color:#fff3a3">$1</span>');
+
   const tags = d.tags.map((t) => `#${String(t).replace(/^#|\s+/g, "")}`).join(" ");
   return [
-    // 대가성 표시는 첫 부분이어야 한다(공정위 2024-12 지침 — "끝 부분" 은 빠졌다). 이미지로 두면 검색
-    // 미리보기가 "이 포스팅은 … 수수료" 로 시작하지 않는다. /visit 글과 같은 방식. 끝에 텍스트로 한 번 더
-    disclosureImg ? `<p><img src="${disclosureImg}"></p>` : `<p>${esc(disclosureText([{ shop: "threehours" }]))}</p>`,
+    // 대가성 표시: 첫 부분 표시는 공정위 지침(2024-12, "끝 부분" 이 빠졌다)이라 맨 위에 색을 달리한 한 줄을 둔다.
+    // 눈에 띄는 띠 이미지는 사용자 요청대로 맨 아래에
+    `<p><span style="color:${ACCENT}">※ 이 글에는 세시간전 제휴 링크가 있어요. 구매하시면 수수료를 받을 수 있어요.</span></p>`,
     html,
     `<p>가격·혜택은 작성일 기준이며 판매처 사정에 따라 바뀔 수 있어요.</p>`,
-    `<p>${esc(disclosureText([{ shop: "threehours" }]))}</p>`,
+    disclosureImg ? `<p><img src="${disclosureImg}"></p>` : `<p>${esc(disclosureText([{ shop: "threehours" }]))}</p>`,
     `<p>${esc(tags)}</p>`,
   ].join("");
 }
+
+/** 가격 줄·대가성 한 줄 강조색 */
+const ACCENT = "#e8590c";
 
 /** 대가성 문구를 눈에 띄는 띠 이미지로 굽는다(PNG data URL). 실패하면 null — 텍스트로 대신한다 */
 async function disclosureImage(browser) {
@@ -388,13 +451,8 @@ async function disclosureImage(browser) {
 async function writePost(keyword, delta, products) {
   const facts = await research(keyword);
   if (facts) console.log(`- 조사: ${facts.split("\n").length}줄`);
-  const model = await geminiModel();
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const res = await geminiCall(model, {
-      contents: [{ role: "user", parts: [{ text: prompt(keyword, delta, products, facts) }] }],
-      generationConfig: { temperature: 0.9, responseMimeType: "application/json", responseSchema: SCHEMA },
-    });
-    const d = await review(JSON.parse(res?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}"), products);
+    const d = await review(await askJSON(prompt(keyword, delta, products, facts), SCHEMA, 0.9), products);
     const all = `${d.title}\n${d.bodyMarkdown}`;
     const bad = FIRST_PERSON.exec(all) ?? HYPE.exec(all);
     if (!bad && d.bodyMarkdown?.length > 600) return d;
@@ -440,6 +498,8 @@ try {
         title: d.title,
         tags: d.tags.slice(0, 10),
         category: INFO_CATEGORY,
+        // 소제목 인용구를 라인형(인용구 2)으로
+        quoteStyle: "quotation_line",
         // 상품 원래 주소 → 발행 직전에 세시간전 3ha.in 링크로 바뀐다
         interview: { shopLinks: products.map((p) => ({ shop: "threehours", url: p.url, label: "하이마트" })) },
       },

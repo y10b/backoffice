@@ -151,7 +151,7 @@ async function withAiImage(post, html) {
     // 소제목이 있으면 첫 소제목 앞(도입 뒤)에, 없으면 본문 한가운데 문단 뒤에 둔다.
     // 맨 위는 대가성 표시 자리, 맨 아래는 쇼핑 링크 자리다
     const ends = [...html.matchAll(/<\/p>/gi)].map((m) => m.index + m[0].length);
-    const h = html.search(/<h[23][\s>]/i);
+    const h = html.search(/<h[23][\s>]|<blockquote[\s>]/i);
     const at = h > 0 ? h : ends.length ? ends[Math.floor(ends.length / 2)] : html.length;
     console.log(`- AI 연출 이미지 1장 추가 (${post.kind})`);
     return html.slice(0, at) + block + html.slice(at);
@@ -186,6 +186,81 @@ async function withThreeHoursLinks(browser, post, html) {
     console.log(`- 세시간전 링크: ${new URL(from).hostname} → ${to}`);
   }
   return out;
+}
+
+/** 이 표시로 시작하는 줄은 발행 때 링크 카드(상품 사진·이름 미리보기)로 바뀐다. 예) "@@og@@https://3ha.in/r/1" */
+export const OG_MARK = "@@og@@";
+
+/** 링크 카드 자리 표시를 걷어 주소만 남기고, 카드로 만들 주소 목록을 돌려준다 */
+export function takeOgUrls(html) {
+  const urls = [];
+  const out = html.replace(new RegExp(`${OG_MARK}(https?://[^<\\s]+)`, "g"), (_, u) => (urls.push(u.replace(/&amp;/g, "&")), u));
+  return { html: out, urls };
+}
+
+/**
+ * 붙여넣기로는 안 되는 스마트에디터 기능을 입힌다.
+ *
+ * - 인용구 모양: <blockquote> 는 기본 인용구(큰따옴표·명조)로만 들어간다. 인용구를 눌러 속성 툴바에서
+ *   post.quoteStyle(예: quotation_line = 인용구 2, 왼쪽 세로줄) 로 바꾼다. 소제목으로 쓴다
+ * - 링크 카드: 주소만 붙여 넣으면 글자일 뿐이다. 주소 줄 끝에서 Enter 를 쳐야 카드가 생긴다.
+ *   카드를 만든 뒤 남은 주소 글자 줄은 지운다
+ */
+export async function decorate(page, f, post, ogUrls = []) {
+  // 주소를 붙여 넣으면 에디터가 미리보기를 불러오며 화면을 다시 그린다. 문서가 잠잠해질 때까지 기다린다
+  let last = "";
+  for (let i = 0; i < 20; i++) {
+    const now = await f.evaluate(() => document.querySelector(".se-components-wrap, .se-content")?.innerHTML.length ?? 0).then(String);
+    if (now === last) break;
+    last = now;
+    await page.waitForTimeout(1000);
+  }
+
+  if (post.quoteStyle) {
+    const quotes = f.locator(".se-component.se-quotation");
+    const n = await quotes.count();
+    for (let i = 0; i < n; i++) {
+      await quotes.nth(i).click({ position: { x: 5, y: 5 } });
+      await f.locator(`button.se-property-toolbar-group-toggle-button.se-quotation-${post.quoteStyle}-toolbar-button`).click({ timeout: 5000 });
+      await page.waitForTimeout(300);
+    }
+  }
+
+  // 에디터는 문단에 폭 0 공백을 끼워 둔다 — 빼고 비교한다
+  const paragraphIndex = (url, exact) =>
+    f.evaluate(
+      ([u, ex]) =>
+        [...document.querySelectorAll(".se-component.se-text .se-text-paragraph")].findIndex((pp) => {
+          const t = pp.innerText.replace(/[\u200b\ufeff]/g, "").trim();
+          return ex ? t === u : t.includes(u);
+        }),
+      [url, exact],
+    );
+  const paras = f.locator(".se-component.se-text .se-text-paragraph");
+
+  // 주소만 있는 줄 끝에서 Enter 를 치면 그 아래에 카드가 생긴다. 글자를 지우고 다시 치면 입력이 꼬인다
+  for (const url of ogUrls) {
+    const idx = await paragraphIndex(url, true);
+    if (idx < 0) throw new Error(`링크 카드 자리를 못 찾았습니다: ${url}`);
+    const before = await f.locator(".se-component.se-oglink").count();
+    await paras.nth(idx).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await f
+      .waitForFunction((n) => document.querySelectorAll(".se-component.se-oglink").length > n, before, { timeout: 20000 })
+      .catch(() => {
+        throw new Error(`링크 카드가 안 만들어졌습니다: ${url}`);
+      });
+    await page.waitForTimeout(800);
+    // 카드 위에 남은 주소 글자 줄을 지운다(카드가 링크다)
+    const left = await paragraphIndex(url, false);
+    if (left >= 0) {
+      await paras.nth(left).click();
+      await page.keyboard.press("End");
+      for (let i = 0; i < url.length + 1; i++) await page.keyboard.press("Backspace");
+    }
+    await page.waitForTimeout(500);
+  }
 }
 
 /** 스마트에디터는 링크를 <a> 가 아니라 span.se-link 의 data-href 로 들고 있다 */
@@ -272,10 +347,11 @@ export async function publishPost(post, queued) {
       await page.keyboard.type(title, { delay: 30 });
     });
 
+    const og = takeOgUrls(html);
     await step("본문", async () => {
       // 서식 붙여넣기. 사람이 휴대폰에서 하던 "복사 → 붙여넣기" 와 같은 이벤트를 에디터에 준다
       const want = (html.match(/<img\b/gi) ?? []).length;
-      const got = await pasteBody(page, f, html);
+      const got = await pasteBody(page, f, og.html);
       const imgs = await f.locator(".se-component.se-image").count();
       if (got !== want || imgs < want) throw new Error(`사진이 에디터에 안 들어갔습니다 (${imgs}/${want}).`);
       // 제휴 링크가 글자만 남고 빠지면 수익이 0 이다. 붙여넣은 링크가 모두 살아 있어야 한다
@@ -289,6 +365,9 @@ export async function publishPost(post, queued) {
       }
       if (lost.length) throw new Error(`링크가 에디터에 안 들어갔습니다: ${lost.join(", ")}`);
     });
+
+    // 붙여넣기로는 안 되는 에디터 기능(인용구 모양, 링크 카드)을 사람이 하듯 눌러 입힌다
+    if (post.quoteStyle || og.urls.length) await step("에디터 꾸미기", () => decorate(page, f, post, og.urls));
 
     await step("발행 창", () => f.locator("[class^='publish_btn__']").first().click({ timeout: 10000 }));
 
