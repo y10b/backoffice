@@ -3,7 +3,8 @@
  *
  *   node --import ./scripts/ts-register.mjs scripts/naver-publish.mjs list            대기열 (올릴 준비 + 완성본 있음)
  *   node --import ./scripts/ts-register.mjs scripts/naver-publish.mjs show <id>       제목·태그·본문 텍스트
- *   node --import ./scripts/ts-register.mjs scripts/naver-publish.mjs publish <id> [--private]
+ *   node --import ./scripts/ts-register.mjs scripts/naver-publish.mjs publish <id> [--private] [--no-ai-image]
+ *   node --import ./scripts/ts-register.mjs scripts/naver-publish.mjs link <상품주소> [상품명]     세시간전 링크 하나
  *
  * 완성본은 /visit 의 "자동 발행 맡기기" 가 Storage 에 둔 HTML 이다(src/lib/naverQueue.ts).
  * 사진·대가성 이미지가 data URL 로 박혀 있고, 스마트에디터에 붙여넣으면 에디터가 자기 서버로
@@ -16,6 +17,8 @@
 import { createRequire } from "node:module";
 import { getSettings, getVisitPost, updateVisitPost } from "../src/lib/db.ts";
 import { getQueued, listQueuedIds, removeQueued } from "../src/lib/naverQueue.ts";
+import { normalizeShopLinks } from "../src/lib/shopLinks.ts";
+import { createThreeHoursLinks, isThreeHoursLink } from "./threehours.mjs";
 
 const require = createRequire(import.meta.url);
 function loadPlaywright() {
@@ -152,6 +155,33 @@ async function withAiImage(post, html) {
   }
 }
 
+/**
+ * /visit 에서 "세시간전" 으로 고른 링크에 상품 원래 주소가 들어 있으면, 발행 직전에 스튜디오에서
+ * 3ha.in 링크를 만들어 본문 주소를 바꿔 끼운다. 이미 3ha.in 이면 그대로 둔다.
+ * 하나라도 못 만들면 던진다 — 수익 링크 없이 상품 글을 올리지 않는다.
+ */
+async function withThreeHoursLinks(browser, post, html) {
+  const pending = normalizeShopLinks(post.interview).filter((l) => l.shop === "threehours" && !isThreeHoursLink(l.url));
+  if (!pending.length) return html;
+  const amp = (u) => u.replace(/&/g, "&amp;");
+  for (const l of pending) {
+    if (!html.includes(l.url) && !html.includes(amp(l.url))) throw new Error(`본문에 링크가 없습니다: ${l.url}`);
+  }
+  const title = (post.title || post.titles?.[0] || "").trim();
+  const d = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(2, 10).replace(/-/g, ".");
+  const made = await createThreeHoursLinks(
+    browser,
+    pending.map((l) => ({ url: l.url, name: l.label || title })),
+    `N blog _ ${d} #${post.id}`,
+  );
+  let out = html;
+  for (const [from, to] of Object.entries(made)) {
+    out = out.split(from).join(to).split(amp(from)).join(to);
+    console.log(`- 세시간전 링크: ${new URL(from).hostname} → ${to}`);
+  }
+  return out;
+}
+
 const text = (html) => html.replace(/<img[^>]*>/g, "[이미지]").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 async function publish(id) {
@@ -165,10 +195,16 @@ async function publish(id) {
 
   const { aut, ses, blogId: savedId } = await creds();
   if (!aut || !ses) throw new Error("NID_AUT · NID_SES 가 없습니다. 브라우저의 네이버 로그인 쿠키를 환경에 넣으세요.");
-  const html = await withAiImage(post, queued);
 
   const { chromium } = loadPlaywright();
   const browser = await chromium.launch();
+  let html;
+  try {
+    html = await withAiImage(post, await withThreeHoursLinks(browser, post, queued));
+  } catch (e) {
+    await browser.close();
+    throw e;
+  }
   const context = await browser.newContext({ locale: "ko-KR", viewport: { width: 1400, height: 1000 } });
   await context.addCookies(
     [
@@ -286,8 +322,21 @@ try {
     case "publish":
       await publish(Number(idArg));
       break;
+    case "link": {
+      // 세시간전 링크 하나만 만든다(확인용). link <상품주소> [상품명]
+      const { chromium } = loadPlaywright();
+      const browser = await chromium.launch();
+      try {
+        const name = args.filter((a) => !a.startsWith("--"))[2] || "상품";
+        const made = await createThreeHoursLinks(browser, [{ url: idArg, name }], "backoffice link");
+        console.log(made[idArg]);
+      } finally {
+        await browser.close();
+      }
+      break;
+    }
     default:
-      console.error("사용법: naver-publish.mjs <list|show|publish> [id] [--private]");
+      console.error("사용법: naver-publish.mjs <list|show|publish|link> [id|상품주소] [--private] [--no-ai-image]");
       process.exit(1);
   }
 } catch (e) {
