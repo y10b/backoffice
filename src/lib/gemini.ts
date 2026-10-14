@@ -5,7 +5,7 @@ import {
   markdownToHtml,
   normalizeFaq,
 } from "./markdown";
-import { applyVisuals, parseVisuals } from "./visuals";
+import { applyVisuals, parseVisuals, shotSlotsToVisual } from "./visuals";
 import type { GeneratedDraft } from "./types";
 import { relatedTistoryPosts } from "./tistory";
 
@@ -553,7 +553,8 @@ export function buildPrompt(
     "  예: `연 2,400만원을 번 프리랜서 디자이너 → 3.3% 원천징수 79.2만원 → 경비 → 소득금액 → 공제 → 산출세액 → 환급/추가납부`.",
     "  가정한 숫자는 가정이라고 밝히고, 세율·공제액은 조사된 정보에 있는 값만 쓸 것. 없으면 계산 예시를 '구조' 로만 보여줄 것.",
     "- **절차**: 신청·신고 방법은 번호 단계로. 사이트 메뉴는 `로그인 → 세금신고 → 종합소득세` 처럼 경로를 글로 적을 것.",
-    "  각 단계 뒤에 `[이미지: 홈택스 ○○ 화면]` 처럼 캡처 자리를 표시할 것(사람이 실제 화면을 넣는다).",
+    "  단계는 `절차` 유형 시각 자료(번호 단계 흐름 카드)로도 한눈에 요약해 절차 섹션 끝에 `{{visual:N}}` 로 넣을 것.",
+    "  `[이미지: …]` 같은 캡처 자리 표시는 쓰지 말 것(자동 발행이라 채울 사람이 없다).",
     "- **자주 하는 실수와 놓쳤을 때**: 가산세, 기한후신고, 경정청구처럼 실수와 구제 방법. 수치는 조사된 것만.",
     "- **공식 확인**: `## 공식 안내 확인` 섹션에 관련 기관 링크 1~3개. 아래 목록의 주소만 쓸 것(지어낸 세부 주소는 404 가 난다).",
     `  ${OFFICIAL_LINKS.join(" / ")}`,
@@ -676,9 +677,9 @@ export async function generateDraft(
     bodyMarkdown,
     // 모델이 본문에 FAQ 를 이미 넣었으면 그대로 두고, 빠졌을 때만 faq 배열로 채워 넣는다.
     // 시각 자료는 {{visual:N}} 자리에 끼워 넣는다. 자리 표시가 없으면 본문 끝에 붙는다.
-    bodyHtml: applyVisuals(
-      appendFaqHtml(markdownToHtml(bodyMarkdown), faq),
-      visuals,
+    // 그래도 모델이 캡처 자리를 남기면 진행 순서 카드로 바꾼다.
+    bodyHtml: shotSlotsToVisual(
+      applyVisuals(appendFaqHtml(markdownToHtml(bodyMarkdown), faq), visuals),
     ),
     faq,
     visuals,

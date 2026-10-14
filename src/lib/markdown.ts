@@ -202,15 +202,16 @@ export function markdownToHtml(md: string, o: MarkdownOptions = {}): string {
       continue;
     }
 
-    const ol = /^\d+[.)]\s+(.*)$/.exec(trimmed);
+    const ol = /^(\d+)[.)]\s+(.*)$/.exec(trimmed);
     if (ol) {
       flushParagraph();
       if (listType !== "ol") {
         closeList();
-        out.push("<ol>");
+        // 단계 사이에 설명 문단이 끼면 목록이 끊긴다. 시작 번호를 지켜야 1. 1. 1. 이 안 된다
+        out.push(ol[1] === "1" ? "<ol>" : `<ol start="${ol[1]}">`);
         listType = "ol";
       }
-      out.push(`<li>${inline(ol[1])}</li>`);
+      out.push(`<li>${inline(ol[2])}</li>`);
       continue;
     }
 

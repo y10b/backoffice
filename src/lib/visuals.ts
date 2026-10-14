@@ -209,3 +209,82 @@ export function applyVisuals(bodyHtml: string, visuals: Visual[]): string {
   if (!leftover.length) return replaced;
   return [replaced, ...leftover.map((v) => v.html)].join("\n");
 }
+
+/** 예전 초안이 남긴 캡처 자리 표시. `[이미지: 홈택스 로그인 화면]` */
+const SHOT_SLOT = /\s*\[이미지\s*:\s*([^\]]+?)\s*\]/g;
+
+/**
+ * 캡처 자리 표시를 걷어내고, 그 캡션들을 묶어 "진행 순서" 요약 카드 하나로 바꾼다.
+ *
+ * 자리 표시는 사람이 홈택스 화면을 캡처해 넣는다는 전제였는데, 자동 발행에는 넣을 사람이 없다.
+ * 로그인 화면은 클라우드에서 찍을 수도 없다. 대신 다른 시각 자료와 같은 인라인 스타일 HTML 로
+ * 단계를 한눈에 보여준다. 카드는 마지막 자리 표시가 있던 문단(목록이면 목록) 바로 뒤에 둔다.
+ * 자리 표시가 하나뿐이면 단계라 부를 게 없어 지우기만 한다.
+ */
+export function shotSlotsToVisual(bodyHtml: string): string {
+  const captions: string[] = [];
+  bodyHtml.replace(SHOT_SLOT, (_, c: string) => {
+    captions.push(c.replace(/\s*화면$/, "").trim());
+    return "";
+  });
+  if (!captions.length) return bodyHtml;
+
+  const MARK = "\u0000shot\u0000";
+  let n = 0;
+  let html = bodyHtml.replace(SHOT_SLOT, () => (++n === captions.length ? MARK : ""));
+  html = html.replace(/<p>\s*<\/p>/g, "");
+  if (captions.length < 2) return html.replace(MARK, "");
+  // 같은 섹션에 이미 시각 자료(절차 카드 등)가 있으면 겹치니 자리만 지운다
+  const at = html.indexOf(MARK);
+  const sectionStart = html.lastIndexOf("<h2", at);
+  if (html.slice(Math.max(0, sectionStart), at).includes("<div style=")) return html.replace(MARK, "");
+
+  const steps = captions
+    .map(
+      (c, i) =>
+        `<div style="display:flex;align-items:center;gap:10px;margin:6px 0;font-size:15px;color:#334155">` +
+        `<span style="display:inline-block;min-width:24px;height:24px;line-height:24px;border-radius:12px;background-color:#2563eb;color:#ffffff;font-size:13px;font-weight:700;text-align:center">${i + 1}</span>` +
+        `<span>${escapeText(c)}</span></div>`,
+    )
+    .join("");
+  const card = sanitizeVisualHtml(
+    `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;background-color:#f8fafc;margin:16px 0">` +
+      `<h4 style="margin:0 0 12px 0;font-size:16px;color:#1e293b">한눈에 보는 진행 순서</h4>${steps}</div>`,
+  );
+
+  // 표시가 목록 안에 있으면 목록이 닫힌 뒤에 둔다 — <ol> 안에 div 를 넣으면 번호가 깨진다
+  const placed = html.replace(
+    new RegExp(`${MARK}([\\s\\S]*?<\\/(?:p|ol|ul|h[1-6]|blockquote|table)>)`),
+    (_, rest: string) => `${rest}\n${card}`,
+  );
+  return placed.includes(MARK) ? placed.replace(MARK, "") + `\n${card}` : placed;
+}
+
+/**
+ * 예전 변환기가 만든 HTML 은 단계 사이에 설명 문단이 끼면 목록마다 1번부터 다시 센다.
+ * 제목(h2~h4)으로 섹션이 바뀌기 전까지는 앞 목록에 이어 번호를 매긴다.
+ */
+export function continueOrderedLists(bodyHtml: string): string {
+  let next = 1;
+  let inOl = false;
+  return bodyHtml.replace(/<h[2-4][\s>]|<ol(\s[^>]*)?>|<\/ol>|<li[\s>]/g, (tag, attrs?: string) => {
+    if (tag === "</ol>") {
+      inOl = false;
+      return tag;
+    }
+    if (/^<h/.test(tag)) {
+      next = 1;
+      return tag;
+    }
+    if (tag.startsWith("<ol")) {
+      inOl = true;
+      if (attrs && /start=/.test(attrs)) {
+        next = Number(/start="?(\d+)/.exec(attrs)?.[1] ?? 1);
+        return tag;
+      }
+      return next > 1 ? `<ol start="${next}"${attrs ?? ""}>` : tag;
+    }
+    if (inOl && tag.startsWith("<li")) next++;
+    return tag;
+  });
+}

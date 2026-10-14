@@ -9,7 +9,7 @@ import PublishSteps from "@/components/PublishSteps";
 import ActionBar from "@/components/ActionBar";
 import StatusBadge from "@/components/StatusBadge";
 import type { StoredImage } from "@/lib/images";
-import { applyVisuals, type Visual } from "@/lib/visuals";
+import { applyVisuals, shotSlotsToVisual, type Visual } from "@/lib/visuals";
 import { downloadHtmlAsPng } from "@/lib/htmlImage";
 
 type Suggestion = { subKeyword: string; title: string; reason: string };
@@ -233,7 +233,8 @@ function WritePageInner() {
 
   // 자리표시자를 실제 자료로 바꿔야 미리보기가 발행본과 같아진다
   const html = useMemo(
-    () => applyVisuals(markdownToHtml(markdown), visuals),
+    // 예전 초안의 [이미지: …] 캡처 자리는 진행 순서 카드로 바꿔 보여주고 복사한다
+    () => shotSlotsToVisual(applyVisuals(markdownToHtml(markdown), visuals)),
     [markdown, visuals],
   );
   const charCount = useMemo(() => countChars(html), [html]);

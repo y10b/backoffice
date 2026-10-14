@@ -15,6 +15,7 @@
 import { createRequire } from "node:module";
 import { getPost, getSetting, listPosts, updatePost } from "../src/lib/db.ts";
 import { tistoryBlogUrl } from "../src/lib/tistory.ts";
+import { continueOrderedLists, shotSlotsToVisual } from "../src/lib/visuals.ts";
 
 const require = createRequire(import.meta.url);
 function loadPlaywright() {
@@ -37,7 +38,8 @@ const isPrivate = args.includes("--private");
 const [cmd, idArg] = args.filter((a) => !a.startsWith("--"));
 
 async function bodyOf(post) {
-  const html = String(post.body_html ?? "").trim();
+  // 예전 초안의 [이미지: …] 캡처 자리는 진행 순서 카드로 바꾸고, 끊긴 단계 번호를 잇는다
+  const html = continueOrderedLists(shotSlotsToVisual(String(post.body_html ?? "").trim()));
   const ld = String(post.json_ld ?? "").trim();
   // 화면의 "티스토리 본문" 복사 버튼과 같다 — 스키마를 따로 넣으면 빠뜨린다
   return ld ? `${html}\n\n${ld}` : html;
