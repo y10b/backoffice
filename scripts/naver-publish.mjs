@@ -54,7 +54,7 @@ async function creds() {
  * 버리고, 사진은 클립보드 파일로 줘야 자기 서버로 올린다. 키 입력은 에디터 안의 숨은 iframe
  * (input_buffer) 이 받으므로 붙여넣기 이벤트도 그 안에 보낸다.
  */
-async function pasteBody(page, f, html) {
+export async function pasteBody(page, f, html) {
   const parts = html.split(/(<img\b[^>]*>)/i).filter((s) => s.trim());
   let images = 0;
   for (const part of parts) {
@@ -332,7 +332,7 @@ export async function publishPost(post, queued) {
     if (dryRun) {
       const cat = await f.locator("[class^='selectbox_button__']").first().innerText().catch(() => "?");
       console.log(`- 에디터 링크: ${JSON.stringify(await editorLinks(f))} · 카테고리: ${cat}`);
-      await page.screenshot({ path: "naver-dryrun.png" });
+      await page.screenshot({ path: "naver-dryrun.png", fullPage: true });
       console.log(`#${id} 시험 — 발행 확인 직전에서 멈춤 (naver-dryrun.png)`);
       return;
     }
