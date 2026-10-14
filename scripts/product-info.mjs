@@ -326,7 +326,7 @@ JSON: title, bodyMarkdown, tags(10~14개, # 없이 — 키워드 변형, 대상(
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-function render(d, products) {
+function render(d, products, disclosureImg) {
   // 모델이 쓴 마크다운 → HTML. 링크 자리는 구매 링크 줄로, 맨 앞에 대가성 표시, 맨 끝에 해시태그
   // 한 줄 = 한 문단(모바일에서 한 줄씩 끊겨 읽히게). 스마트에디터에서 문단끼리는 간격 없이 붙으므로
   // 원래 빈 줄(묶음 사이)은 빈 문단으로 남겨 간격을 만든다. 표·목록·소제목 줄은 마크다운 그대로 둔다
@@ -355,12 +355,34 @@ function render(d, products) {
   }
   const tags = d.tags.map((t) => `#${String(t).replace(/^#|\s+/g, "")}`).join(" ");
   return [
-    // 대가성 표시는 맨 첫 부분(공정위 2024-12 지침)
-    `<p>${esc(disclosureText([{ shop: "threehours" }]))}</p>`,
+    // 대가성 표시는 첫 부분이어야 한다(공정위 2024-12 지침 — "끝 부분" 은 빠졌다). 이미지로 두면 검색
+    // 미리보기가 "이 포스팅은 … 수수료" 로 시작하지 않는다. /visit 글과 같은 방식. 끝에 텍스트로 한 번 더
+    disclosureImg ? `<p><img src="${disclosureImg}"></p>` : `<p>${esc(disclosureText([{ shop: "threehours" }]))}</p>`,
     html,
     `<p>가격·혜택은 작성일 기준이며 판매처 사정에 따라 바뀔 수 있어요.</p>`,
+    `<p>${esc(disclosureText([{ shop: "threehours" }]))}</p>`,
     `<p>${esc(tags)}</p>`,
   ].join("");
+}
+
+/** 대가성 문구를 눈에 띄는 띠 이미지로 굽는다(PNG data URL). 실패하면 null — 텍스트로 대신한다 */
+async function disclosureImage(browser) {
+  const ctx = await browser.newContext({ viewport: { width: 860, height: 200 }, deviceScaleFactor: 2 });
+  try {
+    const page = await ctx.newPage();
+    await page.setContent(
+      `<meta charset="utf-8"><body style="margin:0;background:#fff">
+       <div id="b" style="width:860px;box-sizing:border-box;padding:22px 28px;background:#fff7e6;border:2px solid #f5a623;border-radius:12px;
+         font-family:'Noto Sans KR','Malgun Gothic',sans-serif;font-size:24px;font-weight:700;color:#7a4a00;line-height:1.5;text-align:center">
+         ${esc(disclosureText([{ shop: "threehours" }]))}</div></body>`,
+    );
+    const png = await page.locator("#b").screenshot({ type: "png" });
+    return `data:image/png;base64,${png.toString("base64")}`;
+  } catch {
+    return null;
+  } finally {
+    await ctx.close();
+  }
 }
 
 async function writePost(keyword, delta, products) {
@@ -389,7 +411,7 @@ async function build(browser) {
   if (products.length < 2) throw new Error(`하이마트에서 "${keyword}" 상품을 충분히 찾지 못했습니다(${products.length}개).`);
   for (const p of products) console.log(`- 상품: ${p.name} · ${p.price.toLocaleString("ko-KR")}원`);
   const d = await writePost(keyword, delta, products);
-  return { keyword, delta, products, d, html: render(d, products) };
+  return { keyword, delta, products, d, html: render(d, products, await disclosureImage(browser)) };
 }
 
 try {
