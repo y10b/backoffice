@@ -1,0 +1,1 @@
+{"permissions":{"allow":["Bash(node --import ./scripts/ts-register.mjs scripts/product-info.mjs:*)","Bash(node --import ./scripts/ts-register.mjs scripts/naver-publish.mjs:*)"]}}
