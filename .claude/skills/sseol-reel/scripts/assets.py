@@ -376,15 +376,16 @@ def quest_banner(title="화장실을 찾아라!", sub="[g:제한시간: 얼마 �
     im.alpha_composite(r, ((w - r.width) // 2, 245))
     return im
 
-def choice_menu(opts, pick=None, show_from=1):
+def choice_menu(opts, pick=None, show_from=1, pick_at=None):
     """게임 선택지. 팩토리라서 visual에 그대로 넣는다.
-    opts[i]는 (show_from + i)번째 대사 때 등장하고, 마지막 선택지 대사 0.5초 뒤 pick번째가 선택된다(나머지는 줄 그어짐)."""
+    opts[i]는 (show_from + i)번째 대사 때 등장하고, pick번째가 선택된다(나머지는 줄 그어짐).
+    선택 시점: pick_at(대사 번호)이 있으면 그 대사 시작, 없으면 마지막 선택지 대사 0.5초 뒤 (퀴즈는 pick_at으로 정답 공개 대사 지정)."""
     pick = len(opts) - 1 if pick is None else pick
     rows = [text_img(o, size=62, stroke=6, max_w=820) for o in opts]
     w, rh = 920, 120
     def make(bt):
         shows = [bt[show_from + i] - bt[0] for i in range(len(opts))]
-        pick_t = shows[-1] + 0.5
+        pick_t = (bt[pick_at] - bt[0]) if pick_at is not None else shows[-1] + 0.5
         def fn(tl):
             im = Image.new("RGBA", (w, 110 + rh * len(opts)), (0, 0, 0, 0))
             d = ImageDraw.Draw(im)
@@ -418,7 +419,16 @@ def rewind_overlay(tl):
     return _scan.crop((0, off, W, off + H))
 
 def synth_fx(kind):
-    """효과음: pop whoosh boom ding creak beep rewind"""
+    """효과음: pop whoosh boom ding creak beep rewind thud fizz"""
+    if kind == "thud":  # 묵직하게 '쿵' (고구마 쌓일 때)
+        n = int(SR * 0.3); tt = np.arange(n) / SR
+        return 0.8 * np.sin(2 * np.pi * (140 * np.exp(-tt * 12) + 55) * tt) * np.exp(-tt * 14)
+    if kind == "fizz":  # 탄산 '치이익' (사이다)
+        n = int(SR * 0.9); tt = np.arange(n) / SR
+        hiss = np.diff(np.random.randn(n + 1)) * 0.25
+        bubbles = (np.random.rand(n) < 0.004) * np.random.rand(n)
+        bubbles = np.convolve(bubbles, np.sin(2 * np.pi * 2400 * np.arange(300) / SR) * np.exp(-np.arange(300) / 60), "same")
+        return (hiss + bubbles) * np.minimum(1, tt * 25) * np.exp(-tt * 2.2)
     if kind == "beep":
         n = int(SR * 0.4); tt = np.arange(n) / SR
         return 0.5 * np.sin(2 * np.pi * 1000 * tt) * np.minimum(1, np.minimum(tt, tt[-1] - tt) * 200)

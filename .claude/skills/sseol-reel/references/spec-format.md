@@ -62,7 +62,7 @@ dict(pal=RED, cap_y=1290, rewind=False,
 
 ## 효과음
 
-`pop`(자막 뜰 때 자동) `whoosh` `boom` `ding`(카톡) `creak`(문) `beep` `rewind`
+`pop`(자막 뜰 때 자동) `whoosh` `boom` `ding`(카톡) `creak`(문) `beep` `rewind` `thud`(묵직한 쿵, 고구마) `fizz`(탄산 치익, 사이다)
 
 ## 소품 함수 (assets.py)
 
@@ -77,7 +77,7 @@ dict(pal=RED, cap_y=1290, rewind=False,
 | `sign_img("A"/"B", 300)` | 헷갈리는 네모 화장실 표시 |
 | `boss_bar("이름 [y:Lv.99]")` | 게임 보스 체력바 |
 | `quest_banner("제목", "[g:부제]")` | 긴급 퀘스트 알림 |
-| `choice_menu(["1. ...", "2. ...", "3. [y:정답]"], pick=None, show_from=1)` | 선택지 UI (팩토리). i번째 선택지는 `show_from+i`번 대사에 등장, 마지막 뒤 0.5초에 `pick`(기본 마지막) 선택 |
+| `choice_menu(["1. ...", "2. ...", "3. [y:정답]"], pick=None, show_from=1, pick_at=None)` | 선택지 UI (팩토리). i번째 선택지는 `show_from+i`번 대사에 등장. `pick`(기본 마지막)이 `pick_at`번 대사에 선택 (없으면 마지막 선택지 0.5초 뒤). 퀴즈 훅은 `pick_at`=정답 공개 대사 |
 | `teaser_card(["그 후로", "[r:썸 깨진 썰] 💔"])` | 다음 썰 예고 카드 |
 | `follow_btn()` | ➕ 팔로우 버튼 |
 
