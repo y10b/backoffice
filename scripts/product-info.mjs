@@ -33,6 +33,8 @@ const opt = (name) => {
 
 /** 하이마트가 파는 상품군만 */
 const TREND_CATEGORIES = ["living", "digital"];
+/** 하루에 올리는 정보 글 수 상한 */
+const MAX_PER_DAY = 2;
 /** 같은 키워드를 다시 쓰지 않는 기간 */
 const REUSE_DAYS = 30;
 const HISTORY_KEY = "naver_info_history";
@@ -473,11 +475,11 @@ async function build(browser) {
 }
 
 try {
-  // 하루 한 편. 사람이 낮에 먼저 올렸으면 저녁 루틴은 건너뛴다(--force 로 무시)
+  // 하루 MAX_PER_DAY 편까지. 낮에 사람이 시켜 올린 것도 센다(--force 로 무시)
   if (cmd === "run" && !args.includes("--force") && !args.includes("--dry-run") && !args.includes("--private")) {
-    const done = (await history()).find((h) => h.date === today());
-    if (done) {
-      console.log(`- 오늘(${today()}) 이미 올림: ${done.title} — 건너뜀`);
+    const done = (await history()).filter((h) => h.date === today());
+    if (done.length >= MAX_PER_DAY) {
+      console.log(`- 오늘(${today()}) 이미 ${done.length}편 올림 — 건너뜀`);
       process.exit(0);
     }
   }
