@@ -3,6 +3,7 @@
  *
  *   node --import ./scripts/ts-register.mjs scripts/tistory-publish.mjs list          안 올린 초안
  *   node --import ./scripts/ts-register.mjs scripts/tistory-publish.mjs show <id>     본문 HTML
+ *   node --import ./scripts/ts-register.mjs scripts/tistory-publish.mjs fix <id> <고칠목록.json>     틀린 문장만 바꿔 저장
  *   node --import ./scripts/ts-register.mjs scripts/tistory-publish.mjs publish <id> [--private]
  *
  * 오픈 API 가 닫혀 에디터 화면을 사람처럼 누른다. 로그인은 카카오 아이디·비밀번호가 아니라
@@ -15,7 +16,9 @@
 import { createRequire } from "node:module";
 import { getPost, getSetting, listPosts, updatePost } from "../src/lib/db.ts";
 import { tistoryBlogUrl } from "../src/lib/tistory.ts";
-import { continueOrderedLists, shotSlotsToVisual } from "../src/lib/visuals.ts";
+import { readFileSync } from "node:fs";
+import { markdownToHtml } from "../src/lib/markdown.ts";
+import { applyVisuals, continueOrderedLists, shotSlotsToVisual } from "../src/lib/visuals.ts";
 
 const require = createRequire(import.meta.url);
 function loadPlaywright() {
@@ -147,6 +150,26 @@ try {
       console.log(`안 올린 초안 ${rows.length}편`);
       break;
     }
+    case "fix": {
+      // fix <id> <고칠목록.json> — [["바꿀 문장", "새 문장"], ...]. 문장마다 본문 마크다운에서 정확히 한 번 나와야 한다.
+      // HTML 은 /write 화면과 같은 경로(마크다운 → 시각 자료 → 캡처 자리 카드)로 다시 만들어 두 벌이 어긋나지 않게 한다
+      const id = Number(idArg);
+      const p = await getPost(id);
+      if (!p) throw new Error("글이 없습니다.");
+      const pairs = JSON.parse(readFileSync(args.filter((a) => !a.startsWith("--"))[2], "utf8"));
+      let md = String(p.body_markdown ?? "");
+      for (const [from, to] of pairs) {
+        const n = md.split(from).length - 1;
+        if (n !== 1) throw new Error(`본문에서 ${n}번 나옵니다(정확히 1번이어야 함): ${String(from).slice(0, 50)}`);
+        md = md.replace(from, to);
+      }
+      const faq = JSON.stringify(p.faq ?? []) + String(p.json_ld ?? "");
+      for (const [from] of pairs) if (faq.includes(from)) console.log(`- 주의: FAQ·구조화 데이터에도 있는 문장입니다 — /write 에서 같이 고치세요: ${String(from).slice(0, 40)}`);
+      const html = shotSlotsToVisual(applyVisuals(markdownToHtml(md), p.visuals ?? []));
+      await updatePost(id, { body_markdown: md, body_html: html });
+      console.log(`#${id} ${pairs.length}곳 고침`);
+      break;
+    }
     case "show": {
       const p = await getPost(Number(idArg));
       if (!p) throw new Error("글이 없습니다.");
@@ -158,7 +181,7 @@ try {
       await publish(Number(idArg));
       break;
     default:
-      console.error("사용법: tistory-publish.mjs <list|show|publish> [id] [--private]");
+      console.error("사용법: tistory-publish.mjs <list|show|fix|publish> [id] [고칠목록.json] [--private]");
       process.exit(1);
   }
 } catch (e) {
