@@ -473,6 +473,14 @@ async function build(browser) {
 }
 
 try {
+  // 하루 한 편. 사람이 낮에 먼저 올렸으면 저녁 루틴은 건너뛴다(--force 로 무시)
+  if (cmd === "run" && !args.includes("--force") && !args.includes("--dry-run") && !args.includes("--private")) {
+    const done = (await history()).find((h) => h.date === today());
+    if (done) {
+      console.log(`- 오늘(${today()}) 이미 올림: ${done.title} — 건너뜀`);
+      process.exit(0);
+    }
+  }
   const { chromium } = loadPlaywright();
   const browser = await chromium.launch();
   let built;
