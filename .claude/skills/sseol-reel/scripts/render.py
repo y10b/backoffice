@@ -55,7 +55,9 @@ def tts(text, preset, presets):
 
 
 def load_spec(path):
+    import characters
     ns = {k: getattr(assets, k) for k in dir(assets) if not k.startswith("_")}
+    ns.update({k: getattr(characters, k) for k in dir(characters) if not k.startswith("_")})
     ns.update(ME=ME, SHE=SHE, __file__=path)
     with open(path, encoding="utf-8") as f:
         exec(compile(f.read(), path, "exec"), ns)
@@ -88,7 +90,13 @@ class Reel:
                 if cap is None:  # 자막 유지하고 이어 말하기
                     self.caps[-1]["t1"] = b0 + dur
                 else:
-                    self.caps.append(dict(t0=b0, t1=b0 + dur, img=text_img(cap, size=opt.get("size", 92)),
+                    img = text_img(cap, size=opt.get("size", 92))
+                    if sc.get("cap_box"):  # 밝은 배경: 자막 뒤에 어두운 반투명 박스
+                        box = Image.new("RGBA", (img.width + 50, img.height + 20), (0, 0, 0, 0))
+                        ImageDraw.Draw(box).rounded_rectangle((0, 0, box.width - 1, box.height - 1), radius=30, fill=(15, 15, 25, 190))
+                        box.alpha_composite(img, (25, 10))
+                        img = box
+                    self.caps.append(dict(t0=b0, t1=b0 + dur, img=img,
                                           y=sc["cap_y"], shake=opt.get("shake", 0)))
                     self.sfx.append((b0, "pop"))
                 t += dur
@@ -109,7 +117,7 @@ class Reel:
     def frame(self, t):
         s0, s1, sc = next((s for s in self.scenes if s[0] <= t < s[1]), self.scenes[-1])
         pal = sc["pal"]
-        canvas = background([s0, s1, *pal], t)
+        canvas = sc.get("bg", background)([s0, s1, *pal], t)  # 장면별 배경 함수 (기본: 빛 번짐)
         for v in self.vis:
             if not (v["t0"] <= t < v["t1"]):
                 continue
