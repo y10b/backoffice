@@ -198,7 +198,7 @@ class Reel:
         self.audio(wav)
         p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
                               "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-i", wav,
-                              "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
+                              "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-maxrate", "2600k", "-bufsize", "5200k", "-pix_fmt", "yuv420p",
                               "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", mp4],
                              stdin=subprocess.PIPE)
         for i in range(int(self.total * FPS)):
