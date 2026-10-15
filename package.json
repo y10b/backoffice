@@ -9,6 +9,7 @@
     "prebuild": "node scripts/check-dev-not-running.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
     "@remotion/google-fonts": "4.0.530",
     "@remotion/media": "4.0.530",
     "@remotion/player": "4.0.530",

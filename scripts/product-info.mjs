@@ -14,6 +14,7 @@
  * 판매처는 롯데하이마트 하나다. 세시간전에서 승인 없이 링크가 되고, 클라우드에서 검색이 열린다
  * (Gmarket 403, 오늘의집 Access Denied, 2026-10-14 확인).
  */
+import Anthropic from "@anthropic-ai/sdk";
 import { createRequire } from "node:module";
 import { getSetting, setSetting } from "../src/lib/db.ts";
 import { geminiCall, geminiModel, parseGrounding } from "../src/lib/gemini.ts";
@@ -154,6 +155,19 @@ async function research(keyword) {
     "- 확인되지 않은 수치는 쓰지 마라. 수치에는 출처 기관이나 기준 연도를 붙여라.",
     "- 출력은 마크다운 불릿만. 서론·결론 없이 한 줄씩, 15줄 안팎.",
   ].join("\n");
+  if (claude()) {
+    try {
+      // 웹 검색은 서버에서 돈다. 결과 블록 사이의 글 블록만 모으면 조사 메모가 된다
+      const out = (await claudeText({
+        messages: [{ role: "user", content: text.replace("구글 검색으로", "웹 검색으로") }],
+        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 5 }],
+        output_config: { effort: "medium" },
+      })).trim();
+      if (out) return out;
+    } catch (e) {
+      console.log(`- Claude 조사 실패: ${String(e.message ?? e).slice(0, 60)} — Gemini 로`);
+    }
+  }
   try {
     const r = parseGrounding(
       await geminiCall(await geminiModel(), {
@@ -200,10 +214,52 @@ async function openaiResearch(text) {
 }
 
 /**
+ * Claude (ANTHROPIC_API_KEY 가 있을 때 1순위). 글쓰기·검수·조사를 한 모델로 맞춰 날마다 품질이 같게 한다.
+ * 안전 분류기가 거절하면 서버가 다른 모델로 다시 돌린다(fallbacks: "default"). 그래도 거절이면 던진다.
+ */
+const CLAUDE_MODEL = process.env.CLAUDE_WRITE_MODEL || "claude-opus-5-5";
+let claudeClient = null;
+const claude = () => (process.env.ANTHROPIC_API_KEY ? (claudeClient ??= new Anthropic()) : null);
+
+async function claudeText(params) {
+  const res = await claude().beta.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 16000,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    ...params,
+  });
+  if (res.stop_reason === "refusal") throw new Error(`Claude 거절(${res.stop_details?.category ?? "?"})`);
+  return res.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+}
+
+/** JSON 스키마를 엄격 모드로 — 모든 객체에 additionalProperties:false 와 전체 required (Claude·OpenAI 공통) */
+const strict = (s) =>
+  s.type === "object"
+    ? { ...s, additionalProperties: false, required: Object.keys(s.properties), properties: Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, strict(v)])) }
+    : s.type === "array"
+      ? { ...s, items: strict(s.items) }
+      : s;
+
+/**
  * JSON 으로 답을 받는다. Gemini 를 먼저 쓰고, 쿼터(무료 티어 하루 한도 — 티스토리 초안 생성과 나눠 쓴다)에
  * 걸리거나 실패하면 OpenAI 로 같은 일을 시킨다. 매일 루틴이 쿼터 때문에 멈추지 않게.
  */
 async function askJSON(text, schema, temperature) {
+  if (claude()) {
+    try {
+      const out = await claudeText({
+        messages: [{ role: "user", content: text }],
+        output_config: { effort: "high", format: { type: "json_schema", schema: strict(schema) } },
+      });
+      return JSON.parse(out);
+    } catch (e) {
+      console.log(`- Claude 실패(${String(e.message ?? e).slice(0, 60)}) — Gemini 로`);
+    }
+  }
   try {
     const res = await geminiCall(await geminiModel(), {
       contents: [{ role: "user", parts: [{ text }] }],
@@ -215,13 +271,6 @@ async function askJSON(text, schema, temperature) {
     if (!key) throw e;
     console.log(`- Gemini 실패(${String(e.message ?? e).slice(0, 40)}) — OpenAI 로`);
   }
-  // OpenAI 구조화 출력은 모든 객체에 additionalProperties:false 와 전체 required 를 요구한다
-  const strict = (s) =>
-    s.type === "object"
-      ? { ...s, additionalProperties: false, required: Object.keys(s.properties), properties: Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, strict(v)])) }
-      : s.type === "array"
-        ? { ...s, items: strict(s.items) }
-        : s;
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
