@@ -82,3 +82,29 @@ dict(pal=RED, cap_y=1290, rewind=False,
 | `follow_btn()` | ➕ 팔로우 버튼 |
 
 새 소품이 필요하면 assets.py 스타일(PIL로 그린 RGBA 이미지 반환)로 대본 파일 안에 함수를 직접 정의해도 된다.
+
+## 장면 배경 / 캐릭터 연기
+
+장면 dict에 추가 옵션:
+- `bg=함수`: 장면 배경. `place_station`(역), `place_room_night`(밤 방), `place_speedlines`(만화 집중선, 빡침/충격), 기본은 빛 번짐. 새 장소는 `(sc, t) -> 1080x1920 RGBA` 함수로 대본 안에 그려서 넘긴다
+- `cap_box=True`: 밝은 배경에서 자막 뒤에 어두운 박스
+
+### 그림 캐릭터 `cast()` (기본으로 이걸 쓴다)
+
+```python
+(0, cast("me", {0: "phone", 2: "shock"}, talk=[0, 2]), 290, 1660, "none", None)
+(1, cast("she", {1: "love"}, talk=[1], flip=True, start=1), 800, 1660, "slideR", "whoosh")
+```
+- x, y = **발 위치**. 두 명이면 x 290 / 800, 한 명이면 W // 2. y 1640~1680
+- 표정: `neutral` `happy` `phone`(=`love`) `shock` `angry` `deadpan` `sad` `smug`(=`shrug`, "왜?" 말풍선 포함)
+- `talk`: 말하는 대사 번호 (통통 튐). 빡침은 자동으로 떨림, 놀람은 점프, 표정 바뀔 때 '툭'
+- `flip=True`: 왼쪽을 보게 (오른쪽에 선 사람). smug 컷은 글자 때문에 안 뒤집힘
+- `start`: 등장 대사 번호 (visual 첫 값과 같게)
+- 캐릭터가 화면 아래쪽을 차지하므로 자막은 `cap_y` 650~750, 다른 소품은 피해서 배치
+
+등록된 캐스트 (`cast/`): `me` 나 · `buddy` 안경 절친 · `hunk` 훈남/소개팅남 · `she` 썸녀 · `chic` 단발 여사친 (+ 추가되는 것들, `cast/*/meta.json`의 label 참고)
+
+새 캐릭터 등록: 초록 배경 2x4 시트(1 기본 2 웃음 3 폰 4 놀람 5 빡침 6 현타 7 슬픔 8 뻔뻔)를 받아
+`python3 scripts/make_cast.py SHEET.png 이름 --label "설명"`. 시트 프롬프트는 references/cast-prompt.md
+
+`actor()`는 코드로 그린 막대 캐릭터 (캐스트에 없는 인물용 임시 대역)

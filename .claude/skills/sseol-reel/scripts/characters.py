@@ -231,3 +231,68 @@ def place_speedlines(sc, t, base=(80, 20, 30)):
                        (cx + R * math.cos(a + w), cy + R * math.sin(a + w))], fill=(255, 255, 255, rnd.randint(40, 100)))
         _bg[key] = im
     return _bg[key].copy()
+
+
+# ---------------- 그림 캐릭터 (cast/ 폴더의 AI 캐릭터 시트) ----------------
+import os as _os
+CAST_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "cast")
+SLOTS = {"neutral": 1, "happy": 2, "phone": 3, "love": 3, "shock": 4, "angry": 5,
+         "deadpan": 6, "sad": 7, "smug": 8, "shrug": 8}
+NO_FLIP = {8}  # 8번 컷엔 "왜?" 말풍선 글자가 있음
+_sprites = {}
+
+
+def cast_list():
+    return sorted(d for d in _os.listdir(CAST_DIR) if _os.path.isdir(_os.path.join(CAST_DIR, d)))
+
+
+def sprite(who, expr):
+    slot = SLOTS.get(expr, expr) if not isinstance(expr, int) else expr
+    k = (who, slot)
+    if k not in _sprites:
+        p = _os.path.join(CAST_DIR, who, f"{slot}.png")
+        if not _os.path.exists(p):
+            raise SystemExit(f"캐스트 그림 없음: {p} (등록된 캐스트: {cast_list()})")
+        _sprites[k] = Image.open(p).convert("RGBA")
+    return _sprites[k]
+
+
+def cast(who, expr=None, talk=(), size=1.35, flip=False, start=0):
+    """그림 캐릭터 visual 팩토리 (x, y = 발 위치).
+    who: cast/ 폴더 이름 (me, buddy, hunk, she, chic, ajumma...)
+    expr: {대사번호: 표정}  표정 = neutral happy phone(=love) shock angry deadpan sad smug(=shrug)
+    talk: 말하는 대사 번호들 (그동안 통통 튐)"""
+    expr = expr or {0: "neutral"}
+    def make(bt):
+        off = bt[start]
+        ends = list(bt[1:]) + [bt[-1] + 30]
+        keys = sorted(expr)
+        def fn(tl):
+            cur = keys[0]
+            for b in keys:
+                if tl >= bt[b] - off:
+                    cur = b
+            e = expr[cur]
+            since = tl - max(0, bt[cur] - off)
+            im = sprite(who, e)
+            s = size * (1 + 0.012 * math.sin(tl * 3))
+            dx = dy = 0
+            if since < 0.18:                                  # 표정 바뀔 때 '툭'
+                s *= 1 + 0.12 * (1 - since / 0.18)
+            talking = any(bt[b] - off <= tl < ends[b] - off - 0.12 for b in talk)
+            if talking:
+                dy -= 14 * abs(math.sin(tl * 13))
+            if e == "angry":
+                dx += 7 * math.sin(tl * 70)
+            if e == "shock" and since < 0.35:
+                dy -= 70 * math.sin(since / 0.35 * math.pi)
+            if flip and SLOTS.get(e, e) not in NO_FLIP:  # 글자 말풍선이 든 컷은 뒤집지 않음
+                im = im.transpose(Image.FLIP_LEFT_RIGHT)
+            w, h = int(im.width * s), int(im.height * s)
+            im = im.resize((w, h), Image.BILINEAR)
+            out = Image.new("RGBA", (w + 40, h * 2), (0, 0, 0, 0))   # 중심 = 발 위치
+            fy = int(620 / 640 * h)
+            out.alpha_composite(im, (20 + int(dx), max(0, h - fy + int(dy))))
+            return out
+        return fn
+    return make
